@@ -8,6 +8,7 @@
 .alpackages/
 #Snapshots folder
 .snapshots/
+.codebuddy
 #Testing Output folder
 .output/
 #Extension App-file
@@ -21,3 +22,9 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+!workflow/web/cmd/workflow/*.go
+.codebuddy
+.idea
+qodana.yaml
+workflow/etc/app.yaml

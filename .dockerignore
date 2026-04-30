@@ -1,0 +1,8 @@
+# 排除无关文件，减小构建上下文体积
+**/.git
+**/.gitignore
+**/_demo
+**/node_modules
+**/*.md
+**/*.log
+**/tmp

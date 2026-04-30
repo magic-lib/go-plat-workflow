@@ -1,0 +1,16 @@
+# 应用配置模板
+mysql: # mysql 地域/环境/变量名
+  mysql_connect:
+    address: 127.0.0.1:3306
+    username: root
+    pwEncoded: root
+    database: rule-workflow
+    charset: utf8mb4
+    parseTime: True
+    loc: Local
+custom: # 自定义配置
+  sensitive: # 加密敏感配置
+  normal: # 非加密普通配置
+    host_port:
+      host: 0.0.0.0
+      port: 8080

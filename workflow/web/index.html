@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>流程管理中心</title>
+<link rel="stylesheet" href="/assets/common.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+</head>
+<body>
+
+<!-- 登录遮罩 -->
+<div id="login-overlay" class="hidden">
+  <div class="login-card">
+    <h2>&#9881; 流程管理中心</h2>
+    <p class="sub">请登录后继续</p>
+    <div class="form-group">
+      <label for="login-username">用户名</label>
+      <input id="login-username" placeholder="请输入用户名" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="form-group">
+      <label for="login-password">密码</label>
+      <input id="login-password" type="password" placeholder="请输入密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn btn-primary" onclick="doLogin()">登 录</button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
+
+<div class="header">
+  <div class="header-left">
+    <h1>&#9881; 流程管理中心</h1>
+    <p>节点管理 &middot; 子链管理 &middot; 根链管理</p>
+  </div>
+  <div class="header-right">
+    <label for="project-select">Project:</label>
+    <select id="project-select" onchange="onProjectChange()">
+      <option value="">-- 选择项目 --</option>
+    </select>
+    <button class="btn btn-sm btn-outline" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openProjectModal()">+ 项目管理</button>
+    <span id="project-badge">-</span>
+    <button class="btn btn-sm btn-outline user-only" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openUserModal()">用户管理</button>
+    <span id="current-user" style="color:#fff; font-size:.82rem; font-weight:600; display:none"></span>
+    <button class="btn btn-sm btn-outline" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openPwdModal()">修改密码</button>
+    <button class="btn btn-sm btn-outline" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="doLogout()">登出</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="activities">Activities</button>
+  <button class="tab-btn" data-tab="nodes">Nodes</button>
+  <button class="tab-btn" data-tab="sub-chains" style="display:none;">Sub Chains</button>
+  <button class="tab-btn" data-tab="root-chains">Root Chains</button>
+  <button class="tab-btn" data-tab="logs">日志</button>
+</div>
+
+<div class="container">
+  <!-- Activities Tab -->
+  <div id="tab-activities" class="tab-content active">
+    <div class="toolbar">
+      <input class="search-box" id="act-search" placeholder="搜索 activity..." oninput="onActivitySearchChange()">
+      <select id="act-env-filter" onchange="onActivityEnvFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+        <option value="">全部环境</option>
+      </select>
+      <select id="act-tag-filter" onchange="onActivityTagFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+        <option value="">全部标签</option>
+      </select>
+      <button class="btn btn-primary edit-only" onclick="openActivityModal()">新建 Activity</button>
+      <button class="btn btn-outline edit-only" onclick="openCopyActivityModal()">复制 Activity</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Activity ID</th><th>名称</th><th>标签</th><th>命名空间</th><th>活动名称</th><th>参数数</th><th>创建时间</th><th>操作</th>
+        </tr></thead>
+        <tbody id="act-table"><tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr></tbody>
+      </table>
+      <div class="log-pager" id="act-pager" style="display:none">
+        <button class="btn btn-sm btn-outline" id="act-prev" onclick="changeActivityPage(-1)">上一页</button>
+        <span class="log-page-info" id="act-page-info"></span>
+        <button class="btn btn-sm btn-outline" id="act-next" onclick="changeActivityPage(1)">下一页</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Activity Modal -->
+  <div class="modal-overlay" id="act-modal-overlay">
+    <div class="modal" id="act-modal">
+      <h2 id="act-modal-title">新建 Activity<button class="modal-close" onclick="closeActivityModal()" title="关闭">&times;</button></h2>
+      <input type="hidden" id="act-is-edit">
+      <input type="hidden" id="act-activity-id">
+      <div class="form-group">
+        <label>名称 *</label>
+        <input id="act-name" placeholder="例如：用户注册">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>活动命名空间 (act_namespace) *</label>
+          <input id="act-namespace" placeholder="例如 user_service">
+        </div>
+        <div class="form-group">
+          <label>活动名称 (act_name) *</label>
+          <input id="act-act-name" placeholder="例如 register">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>活动类型 (activity_type)</label>
+          <input id="act-activity-type" placeholder="可选，如 http">
+        </div>
+        <div class="form-group">
+          <label>状态</label>
+          <select id="act-status">
+            <option value="1">启用</option>
+            <option value="0">禁用</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>大类型 (Kind) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">决定测试时的访问方式</span></label>
+        <select id="act-kind" onchange="onActKindChange()">
+          <option value="redis">redis（默认，依赖 Redis 的 MQ 远程监听）</option>
+          <option value="http">http（HTTP 直连）</option>
+        </select>
+      </div>
+      <div class="exec-card" id="act-http-config" style="margin:8px 0 4px;display:none">
+        <h4 style="font-size:.85rem;margin-bottom:8px">HTTP 配置（Kind=http 时生效）</h4>
+        <div class="form-row">
+          <div class="form-group" style="flex:1">
+            <label>Method</label>
+            <select id="act-http-method">
+              <option value="POST">POST</option>
+              <option value="GET">GET</option>
+              <option value="PUT">PUT</option>
+              <option value="DELETE">DELETE</option>
+              <option value="PATCH">PATCH</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:3">
+            <label>URL <span style="font-weight:400;color:var(--text-muted);font-size:.78rem">支持 {{key}} 占位符</span></label>
+            <input id="act-http-url" placeholder="https://api.example.com/action?token={{token}}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Headers <span style="font-weight:400;color:var(--text-muted);font-size:.78rem">每行 key:value，支持占位符</span></label>
+          <textarea id="act-http-headers" placeholder="Authorization: Bearer {{token}}&#10;X-Trace-Id: {{trace_id}}" style="min-height:60px"></textarea>
+        </div>
+        <div class="form-group">
+          <label>Body 模板 <span style="font-weight:400;color:var(--text-muted);font-size:.78rem">支持 {{key}} 占位符，GET/DELETE 可留空</span></label>
+          <textarea id="act-http-body" placeholder='{"name": "{{name}}", "age": {{age}}}' style="min-height:60px"></textarea>
+        </div>
+      </div>
+      <div class="form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <label>默认参数 (Arguments) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（逐条添加，key/value/policy 会写入 arguments）</span></label>
+          <button class="btn btn-sm btn-outline" onclick="addActParamRow()" type="button">+ 添加参数</button>
+        </div>
+        <div id="act-params-container" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+          <div id="act-param-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无参数定义</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <label>返回值设置 (ReturnValues) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（从活动返回值 map 中提取指定 key 重命名输出；key 留空表示返回全部内容）</span></label>
+          <button class="btn btn-sm btn-outline" onclick="addReturnValueRow()" type="button">+ 添加返回值</button>
+        </div>
+        <div id="act-return-values-container" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+          <div id="act-return-values-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无返回值设置</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>参数模板 (ArgTemplate，可选) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">支持 {{steps.id.responses.field}} 语法</span></label>
+        <input id="act-arg-template" placeholder='{"name": "{{$.responses.name}}"}'>
+      </div>
+      <div class="form-group">
+        <label>返回值模版 (Responses JSON，可选)</label>
+        <textarea id="act-responses" placeholder='{"user_id": "id"}'></textarea>
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <input id="act-description" placeholder="activity 描述...">
+      </div>
+      <div class="form-group">
+        <label>标签 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（已用过的标签可点击添加/移除，也可手动输入后用逗号分隔）</span></label>
+        <div id="act-tags-chips" class="tag-chips"></div>
+        <input id="act-tags" placeholder="例如：http,核心" style="margin-top:6px" oninput="renderActTagChips()">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeActivityModal()">取消</button>
+        <button class="btn btn-primary" onclick="saveActivity()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 复制 Activity 弹窗 -->
+  <div class="modal-overlay" id="copy-act-overlay">
+    <div class="modal" id="copy-act-modal" style="width:880px;max-width:96vw">
+      <h2>从其它项目复制 Activity<button class="modal-close" onclick="closeCopyActivityModal()" title="关闭">&times;</button></h2>
+      <div class="form-row" style="align-items:flex-end">
+        <div class="form-group" style="flex:1">
+          <label>来源项目</label>
+          <select id="copy-act-project" onchange="loadCopyActivityCandidates()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+            <option value="">-- 选择来源项目 --</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1">
+          <label>搜索</label>
+          <input id="copy-act-search" class="search-box" placeholder="按名称/命名空间/活动名过滤..." oninput="renderCopyActivityCandidates()">
+        </div>
+      </div>
+      <p style="font-size:.8rem;color:var(--text-muted);margin:6px 0 10px">
+        展示来源项目中「命名空间+活动名称」在当前项目里尚不存在的 Activity，勾选后将其配置复制到<b>当前项目</b>（项目属性改为当前项目，生成新的 ActivityID，不复用原 ID）。
+      </p>
+      <div style="max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px">
+        <div id="copy-act-list"><div class="empty-state" style="padding:20px">请先选择来源项目</div></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeCopyActivityModal()">取消</button>
+        <button class="btn btn-primary" onclick="copyActivitiesToProject()" id="copy-act-confirm" disabled>复制选中项</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Activity 远程监听代码示例弹窗 -->
+  <div class="modal-overlay" id="act-listener-overlay">
+    <div class="modal" id="act-listener-modal" style="width:880px;max-width:96vw">
+      <h2 id="act-listener-title">远程监听代码<button class="modal-close" onclick="closeActivityListenerCode()" title="关闭">&times;</button></h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>环境 <span style="font-weight:400;color:var(--text-muted)">（用于填充 Redis 连接配置）</span></label>
+          <select id="listener-env" onchange="onListenerEnvChange()">
+            <option value="">-- 选择环境 --</option>
+          </select>
+        </div>
+      </div>
+      <pre id="listener-code" style="max-height:420px;overflow:auto;background:#0f172a;color:#e2e8f0;padding:14px;border-radius:var(--radius);font-size:.8rem;white-space:pre-wrap;margin:0"></pre>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="copyActivityListenerCode()">复制代码</button>
+        <button class="btn btn-primary" onclick="closeActivityListenerCode()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Nodes Tab -->
+  <div id="tab-nodes" class="tab-content">
+    <div class="toolbar">
+      <input class="search-box" placeholder="搜索节点..." oninput="filterNodes()">
+      <select id="node-kind-filter" onchange="filterNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+        <option value="">全部大类</option>
+        <option value="condition">查询获取</option>
+        <option value="action">策略执行</option>
+      </select>
+      <select id="node-namespace-filter" onchange="loadNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+        <option value="">全部命名空间</option>
+      </select>
+      <select id="node-tag-filter" onchange="onNodeTagFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+        <option value="">全部标签</option>
+      </select>
+      <select id="node-env-filter" onchange="onNodeEnvFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+        <option value="">全部环境</option>
+      </select>
+      <button class="btn btn-primary edit-only" onclick="openNodeModal()">+ 新增 Node</button>
+      <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
+    </div>
+    <div class="table-wrap">
+      <table id="nodes-table">
+        <thead><tr><th>Node ID</th><th>名称</th><th>类型</th><th>大类</th><th>分类</th><th>标签</th><th>命名空间</th><th>状态</th><th>版本</th><th>描述</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Sub Chains Tab -->
+  <div id="tab-sub-chains" class="tab-content">
+    <div class="toolbar">
+      <input class="search-box" placeholder="搜索子链..." oninput="filterTable('sub-table', this.value)">
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline edit-only" onclick="newSubChainViaOrch()">&#128736; 编排新建</button>
+        <button class="btn btn-primary edit-only" onclick="openSubChainModal()">+ 新增 Sub Chain</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="sub-table">
+        <thead><tr><th>Chain ID</th><th>名称</th><th>描述</th><th>状态</th><th>DSL 大小</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Root Chains Tab -->
+  <div id="tab-root-chains" class="tab-content">
+    <div class="toolbar">
+      <input class="search-box" placeholder="搜索根链..." oninput="filterTable('root-table', this.value)">
+      <button class="btn btn-primary edit-only" onclick="openCreateRootChainModal()">新增 Root Chain</button>
+    </div>
+    <div class="table-wrap">
+      <table id="root-table">
+        <thead><tr><th>Chain ID</th><th>Chain Key</th><th>名称</th><th>描述</th><th>状态</th><th>引用 Nodes</th><th>引用 Sub Chains</th><th>Connections</th><th>线上版本</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Logs Tab：查看所有日志列表（Node 运行日志 / Activity 执行日志） -->
+  <div id="tab-logs" class="tab-content">
+    <div class="toolbar">
+      <select id="all-log-type" onchange="switchAllLogType()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+        <option value="node">Node 运行日志</option>
+        <option value="activity">Activity 执行日志</option>
+      </select>
+      <select id="all-log-env" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+        <option value="">全部环境</option>
+      </select>
+      <select id="all-log-level" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+        <option value="">全部级别</option>
+        <option value="info">info</option>
+        <option value="error">error</option>
+      </select>
+      <input id="all-log-trace-id" placeholder="trace_id" style="width:280px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+      <button class="btn btn-primary" onclick="loadAllLogs()">搜索</button>
+      <button class="btn btn-outline" onclick="clearAllLogFilters()">重置</button>
+    </div>
+    <div id="all-log-list" class="log-list"><div class="log-empty">加载中…</div></div>
+    <div class="log-pager" id="all-log-pager" style="display:none">
+      <button class="btn btn-sm btn-outline" id="all-log-prev" onclick="changeAllLogPage(-1)">上一页</button>
+      <span id="all-log-page-info" class="log-page-info"></span>
+      <button class="btn btn-sm btn-outline" id="all-log-next" onclick="changeAllLogPage(1)">下一页</button>
+    </div>
+  </div>
+
+  <!-- Execute 执行面板：独立模态框，仅通过 Root Chains / SubChains 列表的 Execute 按钮打开 -->
+  <div id="execute-modal-overlay" class="modal-overlay">
+    <div id="execute-modal" class="modal" style="max-width:1400px;width:96%;max-height:92vh">
+      <div class="modal-header" style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:4px">
+        <button class="modal-close" onclick="closeExecuteModal()" title="关闭">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Datalists for autocomplete -->
+        <datalist id="conn-id-datalist"></datalist>
+        <datalist id="conn-type-datalist">
+          <option value="Success"></option>
+          <option value="Failure"></option>
+          <option value="True"></option>
+          <option value="False"></option>
+          <option value="Stream"></option>
+        </datalist>
+        <div class="exec-panel">
+          <div class="exec-card" style="grid-column:1/-1">
+            <h3>执行工作流</h3>
+            <!-- 测试用例管理（已隐藏，保留 DOM 供 JS 逻辑兼容） -->
+            <div class="form-group" style="display:none">
+              <label style="display:flex;justify-content:space-between;align-items:center">
+                <span>测试用例 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（挂载在当前 Chain ID 上，可复用/删除）</span></span>
+                <button class="btn btn-sm btn-outline" onclick="refreshTestCases()" type="button" title="刷新用例列表">&#8634; 刷新</button>
+              </label>
+              <div id="test-case-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc;margin-bottom:8px">
+                <div id="test-case-empty" style="text-align:center;padding:12px;color:var(--text-muted);font-size:.85rem">暂无测试用例，测试后可点击"保存测试用例"</div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <input id="test-case-name" placeholder="用例名称，如：测试账号A" style="flex:1">
+                <button class="btn btn-sm btn-primary" onclick="saveTestCase()" type="button">&#128190; 保存测试用例</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Chain ID</label>
+              <input id="exec-chain-id" placeholder="my_flow" value="web-test-flow" oninput="refreshTestCases()" readonly>
+            </div>
+
+            <div class="form-group">
+              <label>名称</label>
+              <input id="exec-chain-name" placeholder="测试流程" value="Web Test Flow" readonly>
+            </div>
+
+            <div class="form-group">
+              <label>输入参数 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（该流程「调用传入」参数，自动列出，去重）</span></label>
+              <div id="exec-entry-params" style="border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc;min-height:40px;font-size:.82rem">暂无调用传入参数</div>
+            </div>
+
+            <div class="form-group" style="display:none">
+              <label>Node IDs <span style="font-weight:400;color:var(--text-muted)">(逗号分隔，可从 connections 自动推导)</span></label>
+              <input id="exec-node-ids" placeholder="n1,n2" oninput="rebuildConnDatalist()">
+            </div>
+
+            <div class="form-group" style="display:none">
+              <label>Sub Chain IDs <span style="font-weight:400;color:var(--text-muted)">(逗号分隔，可从 connections 自动推导)</span></label>
+              <input id="exec-sub-ids" placeholder="sub1" oninput="rebuildConnDatalist()">
+            </div>
+
+            <div class="form-group" style="display:none">
+              <label style="display:flex;justify-content:space-between;align-items:center">
+                <span>Connections</span>
+                <button class="btn btn-sm btn-outline" onclick="addConnRow()" type="button">+ 添加连接</button>
+              </label>
+              <div id="exec-connections-container" style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+                <div id="conn-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无连接，点击 "+ 添加连接" 开始</div>
+              </div>
+
+            </div>
+
+            <div style="display:flex;gap:10px;align-items:flex-end">
+              <div class="form-group" style="flex:1;margin:0">
+                <label>执行环境</label>
+                <select id="exec-env" onchange="renderExecApiDoc()">
+                  <option value="">-- 选择环境 --</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="display:flex;gap:10px;margin-top:10px">
+              <button class="btn btn-primary" onclick="executeWorkflowByMQ()" style="flex:1">&#128640; 立即执行</button>
+            </div>
+
+          </div>
+          <div class="exec-card">
+            <h3>执行结果</h3>
+            <div id="exec-result" class="result-box" style="min-height:420px">点击执行按钮开始...</div>
+          </div>
+          <div class="exec-card">
+            <h3>执行接口说明</h3>
+            <div id="exec-api-doc" class="result-box" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;line-height:1.6;white-space:pre;overflow:auto;min-height:420px">加载中...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+  <!-- Orchestrate Tab -->
+
+<!-- Node Modal -->
+<div class="modal-overlay" id="node-modal-overlay">
+  <div class="modal wide" id="node-modal">
+    <h2 id="node-modal-title"><span id="node-modal-title-text">新增 Node</span><button class="modal-close" onclick="closeNodeModal()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="node-is-edit">
+    <input type="hidden" id="node-node-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label>名称</label>
+        <input id="node-name" placeholder="日志节点">
+      </div>
+      <div class="form-group">
+        <label>命名空间（分组，便于按模块过滤）</label>
+        <select id="node-namespace" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">（无）</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>类型 *</label>
+        <select id="node-type" onchange="onNodeTypeChange()">
+          <option value="custom/Activity">custom/Activity（活动编排）</option>
+          <option value="custom/CondSwitch">custom/CondSwitch（条件判断，仅做语法条件判断）</option>
+          <option value="end">end（结束节点）</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" id="node-activity-section" style="display:none">
+      <label style="display:block">
+        <span>Activity 编排（二维数组：外层阶段<strong>串行</strong>执行，同阶段内活动<strong>并行</strong>执行）</span>
+      </label>
+      <p style="font-size:.78rem;color:var(--text-muted);margin:4px 0 8px">
+        每个「阶段」依次串行执行；同一阶段内的多个 Activity 并发执行。后续阶段（或后续活动）的参数可引用前面 Activity 的返回值，也可引用本节点的参数定义。
+      </p>
+      <!-- 阶段容器：每个 .stage 是一个串行阶段 -->
+      <div id="node-activity-stages" style="display:flex;flex-direction:column;gap:10px"></div>
+      <!-- 全局：新建串行阶段 -->
+      <button type="button" class="btn btn-sm btn-primary" style="margin-top:10px" onclick="addActivityStage()">+ 新建串行阶段</button>
+      <div id="node-activity-empty" class="override-empty" style="margin-top:8px;display:none">尚未添加任何阶段，请点击「新建串行阶段」并选择 Activity。</div>
+      <!-- 兼容旧结构：单 activity 自定义输入（仅当未添加任何阶段时可用） -->
+      <div id="node-activity-custom" style="display:none;margin-top:10px">
+        <div class="form-row">
+          <div class="form-group">
+            <label>活动命名空间 (act_namespace)</label>
+            <input id="node-act-namespace" placeholder="例如 test" oninput="syncActivityConfig()">
+          </div>
+          <div class="form-group">
+            <label>活动名称 (act_name) *</label>
+            <input id="node-act-name" placeholder="例如 add" oninput="syncActivityConfig()">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>节点大类</label>
+        <select id="node-kind">
+          <option value="condition">查询获取</option>
+          <option value="action" selected>策略执行</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>分类</label>
+        <input id="node-category" placeholder="transform">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>标签（多个标签用逗号分隔，也可点击下方历史标签快速选择）</label>
+        <input id="node-tags" placeholder="如：高优,风控,内部" oninput="renderNodeTagChips()">
+        <div id="node-tags-chips" class="tag-chips"></div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>版本</label>
+        <input id="node-version" placeholder="1.0.0">
+      </div>
+      <div class="form-group">
+        <label>状态</label>
+        <select id="node-status">
+          <option value="1">启用</option>
+          <option value="0">禁用</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Configuration (JSON)</label>
+      <textarea id="node-configuration">{
+  "jsScript": "return {msg: 'hello'};"
+}</textarea>
+    </div>
+    <div class="form-group" id="node-cond-section" style="display:none">
+      <label>条件串 (condition) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（condSwitch 专用，填入后写入 Configuration.node_config.condition）</span></label>
+      <textarea id="node-condition" placeholder="例如：msg.age > 18 && msg.vip == true" style="min-height:60px" oninput="syncCondConfig()"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Additional Info (JSON, 可选)</label>
+      <textarea id="node-additional-info">{}</textarea>
+    </div>
+    <div class="form-group">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span>参数定义</span>
+        <button class="btn btn-sm btn-outline" onclick="addParamRow()" type="button">+ 添加参数</button>
+      </div>
+      <div id="node-params-container" style="margin-top:10px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+        <div id="param-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无参数定义</div>
+      </div>
+    </div>
+    <div class="form-group">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span>返回值定义 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（执行该节点后可得到的值，供下游节点引用）</span></span>
+        <button class="btn btn-sm btn-outline" onclick="addOutputRow()" type="button">+ 添加返回值</button>
+      </div>
+      <div id="node-outputs-container" style="margin-top:10px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+        <div id="output-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无返回值定义</div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>描述</label>
+      <input id="node-description" placeholder="节点描述...">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeNodeModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveNode()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Test Node Modal -->
+<div class="modal-overlay" id="test-node-modal-overlay">
+  <div class="modal" id="test-node-modal" style="width:880px;max-width:96vw">
+    <h2 id="test-node-modal-title">测试 Node<button class="modal-close" onclick="closeTestNodeModal()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="test-node-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label>环境 <span style="font-weight:400;color:var(--text-muted)">（决定 Redis 等依赖配置，必选）</span></label>
+        <select id="test-node-env" onchange="onTestEnvChange()">
+          <option value="">-- 选择环境 --</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>是否保存测试记录</label>
+        <select id="test-node-save">
+          <option value="true" selected>保存</option>
+          <option value="false">不保存</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label style="display:flex;justify-content:space-between;align-items:center">
+        <span>参数 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（<span style="color:#dc2626">*</span> 为必传：覆盖类型 frontend / frontend+）</span></span>
+        <button class="btn btn-sm btn-outline" onclick="resetTestParams()" type="button">清空</button>
+      </label>
+      <div id="test-node-params" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+        <div id="test-node-params-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">该节点无参数定义</div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>返回结果</label>
+      <pre id="test-node-result" style="max-height:240px;overflow-y:auto;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:var(--radius);font-size:.8rem;white-space:pre-wrap;margin:0">点击"执行测试"后显示结果</pre>
+    </div>
+
+    <div class="form-group">
+      <label style="display:flex;justify-content:space-between;align-items:center">
+        <span>历史测试记录</span>
+        <button class="btn btn-sm btn-outline" type="button" onclick="clearNodeTestRecords()">全部清除</button>
+      </label>
+      <div id="test-node-records" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeTestNodeModal()">关闭</button>
+      <button class="btn btn-primary" onclick="testNode()">&#9654; 执行测试</button>
+    </div>
+  </div>
+</div>
+
+<!-- Test Activity Modal -->
+<div class="modal-overlay" id="test-activity-modal-overlay">
+  <div class="modal" id="test-activity-modal" style="width:880px;max-width:96vw">
+    <h2 id="test-activity-modal-title">测试 Activity<button class="modal-close" onclick="closeTestActivityModal()" title="关闭">&times;</button></h2>
+    <div id="test-activity-name" style="margin:-4px 0 12px;color:var(--primary);font-size:.92rem;font-weight:600"></div>
+    <input type="hidden" id="test-activity-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label>环境 <span id="test-activity-env-hint" style="font-weight:400;color:var(--text-muted)">（决定 Redis 等依赖配置，必选）</span></label>
+        <select id="test-activity-env" onchange="onTestActivityEnvChange()">
+          <option value="">-- 选择环境 --</option>
+        </select>
+      </div>
+      <div id="test-activity-kind-hint" class="form-group"></div>
+      <div class="form-group">
+        <label>是否保存测试记录</label>
+        <select id="test-activity-save">
+          <option value="true" selected>保存</option>
+          <option value="false">不保存</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label style="display:flex;justify-content:space-between;align-items:center">
+        <span>参数 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（<span style="color:#dc2626">*</span> 为必传：覆盖类型 frontend / frontend+）</span></span>
+        <button class="btn btn-sm btn-outline" onclick="resetTestActivityParams()" type="button">清空</button>
+      </label>
+      <div id="test-activity-params" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+        <div id="test-activity-params-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">该活动无参数定义</div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>返回结果</label>
+      <pre id="test-activity-result" style="max-height:240px;overflow-y:auto;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:var(--radius);font-size:.8rem;white-space:pre-wrap;margin:0">点击"执行测试"后显示结果</pre>
+    </div>
+
+    <div class="form-group">
+      <label>历史测试记录</label>
+      <div id="test-activity-records" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeTestActivityModal()">关闭</button>
+      <button class="btn btn-primary" onclick="testActivity()">&#9654; 执行测试</button>
+    </div>
+  </div>
+</div>
+
+<!-- Activity 日志查看弹窗 -->
+<div class="modal-overlay" id="activity-logs-modal-overlay">
+  <div class="modal" id="activity-logs-modal" style="width:960px;max-width:96vw">
+    <h2 id="activity-logs-modal-title">执行日志<button class="modal-close" onclick="closeActivityLogsModal()" title="关闭">&times;</button></h2>
+    <div id="activity-logs-name" style="margin:-4px 0 12px;color:var(--primary);font-size:.92rem;font-weight:600"></div>
+    <div class="log-search-row">
+      <select id="log-env" style="min-width:140px">
+        <option value="">环境：全部</option>
+      </select>
+      <input class="log-keyword" id="log-keyword" placeholder="关键词（匹配入参/结果/错误）" onkeydown="if(event.key==='Enter')loadActivityLogs()">
+      <select id="log-level">
+        <option value="">级别：全部</option>
+        <option value="info">info</option>
+        <option value="error">error</option>
+      </select>
+      <input id="log-event-id" placeholder="链路ID" style="width:160px" onkeydown="if(event.key==='Enter')loadActivityLogs()">
+      <input id="log-root-chain-id" placeholder="root_chain_id" style="width:160px" onkeydown="if(event.key==='Enter')loadActivityLogs()">
+      <input id="log-trace-id" placeholder="trace_id" style="width:160px" onkeydown="if(event.key==='Enter')loadActivityLogs()">
+      <input id="log-span-id" placeholder="span_id" style="width:150px" onkeydown="if(event.key==='Enter')loadActivityLogs()">
+      <button class="btn btn-sm btn-primary" onclick="loadActivityLogs()">搜索</button>
+      <button class="btn btn-sm btn-outline" onclick="clearLogFilters()">重置</button>
+    </div>
+    <div id="log-list" class="log-list"><div class="log-empty">加载中…</div></div>
+    <div class="log-pager" id="log-pager" style="display:none">
+      <button class="btn btn-sm btn-outline" id="log-prev" onclick="changeLogPage(-1)">上一页</button>
+      <span id="log-page-info" class="log-page-info"></span>
+      <button class="btn btn-sm btn-outline" id="log-next" onclick="changeLogPage(1)">下一页</button>
+    </div>
+  </div>
+</div>
+
+<!-- Node 运行日志查看弹窗（记录每个 node 执行时的入参与返回值） -->
+<div class="modal-overlay" id="node-logs-modal-overlay" onclick="if(event.target===this)closeNodeLogsModal()">
+  <div class="modal" id="node-logs-modal" style="width:960px;max-width:96vw">
+    <h2 id="node-logs-modal-title">Node 运行日志<button class="modal-close" onclick="closeNodeLogsModal()" title="关闭">&times;</button></h2>
+    <div id="node-logs-name" style="margin:-4px 0 12px;color:var(--primary);font-size:.92rem;font-weight:600"></div>
+    <div class="log-search-row">
+      <select id="node-log-env" style="min-width:140px">
+        <option value="">环境：全部</option>
+      </select>
+      <select id="node-log-level">
+        <option value="">级别：全部</option>
+        <option value="info">info</option>
+        <option value="error">error</option>
+      </select>
+      <input id="node-log-trace-id" placeholder="trace_id" style="width:180px" onkeydown="if(event.key==='Enter')loadNodeLogs()">
+      <button class="btn btn-sm btn-primary" onclick="loadNodeLogs()">搜索</button>
+      <button class="btn btn-sm btn-outline" onclick="clearNodeLogFilters()">重置</button>
+    </div>
+    <div id="node-log-list" class="log-list"><div class="log-empty">加载中…</div></div>
+    <div class="log-pager" id="node-log-pager" style="display:none">
+      <button class="btn btn-sm btn-outline" id="node-log-prev" onclick="changeNodeLogPage(-1)">上一页</button>
+      <span id="node-log-page-info" class="log-page-info"></span>
+      <button class="btn btn-sm btn-outline" id="node-log-next" onclick="changeNodeLogPage(1)">下一页</button>
+    </div>
+  </div>
+</div>
+
+<!-- Trace 日志查看弹窗（按 trace_id 查询跨 Activity 执行记录） -->
+<div class="modal-overlay" id="trace-logs-modal-overlay">
+  <div class="modal" id="trace-logs-modal" style="width:960px;max-width:96vw">
+    <h2 id="trace-logs-modal-title">执行日志查询（按 trace_id）<button class="modal-close" onclick="closeTraceLogsModal()" title="关闭">&times;</button></h2>
+    <div class="log-search-row">
+      <input id="trace-log-trace-id" class="log-keyword" placeholder="输入 trace_id 查询该链路所有 activity 记录" style="min-width:280px" onkeydown="if(event.key==='Enter')loadTraceLogs()">
+      <button class="btn btn-sm btn-primary" onclick="loadTraceLogs()">查询</button>
+    </div>
+    <div class="log-section-title">Node 运行日志（按 trace_id 关联的 node 记录，点开查看该 trace 下 Activities）</div>
+    <div id="trace-node-log-list" class="log-list"><div class="log-empty">请输入 trace_id 后点击查询</div></div>
+  </div>
+</div>
+
+<!-- SubChain Modal -->
+<div class="modal-overlay" id="sub-modal-overlay">
+  <div class="modal" id="sub-modal">
+    <h2 id="sub-modal-title">新增 Sub Chain<button class="modal-close" onclick="closeSubChainModal()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="sub-is-edit">
+    <input type="hidden" id="sub-chain-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label>名称</label>
+        <input id="sub-name" placeholder="子链名称">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>状态</label>
+        <select id="sub-status">
+          <option value="1">启用</option>
+          <option value="0">禁用</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>描述</label>
+      <input id="sub-description" placeholder="子链描述...">
+    </div>
+    <div class="form-group">
+      <label>DSL JSON *</label>
+      <textarea id="sub-dsl-json" style="min-height:200px">{
+  "ruleChain": {
+    "id": "sub1",
+    "name": "sub chain"
+  },
+  "metadata": {
+    "nodes": [
+      {
+        "id": "n1",
+        "type": "log",
+        "name": "log node",
+        "configuration": {}
+      }
+    ],
+    "connections": []
+  }
+}</textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeSubChainModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveSubChain()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Flowchart Modal -->
+<div class="modal-overlay" id="flowchart-modal-overlay">
+  <div class="modal" id="flowchart-modal" style="width:1100px;max-width:96vw">
+    <h2 id="flowchart-modal-title">流程图<button class="modal-close" onclick="closeFlowchartModal()" title="关闭">&times;</button></h2>
+    <div class="flowchart-wrap">
+      <div class="mermaid" id="flowchart-mermaid"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeFlowchartModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Release History Modal -->
+<div class="modal-overlay" id="release-modal-overlay">
+    <div class="modal" style="width:960px;max-width:96vw">
+    <h2 id="release-modal-title">发布记录<button class="modal-close" onclick="closeReleaseModal()" title="关闭">&times;</button></h2>
+    <p style="margin:0 0 10px;color:var(--text-muted);font-size:.82rem">线上生效版本不允许删除；其余版本可直接删除。点击"设为生效"切换生产环境使用的版本（历史记录只增不改）。</p>
+    <div class="table-wrap" style="max-height:60vh;overflow-y:auto">
+      <table id="release-table">
+        <thead><tr><th>版本</th><th>名称</th><th>发布时间</th><th>DSL 大小</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeReleaseModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- DSL View Modal -->
+<div class="modal-overlay" id="dsl-modal-overlay">
+    <div class="modal" style="width:960px;max-width:96vw">
+    <h2 id="dsl-modal-title">DSL 内容<button class="modal-close" onclick="closeDslModal()" title="关闭">&times;</button></h2>
+    <pre id="dsl-modal-content" style="max-height:65vh;overflow:auto;background:#1e293b;color:#e2e8f0;padding:14px;border-radius:8px;font-size:.8rem;white-space:pre-wrap;word-break:break-all"></pre>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="copyDslContent()">复制</button>
+      <button class="btn btn-outline" onclick="closeDslModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function openDslModal(title, content) {
+  document.getElementById('dsl-modal-title').innerHTML = esc(title) + '<button class="modal-close" onclick="closeDslModal()" title="关闭">&times;</button>';
+  document.getElementById('dsl-modal-content').textContent = content;
+  document.getElementById('dsl-modal-overlay').classList.add('show');
+}
+function closeDslModal() {
+  document.getElementById('dsl-modal-overlay').classList.remove('show');
+}
+function copyDslContent() {
+  const txt = document.getElementById('dsl-modal-content').textContent;
+  navigator.clipboard.writeText(txt).then(() => showToast('已复制', '成功'), () => showToast('复制失败', 'error'));
+}
+</script>
+
+<!-- Project Modal -->
+<div class="modal-overlay" id="project-modal-overlay">
+  <div class="modal" id="project-modal" style="width:880px">
+    <h2 id="project-modal-title">项目管理<button class="modal-close" onclick="closeProjectModal()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="project-is-edit">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Project ID *</label>
+        <input id="project-project-id" placeholder="my-project" required oninput="if(!document.getElementById('project-is-edit').value) showEnvConfigPanel()">
+      </div>
+      <div class="form-group">
+        <label>名称</label>
+        <input id="project-name" placeholder="我的项目">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>状态</label>
+      <select id="project-status">
+        <option value="1">启用</option>
+        <option value="0">禁用</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>描述</label>
+      <input id="project-description" placeholder="项目描述...">
+    </div>
+    <div class="exec-card admin-only" style="margin:14px 0 8px">
+      <h4 style="font-size:.85rem;margin-bottom:8px">项目密钥（用于对外配置查询接口鉴权，可配置多个供不同账户使用）</h4>
+      <div id="project-secrets-list" class="secrets-list"></div>
+      <div class="form-row" style="margin-top:8px">
+        <div class="form-group" style="flex:2">
+          <label>新增 Secret Key</label>
+          <input id="project-secret" type="password" placeholder="输入新密钥" autocomplete="new-password">
+        </div>
+        <div class="form-group" style="flex:2">
+          <label>备注</label>
+          <input id="project-secret-remark" placeholder="可选，如：账户A专用" autocomplete="off">
+        </div>
+        <div class="form-group" style="flex:1; align-self:flex-end">
+          <button class="btn btn-outline" onclick="addProjectSecret()">添加密钥</button>
+        </div>
+      </div>
+      <div class="form-row" style="margin-top:10px">
+        <div class="form-group" style="flex:2">
+          <label>查询配置（输入任一密钥后点击查询）</label>
+          <input id="project-query-secret" type="password" placeholder="输入项目密钥" autocomplete="new-password">
+        </div>
+        <div class="form-group" style="flex:1; align-self:flex-end">
+          <button class="btn btn-primary" onclick="queryProjectConfig()">查询配置</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="margin-bottom:16px">
+      <button class="btn btn-outline" onclick="resetProjectForm()">重置</button>
+      <button class="btn btn-primary" onclick="saveProject()" id="project-save-btn">新增</button>
+    </div>
+    <div class="viewer-allowed">
+      <h3 style="font-size:.95rem;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)">已有项目</h3>
+      <div class="table-wrap" style="max-height:300px;overflow-y:auto">
+        <table id="projects-table">
+          <thead><tr><th>Project ID</th><th>名称</th><th>描述</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="admin-only">
+    <h3 style="font-size:.95rem;margin:18px 0 10px;padding-bottom:8px;border-bottom:1px solid var(--border)">环境配置</h3>
+    <div id="env-config-panel" style="display:none">
+      <div class="form-row">
+        <div class="form-group">
+          <label>环境名 *</label>
+          <input id="env-name" placeholder="如 dev / test / prod">
+        </div>
+        <div class="form-group">
+          <label>描述</label>
+          <input id="env-description" placeholder="环境说明">
+        </div>
+      </div>
+
+      <div class="exec-card" style="margin-bottom:12px">
+        <h4 style="font-size:.85rem;margin-bottom:8px">环境变量（key-value，可多行）</h4>
+        <div id="env-vars-list"></div>
+        <button class="btn btn-sm btn-outline" onclick="addEnvVarRow()">+ 添加变量</button>
+      </div>
+
+      <div class="form-row">
+        <div class="exec-card" style="flex:1;margin-bottom:12px">
+          <h4 style="font-size:.85rem;margin-bottom:8px">Redis 配置</h4>
+          <div class="form-row">
+            <div class="form-group"><label>Addr</label><input id="env-redis-addr" placeholder="127.0.0.1:6379"></div>
+            <div class="form-group"><label>Password</label><input id="env-redis-pwd" placeholder="可选" type="password"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>DB</label><input id="env-redis-db" type="number" value="0"></div>
+            <div class="form-group"><label>Username</label><input id="env-redis-user" placeholder="可选"></div>
+          </div>
+        </div>
+        <div class="exec-card" style="flex:1;margin-bottom:12px">
+          <h4 style="font-size:.85rem;margin-bottom:8px">MySQL 配置</h4>
+          <div class="form-row">
+            <div class="form-group"><label>Host</label><input id="env-mysql-host" placeholder="127.0.0.1"></div>
+            <div class="form-group"><label>Port</label><input id="env-mysql-port" type="number" value="3306"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>User</label><input id="env-mysql-user" placeholder="root"></div>
+            <div class="form-group"><label>Password</label><input id="env-mysql-pwd" placeholder="可选" type="password"></div>
+          </div>
+          <div class="form-group"><label>DB Name</label><input id="env-mysql-db" placeholder="dbname"></div>
+          <div class="form-group"><label>DSN（填写则优先）</label><input id="env-mysql-dsn" placeholder="完整 DSN，留空则用上面拆分字段"></div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="resetEnvConfigForm()">重置环境表单</button>
+        <button class="btn btn-primary" onclick="saveEnvConfig()" id="env-save-btn">保存环境配置</button>
+      </div>
+
+      <h4 style="font-size:.85rem;margin:12px 0 8px">已配置环境</h4>
+      <div class="table-wrap" style="max-height:220px;overflow-y:auto">
+        <table id="env-configs-table">
+          <thead><tr><th>环境名</th><th>描述</th><th>Redis</th><th>MySQL</th><th>变量数</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="env-config-empty" class="empty-state" style="padding:12px 0"><p>请先选择一个项目，再配置环境</p></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeProjectModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 项目配置查询结果弹窗 -->
+<div class="modal-overlay" id="project-config-overlay">
+  <div class="modal" id="project-config-modal" style="width:840px">
+    <h2 id="project-config-title">项目配置<button class="modal-close" onclick="closeProjectConfigModal()" title="关闭">&times;</button></h2>
+    <div id="project-config-body" style="max-height:60vh;overflow-y:auto">
+      <div class="empty-state"><p>暂无数据</p></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeProjectConfigModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 用户管理弹窗（仅 admin） -->
+<div class="modal-overlay" id="user-modal-overlay" onclick="if(event.target===this)closeUserModal()">
+  <div class="modal" style="width:680px">
+    <h2>用户管理<button class="modal-close" onclick="closeUserModal()" title="关闭">&times;</button></h2>
+    <div style="margin-bottom:12px">
+      <button class="btn btn-primary btn-sm" onclick="openUserEdit('')">+ 新建用户</button>
+    </div>
+    <div id="user-list" style="max-height:55vh;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- 用户编辑弹窗 -->
+<div class="modal-overlay" id="user-edit-overlay" onclick="if(event.target===this)closeUserEdit()">
+  <div class="modal" style="width:560px">
+    <h2 id="user-edit-title">编辑用户<button class="modal-close" onclick="closeUserEdit()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="user-edit-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label>用户名 *</label>
+        <input id="user-edit-username" placeholder="登录用户名" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>昵称</label>
+        <input id="user-edit-nickname" placeholder="显示昵称" autocomplete="off">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>密码</label>
+        <input id="user-edit-password" type="password" placeholder="请输入密码" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label>角色</label>
+        <select id="user-edit-role">
+          <option value="viewer">普通用户（仅授权项目）</option>
+          <option value="admin">管理员（全部项目）</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>状态</label>
+      <select id="user-edit-status">
+        <option value="1">启用</option>
+        <option value="0">禁用</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>授权项目（普通用户可访问的项目；管理员忽略此项，拥有全部）</label>
+      <div class="chk-grid" id="user-edit-projects"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeUserEdit()">取消</button>
+      <button class="btn btn-primary" onclick="saveUserEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 修改密码弹窗（当前登录用户自助修改） -->
+<div class="modal-overlay" id="pwd-modal-overlay" onclick="if(event.target===this)closePwdModal()">
+  <div class="modal" style="width:440px">
+    <h2>修改密码<button class="modal-close" onclick="closePwdModal()" title="关闭">&times;</button></h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>旧密码 *</label>
+        <input id="pwd-old" type="password" placeholder="请输入当前密码" autocomplete="current-password">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>新密码 *</label>
+        <input id="pwd-new" type="password" placeholder="至少 6 位" autocomplete="new-password">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>确认新密码 *</label>
+        <input id="pwd-confirm" type="password" placeholder="再次输入新密码" autocomplete="new-password">
+      </div>
+    </div>
+    <div class="login-err" id="pwd-err"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closePwdModal()">取消</button>
+      <button class="btn btn-primary" onclick="doChangePwd()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新增 Root Chain 弹窗 -->
+<div class="modal-overlay" id="create-root-overlay">
+  <div class="modal" id="create-root-modal">
+    <h2>新增 Root Chain<button class="modal-close" onclick="closeCreateRootChainModal()" title="关闭">&times;</button></h2>
+    <p style="font-size:.8rem;color:var(--text-muted);margin:0 0 12px">先录入基本信息（DSL 为空），编排完成后保存时再写入 DSL。</p>
+    <div class="form-group">
+      <label>名称 *</label>
+      <input id="create-root-name" placeholder="例如：订单退款流程">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Chain Key（业务键，留空自动生成）</label>
+        <input id="create-root-key" placeholder="例如：order_refund">
+      </div>
+      <div class="form-group">
+        <label>状态</label>
+        <select id="create-root-status">
+          <option value="0">草稿</option>
+          <option value="1">启用</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>描述</label>
+      <input id="create-root-desc" placeholder="Root Chain 描述...">
+    </div>
+    <div id="create-root-error" style="color:#dc2626;font-size:.8rem;min-height:1.1em;margin-bottom:6px"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeCreateRootChainModal()">取消</button>
+      <button class="btn btn-primary" onclick="createRootChain()">创建</button>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/common.js"></script>
+</body>
+</html>
