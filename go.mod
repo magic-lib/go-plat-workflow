@@ -1,6 +1,6 @@
 module github.com/magic-lib/go-plat-workflow
 
-go 1.24.6
+go 1.24.3
 
 require (
 	github.com/emicklei/go-restful/v3 v3.13.0

@@ -18,31 +18,25 @@ import (
 type (
 	Actor interface {
 		plugins.Plugin
-		ActionMeta() *ActionMeta //定义具体的动作属性
+		ActMeta() *ActMeta //定义具体的动作属性
 	}
 )
 
 type (
-	// ActionMeta 动作的元数据配置（集中管理所有描述性字段）
-	ActionMeta struct {
+	// ActMeta 动作的元数据配置（集中管理所有描述性字段）
+	ActMeta struct {
 		Namespace    string                  `yaml:"namespace" json:"namespace,omitempty"` // 避免相同的activity名称冲突，默认为空，则为顶级方法
 		Activity     string                  `yaml:"activity" json:"activity"`             // 活动名,对应执行的相应方法,可以自定义名
 		Desc         string                  `yaml:"desc" json:"desc"`                     // 动作描述
-		Responses    []ReturnConfig          `yaml:"responses" json:"responses"`           // 返回参数元数据，做检查用
+		RequiredResp []string                `yaml:"required_resp" json:"required_resp"`   // 返回参数元数据，做检查用
 		RequiredArgs []string                `yaml:"required_args" json:"required_args"`   // 必传参数键，主要是做前期检查用，避免调用方法后才报错, 是jsonPath
 		ArgumentType reflect.Type            `yaml:"-" json:"-"`                           // 输入参数类型，这样可以保证使用golang的类型
 		actionMethod utils.ContextAnyHandler //action执行的具体方法
 	}
-
-	// ReturnConfig 返回参数元数据（描述返回字段的结构）
-	ReturnConfig struct {
-		Name     string `yaml:"name" json:"name"`         // 返回字段名称
-		Required bool   `yaml:"required" json:"required"` // 是否必须返回该字段
-	}
 )
 
 // 检查输入参数是否符合要求
-func (am *ActionMeta) checkArguments(arguments any) error {
+func (am *ActMeta) checkArguments(arguments any) error {
 	if am.Activity == "" {
 		return errors.New("action name cannot be empty")
 	}
@@ -66,8 +60,8 @@ func (am *ActionMeta) checkArguments(arguments any) error {
 }
 
 // 检查返回数据是否符合要求
-func (am *ActionMeta) checkResponses(retData any) error {
-	if len(am.Responses) == 0 {
+func (am *ActMeta) checkResponses(retData any) error {
+	if len(am.RequiredResp) == 0 {
 		return nil
 	}
 
@@ -78,15 +72,15 @@ func (am *ActionMeta) checkResponses(retData any) error {
 	return nil
 }
 
-func (am *ActionMeta) Name() string {
+func (am *ActMeta) Name() string {
 	return am.Activity
 }
-func (am *ActionMeta) ActionMeta() *ActionMeta {
+func (am *ActMeta) ActMeta() *ActMeta {
 	return am
 }
 
 // Execute 执行动作并返回结果
-func (am *ActionMeta) Execute(ctx context.Context, arguments any) (any, error) {
+func (am *ActMeta) Execute(ctx context.Context, arguments any) (any, error) {
 	// 1. 验证输入参数
 	if err := am.checkArguments(arguments); err != nil {
 		return nil, fmt.Errorf("%s invalid arguments: %w", am.Name(), err)
@@ -112,7 +106,7 @@ func (am *ActionMeta) Execute(ctx context.Context, arguments any) (any, error) {
 }
 
 // 执行动作的内部方法，处理参数转换
-func (am *ActionMeta) executeAction(ctx context.Context, action utils.ContextAnyHandler, arguments any) (any, error) {
+func (am *ActMeta) executeAction(ctx context.Context, action utils.ContextAnyHandler, arguments any) (any, error) {
 	// 如果指定了参数类型且可以转换，则使用转换后的参数
 	if am.ArgumentType != nil {
 		if convertedArgs, err := conv.ConvertForType(am.ArgumentType, arguments); err == nil {
@@ -124,38 +118,28 @@ func (am *ActionMeta) executeAction(ctx context.Context, action utils.ContextAny
 }
 
 // 查找缺失的必填参数
-func (am *ActionMeta) findMissingRequiredArgs(arguments any) []string {
-	jsonStr := conv.String(arguments)
-	if !cond.IsJson(jsonStr) {
-		return nil
-	}
-
-	missing := make([]string, 0)
-
-	lo.ForEach(am.RequiredArgs, func(key string, _ int) {
-		if !gjson.Get(jsonStr, key).Exists() {
-			missing = append(missing, key)
-		}
-	})
-
-	return missing
+func (am *ActMeta) findMissingRequiredArgs(arguments any) []string {
+	return findMissingRequiredFields(arguments, am.RequiredArgs)
 }
 
 // 查找缺失的必填返回字段
-func (am *ActionMeta) findMissingRequiredFields(retData any) []string {
+func (am *ActMeta) findMissingRequiredFields(retData any) []string {
+	return findMissingRequiredFields(retData, am.RequiredResp)
+}
+func findMissingRequiredFields(retData any, requiredList []string) []string {
 	jsonStr := conv.String(retData)
-	if !cond.IsJson(jsonStr) {
+	if !cond.IsJson(jsonStr) || len(requiredList) == 0 {
 		return nil
 	}
 
 	missing := make([]string, 0)
-	lo.ForEach(am.Responses, func(config ReturnConfig, _ int) {
-		if config.Name == "" || !config.Required {
+	lo.ForEach(requiredList, func(config string, _ int) {
+		if config == "" {
 			return
 		}
 
-		if !gjson.Get(jsonStr, config.Name).Exists() {
-			missing = append(missing, config.Name)
+		if !gjson.Get(jsonStr, config).Exists() {
+			missing = append(missing, config)
 		}
 	})
 

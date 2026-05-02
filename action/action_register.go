@@ -8,7 +8,7 @@ import (
 )
 
 // ChangeToActor 转换为Actor
-func ChangeToActor[I, O any](method any, ac *ActionMeta) (Actor, error) {
+func ChangeToActor[I, O any](method any, ac *ActMeta) (Actor, error) {
 	if ac == nil || method == nil {
 		return nil, fmt.Errorf("data or method is nil")
 	}
@@ -33,7 +33,7 @@ func RegisterAction(ai Actor) error {
 	if ai == nil {
 		return fmt.Errorf("actor is nil")
 	}
-	am := ai.ActionMeta()
+	am := ai.ActMeta()
 	if am == nil || am.Activity == "" {
 		return fmt.Errorf("activity name is empty")
 	}

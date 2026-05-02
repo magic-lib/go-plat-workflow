@@ -43,43 +43,43 @@ func registerAction() {
 	orderModel := &Order{
 		Name: "tianlin999777",
 	}
-	getOrderNameInterface, err := action.ChangeToActor[int, string](orderModel.GetOrderName, &action.ActionMeta{
+	getOrderNameInterface, err := action.ChangeToActor[int, string](orderModel.GetOrderName, &action.ActMeta{
 		Namespace:    ns,
 		Activity:     "GetOrderName",
 		Desc:         "获取订单名称",
 		RequiredArgs: []string{"name", "age"},
-		Responses:    nil,
+		RequiredResp: nil,
 	})
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
-	getMemberGroupInterface, err := action.ChangeToActor[int, string](orderModel.GetMemberGroup, &action.ActionMeta{
+	getMemberGroupInterface, err := action.ChangeToActor[int, string](orderModel.GetMemberGroup, &action.ActMeta{
 		Namespace:    ns,
 		Activity:     "GetMemberGroup",
 		Desc:         "获取用户客群",
 		RequiredArgs: []string{"name", "age"},
-		Responses:    nil,
+		RequiredResp: nil,
 	})
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
-	getOrderInfoInterface, err := action.ChangeToActor[*Order, *Order](orderModel.GetOrderInfo, &action.ActionMeta{
+	getOrderInfoInterface, err := action.ChangeToActor[*Order, *Order](orderModel.GetOrderInfo, &action.ActMeta{
 		Namespace:    ns,
 		Activity:     "GetOrderInfo",
 		Desc:         "获取订单信息",
 		RequiredArgs: []string{"name", "group"},
-		Responses:    nil,
+		RequiredResp: nil,
 	})
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
-	getLoggerInterface, err := action.ChangeToActor[*Order, bool](orderModel.Logger, &action.ActionMeta{
+	getLoggerInterface, err := action.ChangeToActor[*Order, bool](orderModel.Logger, &action.ActMeta{
 		Activity: "Log",
 		Desc:     "日志",
 	})
