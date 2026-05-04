@@ -28,8 +28,8 @@ type (
 		Namespace    string                  `yaml:"namespace" json:"namespace,omitempty"` // 避免相同的activity名称冲突，默认为空，则为顶级方法
 		Activity     string                  `yaml:"activity" json:"activity"`             // 活动名,对应执行的相应方法,可以自定义名
 		Desc         string                  `yaml:"desc" json:"desc"`                     // 动作描述
-		RequiredResp []string                `yaml:"required_resp" json:"required_resp"`   // 返回参数元数据，做检查用
 		RequiredArgs []string                `yaml:"required_args" json:"required_args"`   // 必传参数键，主要是做前期检查用，避免调用方法后才报错, 是jsonPath
+		RequiredResp []string                `yaml:"required_resp" json:"required_resp"`   // 返回参数元数据，做检查用
 		ArgumentType reflect.Type            `yaml:"-" json:"-"`                           // 输入参数类型，这样可以保证使用golang的类型
 		actionMethod utils.ContextAnyHandler //action执行的具体方法
 	}
@@ -52,7 +52,7 @@ func (am *ActMeta) checkArguments(arguments any) error {
 	if len(am.RequiredArgs) > 0 {
 		missingArgs := am.findMissingRequiredArgs(arguments)
 		if len(missingArgs) > 0 {
-			return fmt.Errorf("%s missing required arguments: %v", am.Name(), missingArgs)
+			return fmt.Errorf("required: %s", conv.String(missingArgs))
 		}
 	}
 

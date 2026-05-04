@@ -65,30 +65,30 @@ type (
 	}
 )
 
-// 判断是否在执行后立即退出
-func (c *FlowControl) shouldExitOnExecute() bool {
+// ShouldExitOnExecute 判断是否在执行后立即退出
+func (c *FlowControl) ShouldExitOnExecute() bool {
 	if c == nil {
 		return false // 默认不退出
 	}
 	return c.OnExit == OnExitExit
 }
 
-// 判断是否在执行后继续执行后续流程
-func (c *FlowControl) shouldContinueOnExecute() bool {
+// ShouldContinueOnExecute 判断是否在执行后继续执行后续流程
+func (c *FlowControl) ShouldContinueOnExecute() bool {
 	if c == nil {
 		return false // 默认不退出
 	}
 	return c.OnExit == OnExitContinue
 }
 
-// 直接返回，后面流程异步
-func (c *FlowControl) shouldReturnOnExecute() bool {
+// ShouldReturnOnExecute 直接返回，后面流程异步
+func (c *FlowControl) ShouldReturnOnExecute() bool {
 	if c == nil {
 		return false // 默认不退出
 	}
 	return c.OnExit == OnExitReturn
 }
-func (c *FlowControl) shouldIgnoreOnError() bool {
+func (c *FlowControl) ShouldIgnoreOnError() bool {
 	if c == nil {
 		return false
 	}

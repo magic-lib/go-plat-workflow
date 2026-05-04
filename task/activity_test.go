@@ -29,8 +29,8 @@ func TestDependsOnIds(t *testing.T) {
 		{"err", []any{0}, []any{"err:no id"}, func(n int) string {
 			//task.WithReturnKeyPrefix("return_")
 
-			list := oneAct.GetDependsOnIds()
-			fmt.Println(list)
+			fmt.Println(oneAct)
+
 			return ""
 		}},
 	}

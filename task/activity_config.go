@@ -10,6 +10,9 @@ var (
 	returnKeyPrefix       = ""
 )
 
+func ReturnKeyPrefix() string {
+	return returnKeyPrefix
+}
 func WithReturnKeyPrefix(keyPrefix string) {
 	if returnKeyPrefix == keyPrefix {
 		return

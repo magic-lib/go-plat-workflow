@@ -3,9 +3,11 @@ module github.com/magic-lib/go-plat-workflow
 go 1.24.3
 
 require (
-	github.com/emicklei/go-restful/v3 v3.13.0
+	github.com/hashicorp/go-multierror v1.1.1
 	github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260426195715-12a8640acbdd
-	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260428172240-d2c132926d36
+	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260504094238-8a3f6463266b
+	github.com/orcaman/concurrent-map/v2 v2.0.1
+	github.com/rs/zerolog v1.35.1
 	github.com/samber/lo v1.53.0
 	github.com/tidwall/gjson v1.18.0
 )
@@ -54,7 +56,6 @@ require (
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
-	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hbollon/go-edlib v1.7.0 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
@@ -79,7 +80,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
-	github.com/orcaman/concurrent-map/v2 v2.0.1 // indirect
 	github.com/panjf2000/ants/v2 v2.11.2 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
