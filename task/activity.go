@@ -168,7 +168,8 @@ func (ac *Activity) createResponse(keyPrefix string, linkChar string, actionFun 
 func (ac *Activity) Execute(ctx context.Context, args map[string]any) (map[string]any, error) {
 	// 0、获取当前活动的所有参数
 	inputParams := ac.makeInputMap(args)
-	log.Print("[Activity]", conv.String(ac), "[param]", conv.String(inputParams))
+	log.Println("[Execute Activity]", conv.String(ac))
+	log.Println("[Execute Arguments]", conv.String(inputParams))
 
 	execCtx := ctx
 	if ac.Control.Timeout > 0 {
@@ -264,7 +265,8 @@ func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar 
 	execRetData, err := actionFun.Execute(execCtx, actionFunParam)
 	resultMap := ac.createResponse(keyPrefix, linkChar, actionFun, actionFunParam, execRetData)
 
-	log.Print("baseFlow task return:", conv.String(resultMap), err)
+	log.Println("[Execute Return]", conv.String(resultMap))
+	log.Println("[Execute Error]", err)
 
 	var onErr error
 

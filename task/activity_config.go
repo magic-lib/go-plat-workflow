@@ -6,7 +6,7 @@ import (
 
 var (
 	setNameLocker         sync.Mutex //避免冲突
-	namespaceLinkNameChar = "_"      // 命名之间的默认连接字符
+	namespaceLinkNameChar = "/"      // 命名之间的默认连接字符
 	returnKeyPrefix       = ""
 )
 

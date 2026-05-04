@@ -188,8 +188,8 @@ github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260426195715-12a8640acbdd h
 github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260426195715-12a8640acbdd/go.mod h1:yRa+bzgw2at60TGiPoBRv9ylI6/fGh3cEG2hqSLNG7o=
 github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260310082347-edba5f046593 h1:3AjRm1UfOiPFLsUSEckqYfiN3A1caBdfgx1UDV/+XdY=
 github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260310082347-edba5f046593/go.mod h1:99xYCrpFPXG3hTrM52grTgMMx09zihbcOzeL1jcRrC0=
-github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260504094238-8a3f6463266b h1:xcY1fsc7B3EUqiXF1OdJkKCCamQsA7/aQrXCa9AZ6cQ=
-github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260504094238-8a3f6463266b/go.mod h1:kY69bGT171ymZ9roq/QaagvdXqSOLKEUwfvAL6Wfc08=
+github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260504140917-b4050b2f21ad h1:8a0hHvMFRwcLS3StrvKiiLx4uuoszaPmA12X82EIsmI=
+github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260504140917-b4050b2f21ad/go.mod h1:kY69bGT171ymZ9roq/QaagvdXqSOLKEUwfvAL6Wfc08=
 github.com/marspere/goencrypt v1.0.7 h1:Rlvsc9b7Yeaeda+gsGeCjREVZ/KL7szelRq4+haK5mw=
 github.com/marspere/goencrypt v1.0.7/go.mod h1:S5g6Wsd5jcOO01sp9QxNMYCldx9kecoDkK7BWaHA0vo=
 github.com/mattn/go-colorable v0.1.14 h1:9A9LHSqF/7dyVVX6g0U9cwm9pG3kP9gSzcuIPHPsaIE=

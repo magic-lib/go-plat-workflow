@@ -5,7 +5,7 @@ go 1.24.3
 require (
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260426195715-12a8640acbdd
-	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260504094238-8a3f6463266b
+	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260504140917-b4050b2f21ad
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/rs/zerolog v1.35.1
 	github.com/samber/lo v1.53.0

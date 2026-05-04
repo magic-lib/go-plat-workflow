@@ -254,17 +254,9 @@ func (w *Workflow) buildFinalResponse(result map[string]any) map[string]any {
 	}
 	newResult := make(map[string]any)
 	ruleExpr := templates.NewRuleExprEngine()
-	for key, value := range w.Responses {
-		if value == "" {
-			newResult[key] = ""
-			continue
-		}
-		checkResult, err := ruleExpr.RunString(conv.String(value), result)
-		if err != nil {
-			log.Printf("解析工作流 [%s] 响应失败: %v", w.Name, err)
-		}
-		newResult[key] = checkResult
-	}
+	checkResult, _ := ruleExpr.RunString(conv.String(w.Responses), result)
+	_ = conv.Unmarshal(checkResult, &newResult)
+
 	if len(newResult) > 0 {
 		result = lo.Assign(result, newResult)
 		result[common.Responses] = newResult
