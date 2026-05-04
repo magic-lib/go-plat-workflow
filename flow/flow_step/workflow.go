@@ -39,17 +39,28 @@ func (w *Workflow) mergeVariables(inputParams map[string]any) map[string]any {
 	return newInputParams
 }
 
-// execActivityById 根据 activityId 执行对应的 activity, 从配置的Activities中获取对应的 activity
-func (w *Workflow) execActivityById(ctx context.Context, activityId string, inputParams map[string]any) (map[string]any, error) {
+func (w *Workflow) getActivityById(activityId string) (*task.Activity, error) {
 	if activityId == "" {
-		return inputParams, fmt.Errorf("not find activity activityId is empty")
+		return nil, fmt.Errorf("not find activity activityId is empty")
 	}
 	if len(w.Activities) == 0 {
-		return inputParams, fmt.Errorf("activities empty: %s", activityId)
+		return nil, fmt.Errorf("activities empty: %s", activityId)
 	}
 	oneAct := lo.FindOrElse(w.Activities, nil, func(activity *task.Activity) bool {
 		return activity.Id == activityId
 	})
+	if oneAct == nil {
+		return nil, fmt.Errorf("not find activity from activities: %s", activityId)
+	}
+	return oneAct, nil
+}
+
+// execActivityById 根据 activityId 执行对应的 activity, 从配置的Activities中获取对应的 activity
+func (w *Workflow) execActivityById(ctx context.Context, activityId string, inputParams map[string]any) (map[string]any, error) {
+	oneAct, err := w.getActivityById(activityId)
+	if err != nil {
+		return inputParams, err
+	}
 	if oneAct == nil {
 		return inputParams, fmt.Errorf("not find activity from activities: %s", activityId)
 	}
@@ -92,6 +103,64 @@ func (w *Workflow) execOneStepDependencyFromActivities(ctx context.Context, fron
 	return inputParams, nil
 }
 
+// execOneStepStrategyFromActivities 更新策略的activity值
+func (w *Workflow) execOneStepStrategyFromActivities(oneStep *Step) (*Step, error) {
+	allDepends := oneStep.Strategy
+	var retErr error
+	lo.ForEachWhile(allDepends, func(activity *task.Activity, _ int) bool {
+		if activity.Activity != "" {
+			//内部有指定需要执行的方法，就不用外部来调用了
+			return true
+		}
+		oneAct, err := w.getActivityById(activity.Id)
+		if err != nil {
+			retErr = multierror.Append(retErr, err)
+			return true
+		}
+		if oneAct == nil {
+			log.Printf("not find activity from activities: %s", activity.Id)
+			return true
+		}
+		activity.Namespace = oneAct.Namespace
+		activity.Activity = oneAct.Activity
+		if oneAct.ArgTemplate != "" {
+			activity.ArgTemplate = oneAct.ArgTemplate
+		}
+		if len(oneAct.Responses) > 0 {
+			activity.Responses = lo.Assign(activity.Responses, oneAct.Responses)
+		}
+		newArguments := make([]*param.BindConfig, 0)
+		if len(oneAct.Arguments) > 0 {
+			lo.ForEach(oneAct.Arguments, func(item *param.BindConfig, index int) {
+				newArguments = append(newArguments, item)
+			})
+		}
+		if len(activity.Arguments) > 0 {
+			lo.ForEach(activity.Arguments, func(item *param.BindConfig, index int) {
+				found := false
+				lo.ForEachWhile(newArguments, func(item2 *param.BindConfig, index2 int) bool {
+					if item2.Key == item.Key {
+						found = true
+						newArguments[index2] = item
+						return false
+					}
+					return true
+				})
+				if !found {
+					newArguments = append(newArguments, item)
+				}
+			})
+		}
+
+		activity.Arguments = newArguments
+		return true
+	})
+	if retErr != nil {
+		return oneStep, retErr
+	}
+	return oneStep, nil
+}
+
 // Execute 执行工作流
 func (w *Workflow) Execute(ctx context.Context, inputParams map[string]any) (map[string]any, error) {
 	log.Printf("工作流 [%s] 开始执行", w.Name)
@@ -121,6 +190,13 @@ func (w *Workflow) Execute(ctx context.Context, inputParams map[string]any) (map
 			if step.FlowControl.ShouldIgnoreOnError() {
 				return true
 			}
+			retErr = multierror.Append(retErr, err)
+			return false
+		}
+
+		// 获取strategy所依赖的activitis里的对应值，方便直接去执行
+		step, err = w.execOneStepStrategyFromActivities(step)
+		if err != nil {
 			retErr = multierror.Append(retErr, err)
 			return false
 		}

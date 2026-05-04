@@ -22,9 +22,8 @@ func TestWorkflowExecute(t *testing.T) {
 		},
 		Activities: []*task.Activity{
 			{
-				Id:        "commonLog",
-				Namespace: ns,
-				Activity:  "Log",
+				Id:       "commonLog",
+				Activity: "Log",
 				Arguments: []*param.BindConfig{
 					{Key: "message", Value: "工作流开始执行"},
 				},
@@ -36,6 +35,10 @@ func TestWorkflowExecute(t *testing.T) {
 				Name: "第一步：获取订单信息",
 				Strategy: []*task.Activity{
 					createTestActivity("getOrder", ns, "GetOrderInfo", "", []*param.BindConfig{
+						{Key: "name", Value: "{{variables.userId}}"},
+						{Key: "group", Value: "M07"},
+					}),
+					createTestActivity("commonLog", "", "", "", []*param.BindConfig{
 						{Key: "name", Value: "{{variables.userId}}"},
 						{Key: "group", Value: "M07"},
 					}),

@@ -38,8 +38,8 @@ func (o *Order) SetOrderInfo(ctx context.Context, orderId string) (bool, error) 
 	fmt.Println(orderId)
 	return true, nil
 }
-func (o *Order) Logger(ctx context.Context, or *Order) (bool, error) {
-	log.Print("Logger : ", conv.String(or))
+func (o *Order) Logger(ctx context.Context, or map[string]any) (bool, error) {
+	log.Print("Logger aaaaaaa: ", conv.String(or))
 	return true, nil
 }
 
@@ -96,7 +96,7 @@ func registerAction() {
 		return
 	}
 
-	getLoggerInterface, err := action.ChangeToActor[*Order, bool](orderModel.Logger, &action.ActMeta{
+	getLoggerInterface, err := action.ChangeToActor[map[string]any, bool](orderModel.Logger, &action.ActMeta{
 		Activity: "Log",
 		Desc:     "日志",
 	})
