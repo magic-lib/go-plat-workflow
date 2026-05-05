@@ -59,14 +59,13 @@ func getResponseRegExp(keyPrefix string) *regexp.Regexp {
 
 // ExtractDependsActivityIds 解析出待依赖的所有ActivityId
 func ExtractDependsActivityIds(condition string, keyPrefix string) []string {
-	actIdList := make([]string, 0)
+	idList := make([]string, 0)
 	re := getResponseRegExp(keyPrefix)
 	matches := re.FindAllStringSubmatch(condition, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
-			activityID := match[1]
-			actIdList = append(actIdList, activityID)
+			idList = append(idList, match[1])
 		}
 	}
-	return actIdList
+	return lo.Uniq(idList)
 }

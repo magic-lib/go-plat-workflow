@@ -105,6 +105,38 @@ func (ac *Activity) executeAllDependencies(ctx context.Context, args map[string]
 	return args, retErr
 }
 
+func (ac *Activity) getActionParamKeyId(inputParams map[string]any) (string, error) {
+	if ac.Activity == "" {
+		return "", nil
+	}
+	actionFun, err := action.GetAction(ac.Namespace, ac.Activity)
+	if err != nil {
+		return "", err
+	}
+
+	actionParam := ac.getActionParam(inputParams)
+
+	actData := actionFun.ActMeta()
+	if actData.ArgumentType != nil {
+		var data any
+		var err1 error
+		if data, err1 = conv.ConvertForType(actData.ArgumentType, actionParam); err1 != nil {
+			return "", fmt.Errorf("arguments type does not match required type: %v", actData.ArgumentType)
+		}
+		return utils.UniqueJsonId(data)
+	}
+	return utils.UniqueJsonId(actionParam)
+}
+func (ac *Activity) getActionParam(inputParams map[string]any) any {
+	var actionFunParam any = inputParams
+	if ac.ArgTemplate != "" {
+		ruleExpr := templates.NewRuleExprEngine()
+		newArgs, _ := ruleExpr.RunString(ac.ArgTemplate, inputParams)
+		actionFunParam = newArgs
+	}
+	return actionFunParam
+}
+
 func (ac *Activity) getResponseStoreKey(keyPrefix string, linkChar string) string {
 	activityName := ""
 	if ac.Namespace == "" {
@@ -206,9 +238,26 @@ func (ac *Activity) Execute(ctx context.Context, args map[string]any) (map[strin
 func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar string, inputParams map[string]any) (map[string]any, error) {
 	actionKey := ""
 	paramKey := ""
-	if ac.Control.CacheTime > 0 {
+	if ac.Control.CacheTime > 0 || !ac.Control.Reproducible {
 		actionKey = ac.getResponseStoreKey(keyPrefix, linkChar)
-		paramKey, _ = utils.UniqueJsonId(inputParams)
+		var err error
+		paramKey, err = ac.getActionParamKeyId(inputParams)
+		if err != nil {
+			log.Println("execThisAction getActionParamKeyId error:", err.Error())
+		}
+		log.Println("[Execute ActionKey]", actionKey, paramKey)
+	}
+
+	if !ac.Control.Reproducible {
+		// 是否使用流程级缓存，避免始终缓存结果
+		execCtx = WithFlowCache(execCtx)
+		if cachedResult, found := getFlowCacheResult(execCtx, actionKey, paramKey); found {
+			log.Println("[Execute Cache Hit] Using cached result for:", actionKey)
+			return cachedResult, nil
+		}
+	}
+
+	if ac.Control.CacheTime > 0 {
 		//是否有缓存
 		actionResult, err := cache.NsGet[map[string]any](execCtx, activityCache, actionKey, paramKey)
 		if err == nil {
@@ -255,12 +304,7 @@ func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar 
 		inputParams = tools.MergeNewArguments(inputParams, retData)
 	}
 
-	var actionFunParam any = inputParams
-	if ac.ArgTemplate != "" {
-		ruleExpr := templates.NewRuleExprEngine()
-		newArgs, _ := ruleExpr.RunString(ac.ArgTemplate, inputParams)
-		actionFunParam = newArgs
-	}
+	var actionFunParam = ac.getActionParam(inputParams)
 
 	execRetData, err := actionFun.Execute(execCtx, actionFunParam)
 	resultMap := ac.createResponse(keyPrefix, linkChar, actionFun, actionFunParam, execRetData)
@@ -289,6 +333,12 @@ func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar 
 	// 需要缓存该执行对象
 	if ac.Control.CacheTime > 0 {
 		_, _ = cache.NsSet[map[string]any](execCtx, activityCache, actionKey, paramKey, resultMap, time.Duration(ac.Control.CacheTime)*time.Second)
+	}
+
+	// 缓存该执行结果到流程级别的缓存中
+	if !ac.Control.Reproducible {
+		setFlowCacheResult(execCtx, actionKey, paramKey, resultMap)
+		log.Println("[Execute Cache Set] Cached result for:", actionKey)
 	}
 
 	retData, onErr = ac.executeByHookEvent(execCtx, linkChar, LifecycleEventOnSuccess, inputParams)

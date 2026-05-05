@@ -27,21 +27,35 @@ func TestWorkflowExecute(t *testing.T) {
 				Arguments: []*param.BindConfig{
 					{Key: "message", Value: "工作流开始执行"},
 				},
+				Control: task.ActivityControl{
+					Reproducible: false,
+				},
+			},
+			{
+				Id:          "setOrderInfo",
+				Namespace:   ns,
+				Activity:    "SetOrderInfo",
+				ArgTemplate: "{{variables.orderId}}",
+				Control: task.ActivityControl{
+					Reproducible: false,
+				},
 			},
 		},
 		Steps: []*flow_step.Step{
 			{
-				Id:   "step1",
-				Name: "第一步：获取订单信息",
+				Id:        "step1",
+				Name:      "第一步：获取订单信息",
+				Condition: "true",
 				Strategy: []*task.Activity{
-					createTestActivity("getOrder", ns, "GetOrderInfo", "", []*param.BindConfig{
-						{Key: "name", Value: "{{variables.userId}}"},
-						{Key: "group", Value: "M07"},
-					}),
-					createTestActivity("commonLog", "", "", "", []*param.BindConfig{
-						{Key: "name", Value: "{{variables.userId}}"},
-						{Key: "group", Value: "M07"},
-					}),
+					createTestActivity("setOrderInfo", "", "", "{{variables.orderId}}", nil),
+					//createTestActivity("getOrder", ns, "GetOrderInfo", "", []*param.BindConfig{
+					//	{Key: "name", Value: "{{variables.userId}}"},
+					//	{Key: "group", Value: "M07"},
+					//}),
+					//createTestActivity("commonLog", "", "", "", []*param.BindConfig{
+					//	{Key: "name", Value: "{{variables.userId}}"},
+					//	{Key: "group", Value: "M07"},
+					//}),
 				},
 			},
 			{
@@ -50,9 +64,14 @@ func TestWorkflowExecute(t *testing.T) {
 				DependsOn: []*task.Activity{{Id: "step1"}},
 				Condition: "[step1.responses]",
 				Strategy: []*task.Activity{
-					createTestActivity("setOrder", ns, "SetOrderInfo", "{{variables.orderId}}", []*param.BindConfig{
-						{Key: "orderId", Value: "{{variables.orderId}}"},
-					}),
+					createTestActivity("setOrderInfo", "", "", "{{variables.orderId}}", nil),
+					//createTestActivity("setOrder", ns, "SetOrderInfo", "{{variables.orderId}}", []*param.BindConfig{
+					//	{Key: "orderId", Value: "{{variables.orderId}}"},
+					//}),
+					//createTestActivity("commonLog", "", "", "", []*param.BindConfig{
+					//	{Key: "name", Value: "{{variables.userId}}"},
+					//	{Key: "group", Value: "M07"},
+					//}),
 				},
 			},
 		},

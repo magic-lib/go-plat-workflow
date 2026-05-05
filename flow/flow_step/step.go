@@ -12,6 +12,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/tools"
 	"github.com/samber/lo"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -36,15 +37,14 @@ func (s *Step) extractDependenciesFromCondition() []string {
 		return nil
 	}
 	keyPrefix := task.ReturnKeyPrefix()
-	actIdList := tools.ExtractDependsActivityIds(s.Condition, keyPrefix)
-	return lo.Uniq(actIdList)
+	return tools.ExtractDependsActivityIds(s.Condition, keyPrefix)
 }
 
 // GetAllDependencies 获取该步骤的所有依赖（包括显式声明和从条件中提取的）
 func (s *Step) getAllDependencies() []*task.Activity {
 	deps := make([]*task.Activity, 0)
 	mapDeps := make(map[string]*task.Activity)
-	// 从条件表达式中提取依赖
+	// 从条件表达式中提取依赖，这里需要区分activity和step的区别
 	conditionDeps := s.extractDependenciesFromCondition()
 	for _, depId := range conditionDeps {
 		mapDeps[depId] = &task.Activity{
@@ -68,8 +68,10 @@ func (s *Step) getAllDependencies() []*task.Activity {
 
 // checkCondition 检查步骤的执行条件是否满足
 func (s *Step) checkCondition(inputParams map[string]any) (bool, error) {
-	if s.Condition == "" {
-		return true, nil
+	if s.Condition == "" ||
+		s.Condition == "0" ||
+		strings.ToLower(s.Condition) == "false" { //false的默认值
+		return false, nil
 	}
 
 	ruleExpr := templates.NewRuleExprEngine()
@@ -130,6 +132,14 @@ func (s *Step) executeAllDependencies(ctx context.Context, args map[string]any) 
 	var retErr error
 	actList := s.getAllDependencies()
 	lo.ForEachWhile(actList, func(act *task.Activity, index int) bool {
+		if act.Activity == "" { // 可能是step，而不是action
+			if act.Id != "" { // 已经执行过了，则直接跳过
+				if _, ok := args[act.Id]; ok {
+					return true
+				}
+			}
+		}
+
 		newArgs, err := act.Execute(ctx, args)
 		if err != nil {
 			log.Print("execute activity error:", err)

@@ -50,6 +50,7 @@ type (
 		When          string `yaml:"when" json:"when,omitempty"`                     // 执行该action的前提条件
 		Timeout       int    `yaml:"timeout" json:"timeout,omitempty"`               // 秒，设置超时时间
 		CacheTime     int    `yaml:"cache_time" json:"cache_time,omitempty"`         // 缓存时间，默认为秒
+		Reproducible  bool   `yaml:"reproducible" json:"reproducible,omitempty"`     // 是否可重复执行：true=每次都会重新执行，false=同一流程中使用缓存结果
 		DelayDuration int    `yaml:"delay_duration" json:"delay_duration,omitempty"` // 延时多长时间执行 ==0 立即执行，> 0 延时执行，<0 异步执行
 		//RetryPolicy   RetryPolicy `yaml:"retry_policy" json:"retry_policy,omitempty"`   // 重试策略
 	}

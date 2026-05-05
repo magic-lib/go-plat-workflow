@@ -171,6 +171,9 @@ func (w *Workflow) Execute(ctx context.Context, inputParams map[string]any) (map
 	execCtx := ctx
 	inputParams = w.mergeVariables(inputParams)
 
+	// 在 workflow 级别初始化 flow cache，确保所有 steps 和 activities 共享同一个缓存
+	execCtx = task.WithFlowCache(execCtx)
+
 	var retErr error
 
 	frontSteps := make([]*Step, 0)
@@ -194,7 +197,7 @@ func (w *Workflow) Execute(ctx context.Context, inputParams map[string]any) (map
 			return false
 		}
 
-		// 获取strategy所依赖的activitis里的对应值，方便直接去执行
+		// 获取strategy所依赖的Activities里的对应值，方便直接去执行
 		step, err = w.execOneStepStrategyFromActivities(step)
 		if err != nil {
 			retErr = multierror.Append(retErr, err)
