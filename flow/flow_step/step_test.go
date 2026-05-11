@@ -3,14 +3,17 @@ package flow_step_test
 import (
 	"context"
 	"fmt"
+	"github.com/magic-lib/go-plat-curl/curl"
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/crypto"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/action"
 	"github.com/magic-lib/go-plat-workflow/flow/flow_step"
 	"github.com/magic-lib/go-plat-workflow/task"
 	"github.com/samber/lo"
-	"log"
+	"net/http"
 	"testing"
+	"time"
 )
 
 type Order struct {
@@ -18,99 +21,48 @@ type Order struct {
 	Group string `json:"group"`
 }
 
-func (o *Order) GetOrderName(ctx context.Context, id int) (string, error) {
-	if id == 0 {
-		return "", fmt.Errorf("err:no id")
-	}
-	return fmt.Sprintf("%d", id+1), nil
-}
-
-func (o *Order) GetMemberGroup(ctx context.Context, id int) (string, error) {
-	if id == 0 {
-		return "", fmt.Errorf("err:no id")
-	}
-	return "M8", nil
-}
-func (o *Order) GetOrderInfo(ctx context.Context, or *Order) (*Order, error) {
-	return or, nil
-}
-func (o *Order) SetOrderInfo(ctx context.Context, orderId string) (bool, error) {
-	fmt.Println(orderId)
-	return true, nil
-}
-func (o *Order) Logger(ctx context.Context, or map[string]any) (bool, error) {
-	log.Print("Logger aaaaaaa: ", conv.String(or))
-	return true, nil
+type ApiAccountInfoReq struct {
+	Time  int64  `json:"time"`
+	Key   string `json:"key"`
+	Accno string `json:"accno"`
+	Mid   int64  `json:"mid"`
+	Nid   string `json:"nid"`
+	Name  string `json:"name"`
+	From  string `json:"from"`
+	Bcode string `json:"bcode"`
+	Cache int    `json:"cache"`
 }
 
 var ns = "order"
 
 func registerAction() {
-	orderModel := &Order{
-		Name: "tianlin999777",
-	}
-	getOrderNameInterface, err := action.ChangeToActor[int, string](orderModel.GetOrderName, &action.ActMeta{
-		Namespace:    ns,
-		Activity:     "GetOrderName",
-		Desc:         "获取订单名称",
-		RequiredArgs: []string{"name", "age"},
-		RequiredResp: nil,
-	})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	curlInterface, err := action.CurlToActor(func() *curl.Request {
+		token := "rkbKlwl9OL0ew2cZ6m"
 
-	getMemberGroupInterface, err := action.ChangeToActor[int, string](orderModel.GetMemberGroup, &action.ActMeta{
-		Namespace:    ns,
-		Activity:     "GetMemberGroup",
-		Desc:         "获取用户客群",
-		RequiredArgs: []string{"name", "age"},
-		RequiredResp: nil,
-	})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+		req := new(ApiAccountInfoReq)
 
-	getOrderInfoInterface, err := action.ChangeToActor[*Order, *Order](orderModel.GetOrderInfo, &action.ActMeta{
-		Namespace:    ns,
-		Activity:     "GetOrderInfo",
-		Desc:         "获取订单信息",
-		RequiredArgs: []string{"name", "group"},
-		RequiredResp: nil,
-	})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	setOrderInfoInterface, err := action.ChangeToActor[string, bool](orderModel.SetOrderInfo, &action.ActMeta{
-		Namespace:    ns,
-		Activity:     "SetOrderInfo",
-		Desc:         "设置订单信息",
-		RequiredArgs: nil,
-		RequiredResp: nil,
-	})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+		req.Time = time.Now().Unix()
+		req.Key = crypto.Md5(fmt.Sprintf("%d%s", req.Time, token))
 
-	getLoggerInterface, err := action.ChangeToActor[map[string]any, bool](orderModel.Logger, &action.ActMeta{
-		Activity: "Log",
-		Desc:     "日志",
+		return &curl.Request{
+			Url:    "https://public.biucn.xyz/api/public/account_query",
+			Method: http.MethodPost,
+			Data:   req,
+		}
+	}, &action.ActMeta{
+		Namespace: ns,
+		Activity:  "query",
+		Desc:      "日志",
 	})
+
+	//rkbKlwl9OL0ew2cZ6m
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
 	actionList := []action.Actor{
-		getOrderNameInterface,
-		getMemberGroupInterface,
-		getOrderInfoInterface,
-		setOrderInfoInterface,
-		getLoggerInterface,
+		curlInterface,
 	}
 
 	lo.ForEach(actionList, func(item action.Actor, _ int) {
@@ -144,6 +96,19 @@ func TestStepDependencyExtraction(t *testing.T) {
 		Name: "Test Dependencies",
 		DependsOn: []*task.Activity{
 			createTestActivity("validateUser", ns, "GetOrderInfo", "", nil),
+			{
+				Id:        "queryNameWhiteList",
+				Namespace: ns,
+				Activity:  "query",
+				Arguments: []*param.BindConfig{
+					{
+						Key: "data",
+						Value: map[string]any{
+							"accno": "{{accno}}",
+						},
+					},
+				},
+			},
 		},
 		Condition: "[validateUser.responses.name] == 'tianlin111'",
 		Strategy: []*task.Activity{
@@ -157,6 +122,7 @@ func TestStepDependencyExtraction(t *testing.T) {
 		"newName": "tianlin",
 		"name":    "tianlin111",
 		"group":   "M07",
+		"accno":   "0967714983",
 	})
 
 	fmt.Printf("Extracted dependencies: %s\n %v", conv.String(all), err)
