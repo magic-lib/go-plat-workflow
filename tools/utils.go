@@ -7,6 +7,8 @@ import (
 	"github.com/magic-lib/go-plat-workflow/common"
 	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/samber/lo"
+	"gopkg.in/yaml.v3"
+	"os"
 	"regexp"
 )
 
@@ -68,4 +70,24 @@ func ExtractDependsActivityIds(condition string, keyPrefix string) []string {
 		}
 	}
 	return lo.Uniq(idList)
+}
+
+func LoadWorkflowFromYaml(filePath string, workflow any) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("读取 YAML 文件失败: %w", err)
+	}
+
+	if err := yaml.Unmarshal(data, workflow); err != nil {
+		return fmt.Errorf("解析 YAML 文件失败: %w", err)
+	}
+	return nil
+}
+
+// LoadWorkflowFromYamlString 从 YAML 字符串加载工作流配置
+func LoadWorkflowFromYamlString(yamlContent string, workflow any) error {
+	if err := yaml.Unmarshal([]byte(yamlContent), workflow); err != nil {
+		return fmt.Errorf("解析 YAML 字符串失败: %w", err)
+	}
+	return nil
 }

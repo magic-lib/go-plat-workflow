@@ -238,7 +238,7 @@ func (ac *Activity) Execute(ctx context.Context, args map[string]any) (map[strin
 func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar string, inputParams map[string]any) (map[string]any, error) {
 	actionKey := ""
 	paramKey := ""
-	if ac.Control.CacheTime > 0 || !ac.Control.Reproducible {
+	if ac.Control.CacheTime > 0 || ac.Control.TempCacheable {
 		actionKey = ac.getResponseStoreKey(keyPrefix, linkChar)
 		var err error
 		paramKey, err = ac.getActionParamKeyId(inputParams)
@@ -248,7 +248,7 @@ func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar 
 		log.Println("[Execute ActionKey]", actionKey, paramKey)
 	}
 
-	if !ac.Control.Reproducible {
+	if ac.Control.TempCacheable {
 		// 是否使用流程级缓存，避免始终缓存结果
 		execCtx = WithFlowCache(execCtx)
 		if cachedResult, found := getFlowCacheResult(execCtx, actionKey, paramKey); found {
@@ -336,7 +336,7 @@ func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar 
 	}
 
 	// 缓存该执行结果到流程级别的缓存中
-	if !ac.Control.Reproducible {
+	if ac.Control.TempCacheable {
 		setFlowCacheResult(execCtx, actionKey, paramKey, resultMap)
 		log.Println("[Execute Cache Set] Cached result for:", actionKey)
 	}
@@ -401,4 +401,116 @@ func (ac *Activity) executeByHookEvent(ctx context.Context, linkChar string, eve
 		return oneAct.Execute(ctx, args)
 	}
 	return nil, nil
+}
+
+// ExtendActivity 将replaceActivity的参数和返回值，覆盖到originActivity中
+func (ac *Activity) ExtendActivity(originActivity *Activity, replaceActivity *Activity) (*Activity, error) {
+	if replaceActivity == nil && originActivity == nil {
+		return nil, fmt.Errorf("extendActivity param all is nil")
+	}
+	if originActivity == nil {
+		return replaceActivity, nil
+	}
+	if replaceActivity == nil {
+		return originActivity, nil
+	}
+
+	result := &Activity{
+		Id:          originActivity.Id,
+		Name:        originActivity.Name,
+		Namespace:   originActivity.Namespace,
+		Activity:    originActivity.Activity,
+		Arguments:   originActivity.Arguments,
+		ArgTemplate: originActivity.ArgTemplate,
+		Responses:   originActivity.Responses,
+		DependsOn:   originActivity.DependsOn,
+		Hooks:       originActivity.Hooks,
+		Control:     originActivity.Control,
+	}
+
+	if result.Id == "" && replaceActivity.Id != "" {
+		result.Id = replaceActivity.Id
+	}
+	if result.Name == "" && replaceActivity.Name != "" {
+		result.Name = replaceActivity.Name
+	}
+	if result.Namespace == "" && replaceActivity.Namespace != "" {
+		result.Namespace = replaceActivity.Namespace
+	}
+	if result.Activity == "" && replaceActivity.Activity != "" {
+		result.Activity = replaceActivity.Activity
+	}
+
+	newArguments := make([]*param.BindConfig, 0)
+	if len(replaceActivity.Arguments) > 0 {
+		lo.ForEach(replaceActivity.Arguments, func(item *param.BindConfig, index int) {
+			newArguments = append(newArguments, item)
+		})
+	}
+	if len(result.Arguments) > 0 {
+		lo.ForEach(result.Arguments, func(item *param.BindConfig, index int) {
+			found := false
+			lo.ForEachWhile(newArguments, func(item2 *param.BindConfig, index2 int) bool {
+				if item2.Key == item.Key {
+					found = true
+					newArguments[index2] = item
+					return false
+				}
+				return true
+			})
+			if !found {
+				newArguments = append(newArguments, item)
+			}
+		})
+	}
+	result.Arguments = newArguments
+
+	if result.ArgTemplate == "" && replaceActivity.ArgTemplate != "" {
+		result.ArgTemplate = replaceActivity.ArgTemplate
+	}
+	if len(replaceActivity.Responses) > 0 {
+		if result.Responses == nil {
+			result.Responses = replaceActivity.Responses
+		} else {
+			result.Responses = lo.Assign(result.Responses, replaceActivity.Responses)
+		}
+	}
+	if result.DependsOn == nil && replaceActivity.DependsOn != nil {
+		result.DependsOn = replaceActivity.DependsOn
+	}
+	if result.Hooks == nil && replaceActivity.Hooks != nil {
+		result.Hooks = replaceActivity.Hooks
+	}
+
+	result.Control = ac.extendActivityControl(originActivity.Control, replaceActivity.Control)
+
+	return result, nil
+}
+
+func (ac *Activity) extendActivityControl(origin ActivityControl, replace ActivityControl) ActivityControl {
+	result := ActivityControl{
+		When:          origin.When,
+		Timeout:       origin.Timeout,
+		CacheTime:     origin.CacheTime,
+		TempCacheable: origin.TempCacheable,
+		DelayDuration: origin.DelayDuration,
+	}
+
+	if result.When == "" && replace.When != "" {
+		result.When = replace.When
+	}
+	if result.Timeout == 0 && replace.Timeout != 0 {
+		result.Timeout = replace.Timeout
+	}
+	if result.CacheTime == 0 && replace.CacheTime != 0 {
+		result.CacheTime = replace.CacheTime
+	}
+	if !result.TempCacheable && replace.TempCacheable {
+		result.TempCacheable = replace.TempCacheable
+	}
+	if result.DelayDuration == 0 && replace.DelayDuration != 0 {
+		result.DelayDuration = replace.DelayDuration
+	}
+
+	return result
 }
