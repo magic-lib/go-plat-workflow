@@ -1,100 +1,52 @@
-name: "电商订单处理工作流"
+name: 测试工作流
 
+# 全局变量，入参
 variables:
-  - key: "userId"
+  - key: userId
     value: "U123456"
-    policy: "frontend"
-  - key: "orderId"
+  - key: orderId
     value: "ORD789012"
-  - key: "region"
-    value: "CN"
-  - key: "currency"
-    value: "CNY"
 
-responses:
-  finalResult: "{{processOrder.responses.success}}"
-  errorMessage: "{{processOrder.responses.message}}"
-  processingTime: "{{processOrder.responses.duration}}"
-
+# 公共 Activities 资源
 activities:
-  - id: "validateUser"
-    name: "用户检测"
-    namespace: "user"
-    activity: "validateUserInfo"
+  - id: commonLog
+    activity: Log
     arguments:
-      - key: "userId"
-        value: "${variables.userId}"
-      - key: "region"
-        value: "${variables.region}"
+      - key: message
+        value: "工作流日志"
     control:
-      timeout: 5
-      cache_time: 300
+      temp_cacheable: false
 
-  - id: "fetchOrder"
-    namespace: "order"
-    activity: "getOrderDetails"
-    arguments:
-      - key: "orderId"
-        value: "${input.orderId}"
-      - key: "currency"
-        value: "${variables.currency}"
+  - id: setOrderInfo
+    namespace: order
+    activity: SetOrderInfo
+    arg_template: "{{variables.orderId}}"
     control:
-      timeout: 10
+      temp_cacheable: true
 
+# 工作流步骤
 steps:
-  - id: "fraudDetection"
-    name: "欺诈检测拦截"
-    depends_on:
-      - id: "validateUser"
-        namespace: "user"
-        activity: "validateUserInfo"
-      - id: "assessRiskLevel"
-        namespace: "risk"
-        activity: "evaluateTransactionRisk"
-    condition: "${assessRiskLevel.responses.riskScore} > 80 || ${validateUser.responses.isBlacklisted} == true"
-    on_error: "exit"
-    on_exit: "exit"
+  - id: step1
+    name: "第一步：获取订单信息"
+    condition: "true"
     strategy:
-      - id: "blockTransaction"
-        namespace: "security"
-        activity: "blockSuspiciousOrder"
-        arguments:
-          - key: "orderId"
-            value: "${fetchOrder.responses.orderId}"
-          - key: "reason"
-            value: "高风险交易或黑名单用户"
+      - id: setOrderInfo
+        arg_template: "{{variables.orderId}}"
         control:
           timeout: 5
 
-  - id: "vipPriorityProcessing"
-    name: "VIP优先处理"
+  - id: step2
+    name: "第二步：条件设置订单"
     depends_on:
-      - id: "validateUser"
-        namespace: "user"
-        activity: "validateUserInfo"
-      - id: "fetchOrder"
-        namespace: "order"
-        activity: "getOrderDetails"
-      - id: "assessRiskLevel"
-        namespace: "risk"
-        activity: "evaluateTransactionRisk"
-    condition: "${validateUser.responses.userTier} == 'VIP' && ${fetchOrder.responses.totalAmount} > 10000 && ${assessRiskLevel.responses.riskScore} < 20"
-    on_error: "continue"
-    on_exit: "continue"
+      - id: commonLog
+    condition: "[step1.responses]"
     strategy:
-      - id: "expeditedProcessing"
-        namespace: "priority"
-        activity: "enableFastTrack"
-        arguments:
-          - key: "orderId"
-            value: "${fetchOrder.responses.orderId}"
-          - key: "priorityLevel"
-            value: "HIGH"
-      - id: "vipBonusPoints"
-        namespace: "loyalty"
-        activity: "awardBonusPoints"
-        arguments:
-          - key: "userId"
-            value: "${validateUser.responses.userId}"
-          - key: "points"
-            value: "${fetchOrder.responses.totalAmount} * 0.02"
+      - id: setOrderInfo
+        arg_template: "{{variables.orderId}}"
+        control:
+          timeout: 5
+
+# 最终响应配置
+responses:
+  orderName: "{{step1.responses}}"
+  success: "{{step2.responses}}"

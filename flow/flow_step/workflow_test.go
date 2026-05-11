@@ -28,7 +28,7 @@ func TestWorkflowExecute(t *testing.T) {
 					{Key: "message", Value: "工作流开始执行"},
 				},
 				Control: task.ActivityControl{
-					Reproducible: false,
+					TempCacheable: true,
 				},
 			},
 			{
@@ -37,7 +37,7 @@ func TestWorkflowExecute(t *testing.T) {
 				Activity:    "SetOrderInfo",
 				ArgTemplate: "{{variables.orderId}}",
 				Control: task.ActivityControl{
-					Reproducible: false,
+					TempCacheable: true,
 				},
 			},
 		},
@@ -79,6 +79,29 @@ func TestWorkflowExecute(t *testing.T) {
 			"orderName": "{{step1.responses}}",
 			"success":   "{{step2.responses}}",
 		},
+	}
+
+	ctx := context.Background()
+	inputParams := map[string]any{
+		"orderId": "tianlin0",
+	}
+
+	result, err := workflow.Execute(ctx, inputParams)
+
+	fmt.Printf("工作流执行结果:\n%s\n", conv.String(result))
+	if err != nil {
+		fmt.Printf("工作流执行错误: %v\n", err)
+	}
+}
+func TestWorkflowExecuteByYaml(t *testing.T) {
+	registerAction()
+
+	workflow, err := flow_step.NewWorkflow(&flow_step.WorkflowConfig{
+		YamlFilePath: "/Volumes/MacintoshData/workspace/goland-framework/code/magic-lib/go-plat-workflow/flow/flow_step/demo.yaml",
+	})
+	if err != nil {
+		fmt.Printf("工作流加载错误: %v\n", err)
+		return
 	}
 
 	ctx := context.Background()

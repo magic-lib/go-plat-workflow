@@ -22,7 +22,33 @@ type (
 		Activities []*task.Activity    `yaml:"activities" json:"activities,omitempty"` // 公共的activity资源，用于公共执行的部分,比如公共打日志，可以提高使用率
 		Steps      []*Step             `yaml:"steps" json:"steps,omitempty"`
 	}
+
+	WorkflowConfig struct {
+		YamlFilePath string
+		YamlContent  string
+	}
 )
+
+func NewWorkflow(cfg *WorkflowConfig) (*Workflow, error) {
+	workflow := new(Workflow)
+	if cfg.YamlContent != "" {
+		err := tools.LoadWorkflowFromYamlString(cfg.YamlContent, workflow)
+		if err != nil {
+			return nil, err
+		}
+		return workflow, nil
+	}
+
+	if cfg.YamlFilePath != "" {
+		err := tools.LoadWorkflowFromYaml(cfg.YamlFilePath, workflow)
+		if err != nil {
+			return nil, err
+		}
+		return workflow, nil
+	}
+
+	return nil, fmt.Errorf("yaml content empty")
+}
 
 // mergeVariables 合并前端输入的所有变量
 func (w *Workflow) mergeVariables(inputParams map[string]any) map[string]any {
@@ -56,17 +82,22 @@ func (w *Workflow) getActivityById(activityId string) (*task.Activity, error) {
 }
 
 // execActivityById 根据 activityId 执行对应的 activity, 从配置的Activities中获取对应的 activity
-func (w *Workflow) execActivityById(ctx context.Context, activityId string, inputParams map[string]any) (map[string]any, error) {
-	oneAct, err := w.getActivityById(activityId)
+func (w *Workflow) execActivityById(ctx context.Context, activity *task.Activity, inputParams map[string]any) (map[string]any, error) {
+	oneAct, err := w.getActivityById(activity.Id)
 	if err != nil {
 		return inputParams, err
 	}
 	if oneAct == nil {
-		return inputParams, fmt.Errorf("not find activity from activities: %s", activityId)
+		return inputParams, fmt.Errorf("not find activity from activities: %s", activity.Id)
 	}
-	newResult, err := oneAct.Execute(ctx, inputParams)
+	activity, err = activity.ExtendActivity(activity, oneAct)
 	if err != nil {
-		log.Printf("执行公共 activity [%s] 失败: %v", oneAct.Id, err)
+		return inputParams, err
+	}
+
+	newResult, err := activity.Execute(ctx, inputParams)
+	if err != nil {
+		log.Printf("执行公共 activity [%s] 失败: %v", activity.Id, err)
 		return inputParams, err
 	}
 	inputParams = lo.Assign(inputParams, newResult)
@@ -75,14 +106,22 @@ func (w *Workflow) execActivityById(ctx context.Context, activityId string, inpu
 
 // execOneStepDependency 运行一个步骤的依赖activity
 func (w *Workflow) execOneStepDependencyFromActivities(ctx context.Context, frontSteps []*Step, oneStep *Step, inputParams map[string]any) (map[string]any, error) {
-	allDepends := oneStep.getAllDependencies()
+	// 构建已执行的 step ID 集合
+	executedStepIds := make(map[string]bool)
+	for _, step := range frontSteps {
+		executedStepIds[step.Id] = true
+	}
+
+	// 使用过滤后的依赖列表，自动排除已执行的 steps
+	allDepends := oneStep.GetFilteredDependencies(executedStepIds)
+
 	var retErr error
 	lo.ForEachWhile(allDepends, func(activity *task.Activity, _ int) bool {
 		if activity.Activity != "" {
 			//内部有指定需要执行的方法，就不用外部来调用了
 			return true
 		}
-		result, err := w.execActivityById(ctx, activity.Id, inputParams)
+		result, err := w.execActivityById(ctx, activity, inputParams)
 		if err != nil {
 			//看是否是前面step的Id，如果是，则不用执行该activity了
 			findStepId := lo.FindOrElse(frontSteps, nil, func(step *Step) bool {
@@ -107,7 +146,7 @@ func (w *Workflow) execOneStepDependencyFromActivities(ctx context.Context, fron
 func (w *Workflow) execOneStepStrategyFromActivities(oneStep *Step) (*Step, error) {
 	allDepends := oneStep.Strategy
 	var retErr error
-	lo.ForEachWhile(allDepends, func(activity *task.Activity, _ int) bool {
+	lo.ForEachWhile(allDepends, func(activity *task.Activity, k int) bool {
 		if activity.Activity != "" {
 			//内部有指定需要执行的方法，就不用外部来调用了
 			return true
@@ -121,38 +160,18 @@ func (w *Workflow) execOneStepStrategyFromActivities(oneStep *Step) (*Step, erro
 			log.Printf("not find activity from activities: %s", activity.Id)
 			return true
 		}
+
+		activity, err = activity.ExtendActivity(activity, oneAct)
+		if err != nil {
+			log.Printf("执行公共 activity [%s] 策略失败: %v", activity.Id, err)
+			retErr = multierror.Append(retErr, err)
+			return true
+		}
 		activity.Namespace = oneAct.Namespace
 		activity.Activity = oneAct.Activity
-		if oneAct.ArgTemplate != "" {
-			activity.ArgTemplate = oneAct.ArgTemplate
-		}
-		if len(oneAct.Responses) > 0 {
-			activity.Responses = lo.Assign(activity.Responses, oneAct.Responses)
-		}
-		newArguments := make([]*param.BindConfig, 0)
-		if len(oneAct.Arguments) > 0 {
-			lo.ForEach(oneAct.Arguments, func(item *param.BindConfig, index int) {
-				newArguments = append(newArguments, item)
-			})
-		}
-		if len(activity.Arguments) > 0 {
-			lo.ForEach(activity.Arguments, func(item *param.BindConfig, index int) {
-				found := false
-				lo.ForEachWhile(newArguments, func(item2 *param.BindConfig, index2 int) bool {
-					if item2.Key == item.Key {
-						found = true
-						newArguments[index2] = item
-						return false
-					}
-					return true
-				})
-				if !found {
-					newArguments = append(newArguments, item)
-				}
-			})
-		}
 
-		activity.Arguments = newArguments
+		allDepends[k] = activity
+
 		return true
 	})
 	if retErr != nil {

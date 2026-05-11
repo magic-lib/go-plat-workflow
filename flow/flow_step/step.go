@@ -40,6 +40,11 @@ func (s *Step) extractDependenciesFromCondition() []string {
 	return tools.ExtractDependsActivityIds(s.Condition, keyPrefix)
 }
 
+// isStepDependency 判断给定的 ID 是否是 Step 依赖（即在前面的 steps 中已执行过）
+func (s *Step) isStepDependency(depId string, executedStepIds map[string]bool) bool {
+	return executedStepIds[depId]
+}
+
 // GetAllDependencies 获取该步骤的所有依赖（包括显式声明和从条件中提取的）
 func (s *Step) getAllDependencies() []*task.Activity {
 	deps := make([]*task.Activity, 0)
@@ -64,6 +69,23 @@ func (s *Step) getAllDependencies() []*task.Activity {
 		deps = append(deps, dep)
 	}
 	return deps
+}
+
+// GetFilteredDependencies 根据已执行的 steps 过滤依赖，返回需要执行的 Activity 列表
+func (s *Step) GetFilteredDependencies(executedStepIds map[string]bool) []*task.Activity {
+	allDeps := s.getAllDependencies()
+	filtered := make([]*task.Activity, 0, len(allDeps))
+
+	for _, dep := range allDeps {
+		// 如果这个依赖是前面已执行的 step，则跳过
+		if s.isStepDependency(dep.Id, executedStepIds) {
+			log.Printf("Step [%s] 跳过已执行的 step 依赖: %s", s.Name, dep.Id)
+			continue
+		}
+		filtered = append(filtered, dep)
+	}
+
+	return filtered
 }
 
 // checkCondition 检查步骤的执行条件是否满足
