@@ -12,7 +12,7 @@ import (
 )
 
 // CurlToActor 转换为Actor
-func CurlToActor(originReqFun func() *curl.Request, ac *ActMeta) (Actor, error) {
+func CurlToActor(originReqFun func() *curl.Request, respCreateFun func(resp *curl.Response) (any, error), ac *ActMeta) (Actor, error) {
 	if ac == nil {
 		return nil, fmt.Errorf("data or curlReq is nil")
 	}
@@ -20,7 +20,7 @@ func CurlToActor(originReqFun func() *curl.Request, ac *ActMeta) (Actor, error) 
 		return nil, fmt.Errorf("action name is empty")
 	}
 
-	var curlFunction = func(ctx context.Context, curlReq *curl.Request) (*curl.Response, error) {
+	var curlFunction = func(ctx context.Context, curlReq *curl.Request) (any, error) {
 		curlClient := curl.NewClient()
 		var originReq *curl.Request
 		if originReqFun != nil {
@@ -31,10 +31,17 @@ func CurlToActor(originReqFun func() *curl.Request, ac *ActMeta) (Actor, error) 
 		if resp.Error != nil {
 			return resp, resp.Error
 		}
+		if respCreateFun != nil {
+			retData, err := respCreateFun(resp)
+			if err != nil {
+				return resp, err
+			}
+			return retData, nil
+		}
 		return resp, nil
 	}
 
-	newMethod, err := utils.ContextMethodToAnyHandler[*curl.Request, *curl.Response](curlFunction)
+	newMethod, err := utils.ContextMethodToAnyHandler[*curl.Request, any](curlFunction)
 	if err != nil {
 		return nil, err
 	}

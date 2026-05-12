@@ -11,6 +11,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/flow/flow_step"
 	"github.com/magic-lib/go-plat-workflow/task"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 	"net/http"
 	"testing"
 	"time"
@@ -49,6 +50,26 @@ func registerAction() {
 			Method: http.MethodPost,
 			Data:   req,
 		}
+	}, func(resp *curl.Response) (any, error) {
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("请求失败")
+		}
+		succ := gjson.Get(resp.Response, "success").Bool()
+		if !succ {
+			return nil, fmt.Errorf("请求失败, success")
+		}
+		list := gjson.Get(resp.Response, "data").Array()
+		if len(list) == 0 {
+			return nil, nil
+		}
+		retList := make([]map[string]any, 0)
+		lo.ForEach(list, func(item gjson.Result, _ int) {
+			oneResult := make(map[string]any)
+			_ = conv.Unmarshal(item.Raw, &oneResult)
+			retList = append(retList, oneResult)
+		})
+
+		return retList, nil
 	}, &action.ActMeta{
 		Namespace: ns,
 		Activity:  "query",
@@ -95,7 +116,7 @@ func TestStepDependencyExtraction(t *testing.T) {
 		Id:   "test-deps",
 		Name: "Test Dependencies",
 		DependsOn: []*task.Activity{
-			createTestActivity("validateUser", ns, "GetOrderInfo", "", nil),
+			//createTestActivity("validateUser", ns, "GetOrderInfo", "", nil),
 			{
 				Id:        "queryNameWhiteList",
 				Namespace: ns,

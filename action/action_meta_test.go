@@ -133,7 +133,7 @@ func registerAction() {
 			Method: http.MethodPost,
 			Data:   req,
 		}
-	}, &action.ActMeta{
+	}, nil, &action.ActMeta{
 		Namespace: ns,
 		Activity:  "query",
 		Desc:      "日志",
