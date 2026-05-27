@@ -28,7 +28,7 @@ func TestWorkflowExecute(t *testing.T) {
 					{Key: "message", Value: "工作流开始执行"},
 				},
 				Control: task.ActivityControl{
-					TempCacheable: true,
+					CtxCacheable: true,
 				},
 			},
 			{
@@ -37,7 +37,7 @@ func TestWorkflowExecute(t *testing.T) {
 				Activity:    "SetOrderInfo",
 				ArgTemplate: "{{variables.orderId}}",
 				Control: task.ActivityControl{
-					TempCacheable: true,
+					CtxCacheable: true,
 				},
 			},
 		},

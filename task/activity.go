@@ -14,12 +14,14 @@ import (
 	"github.com/magic-lib/go-plat-workflow/tools"
 	"github.com/samber/lo"
 	"log"
+	"sync"
 	"time"
 )
 
 var (
 	activityCacheTime = 5 * time.Minute
 	activityCache     = cache.NewMemGoCache[map[string]any](activityCacheTime, 10*time.Minute)
+	activityLock      sync.Mutex
 )
 
 type (
@@ -37,6 +39,15 @@ type (
 		Control     ActivityControl     `yaml:"control" json:"control,omitempty"`           // 该activity的控制面板
 	}
 )
+
+// SetActivityCache 设置缓存
+func SetActivityCache(cacheTemp cache.CommCache[map[string]any]) {
+	if cacheTemp != nil {
+		activityLock.Lock()
+		activityCache = cacheTemp
+		activityLock.Unlock()
+	}
+}
 
 // extractDependenciesFromArguments 从 Arguments 中自动提取依赖的 activity IDs
 func (ac *Activity) extractDependenciesFromArguments(keyPrefix string) []*Activity {
@@ -235,10 +246,10 @@ func (ac *Activity) Execute(ctx context.Context, args map[string]any) (map[strin
 	return ac.execThisAction(execCtx, keyPrefix, linkChar, inputParams)
 }
 
-func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar string, inputParams map[string]any) (map[string]any, error) {
+func (ac *Activity) getActionKeyAndParamKey(keyPrefix, linkChar string, inputParams map[string]any) (string, string) {
 	actionKey := ""
 	paramKey := ""
-	if ac.Control.CacheTime > 0 || ac.Control.TempCacheable {
+	if ac.Control.CacheTime > 0 || ac.Control.CtxCacheable {
 		actionKey = ac.getResponseStoreKey(keyPrefix, linkChar)
 		var err error
 		paramKey, err = ac.getActionParamKeyId(inputParams)
@@ -247,8 +258,13 @@ func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar 
 		}
 		log.Println("[Execute ActionKey]", actionKey, paramKey)
 	}
+	return actionKey, paramKey
 
-	if ac.Control.TempCacheable {
+}
+func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar string, inputParams map[string]any) (map[string]any, error) {
+	actionKey, paramKey := ac.getActionKeyAndParamKey(keyPrefix, linkChar, inputParams)
+
+	if ac.Control.CtxCacheable {
 		// 是否使用流程级缓存，避免始终缓存结果
 		execCtx = WithFlowCache(execCtx)
 		if cachedResult, found := getFlowCacheResult(execCtx, actionKey, paramKey); found {
@@ -258,9 +274,11 @@ func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar 
 	}
 
 	if ac.Control.CacheTime > 0 {
+		activityLock.Lock()
 		//是否有缓存
 		actionResult, err := cache.NsGet[map[string]any](execCtx, activityCache, actionKey, paramKey)
-		if err == nil {
+		activityLock.Unlock()
+		if len(actionResult) > 0 && err == nil {
 			return actionResult, nil
 		}
 	}
@@ -332,11 +350,13 @@ func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar 
 
 	// 需要缓存该执行对象
 	if ac.Control.CacheTime > 0 {
+		activityLock.Lock()
 		_, _ = cache.NsSet[map[string]any](execCtx, activityCache, actionKey, paramKey, resultMap, time.Duration(ac.Control.CacheTime)*time.Second)
+		activityLock.Unlock()
 	}
 
 	// 缓存该执行结果到流程级别的缓存中
-	if ac.Control.TempCacheable {
+	if ac.Control.CtxCacheable {
 		setFlowCacheResult(execCtx, actionKey, paramKey, resultMap)
 		log.Println("[Execute Cache Set] Cached result for:", actionKey)
 	}
@@ -492,7 +512,7 @@ func (ac *Activity) extendActivityControl(origin ActivityControl, replace Activi
 		When:          origin.When,
 		Timeout:       origin.Timeout,
 		CacheTime:     origin.CacheTime,
-		TempCacheable: origin.TempCacheable,
+		CtxCacheable:  origin.CtxCacheable,
 		DelayDuration: origin.DelayDuration,
 	}
 
@@ -505,8 +525,8 @@ func (ac *Activity) extendActivityControl(origin ActivityControl, replace Activi
 	if result.CacheTime == 0 && replace.CacheTime != 0 {
 		result.CacheTime = replace.CacheTime
 	}
-	if !result.TempCacheable && replace.TempCacheable {
-		result.TempCacheable = replace.TempCacheable
+	if !result.CtxCacheable && replace.CtxCacheable {
+		result.CtxCacheable = replace.CtxCacheable
 	}
 	if result.DelayDuration == 0 && replace.DelayDuration != 0 {
 		result.DelayDuration = replace.DelayDuration

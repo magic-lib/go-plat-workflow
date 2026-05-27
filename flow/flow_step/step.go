@@ -22,13 +22,13 @@ type stepConfig struct {
 
 // Step 表示工作流中的一个步骤,包含一组条件触发的actions
 type Step struct {
-	Id               string           `yaml:"id" json:"id,omitempty"`                 // 该步骤Id
-	Name             string           `yaml:"name" json:"name,omitempty"`             // 步骤名称
-	DependsOn        []*task.Activity `yaml:"depends_on" json:"depends_on,omitempty"` // 手动填入依赖
-	Condition        string           `yaml:"condition" json:"condition,omitempty"`   // 执行条件表达式
-	task.FlowControl                  // 流程控制
-	Strategy         []*task.Activity `yaml:"strategy" json:"strategy,omitempty"` // 策略列表
-	stepConfig       stepConfig
+	Id         string           `yaml:"id" json:"id,omitempty"`                 // 该步骤Id
+	Name       string           `yaml:"name" json:"name,omitempty"`             // 步骤名称
+	DependsOn  []*task.Activity `yaml:"depends_on" json:"depends_on,omitempty"` // 手动填入依赖
+	Condition  string           `yaml:"condition" json:"condition,omitempty"`   // 执行条件表达式
+	Control    task.FlowControl `yaml:"control" json:"control,omitempty"`       // 该流程的控制面板
+	Strategy   []*task.Activity `yaml:"strategy" json:"strategy,omitempty"`     // 策略列表
+	stepConfig stepConfig
 }
 
 // extractDependenciesFromCondition 从条件表达式中提取依赖的 activity IDs
@@ -113,10 +113,10 @@ func (s *Step) checkCondition(inputParams map[string]any) (bool, error) {
 
 // getTimeoutDuration 获取超时时长
 func (s *Step) getTimeoutDuration() time.Duration {
-	if s.Timeout <= 0 {
+	if s.Control.Timeout <= 0 {
 		return 0
 	}
-	return time.Duration(s.Timeout) * time.Second
+	return time.Duration(s.Control.Timeout) * time.Second
 }
 
 // Execute 执行步骤主逻辑
@@ -125,20 +125,20 @@ func (s *Step) Execute(ctx context.Context, inputParams map[string]any) (map[str
 
 	// 应用步骤级别的超时控制
 	execCtx := ctx
-	if s.Timeout > 0 {
+	if s.Control.Timeout > 0 {
 		var cancel context.CancelFunc
 		execCtx, cancel = context.WithTimeout(ctx, s.getTimeoutDuration())
 		defer cancel()
 	}
 
 	// 处理延迟执行
-	if s.DelayDuration > 0 {
+	if s.Control.DelayDuration > 0 {
 		select {
-		case <-time.After(time.Duration(s.DelayDuration) * time.Second):
+		case <-time.After(time.Duration(s.Control.DelayDuration) * time.Second):
 		case <-execCtx.Done():
 			return inputParams, execCtx.Err()
 		}
-	} else if s.DelayDuration < 0 {
+	} else if s.Control.DelayDuration < 0 {
 		// 异步执行
 		goroutines.GoAsync(func(params ...any) {
 			_, _ = s.executeStepLogic(execCtx, inputParams)

@@ -209,7 +209,7 @@ func (w *Workflow) Execute(ctx context.Context, inputParams map[string]any) (map
 		var err error
 		inputParams, err = w.execOneStepDependencyFromActivities(execCtx, frontSteps, step, inputParams)
 		if err != nil {
-			if step.FlowControl.ShouldIgnoreOnError() {
+			if step.Control.ShouldIgnoreOnError() {
 				return true
 			}
 			retErr = multierror.Append(retErr, err)
@@ -226,7 +226,7 @@ func (w *Workflow) Execute(ctx context.Context, inputParams map[string]any) (map
 		log.Printf("执行当前步骤 [%s]", step.Id)
 		result, err := step.Execute(execCtx, inputParams)
 		if err != nil {
-			if step.FlowControl.ShouldIgnoreOnError() {
+			if step.Control.ShouldIgnoreOnError() {
 				return true
 			}
 			retErr = multierror.Append(retErr, err)
@@ -236,15 +236,15 @@ func (w *Workflow) Execute(ctx context.Context, inputParams map[string]any) (map
 
 		if step.stepConfig.checkCondition {
 			// 如果成功，则直接退出
-			if step.FlowControl.ShouldExitOnExecute() {
+			if step.Control.ShouldExitOnExecute() {
 				return false
 			}
-			if step.FlowControl.ShouldContinueOnExecute() {
+			if step.Control.ShouldContinueOnExecute() {
 				return true
 			}
 		}
 
-		if step.FlowControl.ShouldReturnOnExecute() {
+		if step.Control.ShouldReturnOnExecute() {
 			log.Printf("步骤 [%s] 配置为执行后返回，后续步骤将异步去执行", step.Id)
 			panic("on_return")
 			//go func(remainingSteps []*Step, asyncResult map[string]any) {

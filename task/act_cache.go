@@ -21,12 +21,15 @@ func WithFlowCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, flowCacheContext{}, cache)
 }
 
+func getCacheKey(actionKey, paramKey string) string {
+	return actionKey + ":" + paramKey
+}
 func setFlowCacheResult(ctx context.Context, actionKey, paramKey string, result map[string]any) {
 	cache := getFlowCache(ctx)
 	if cache == nil {
 		return
 	}
-	cacheKey := actionKey + ":" + paramKey
+	cacheKey := getCacheKey(actionKey, paramKey)
 	cache[cacheKey] = result
 }
 
@@ -35,7 +38,7 @@ func getFlowCacheResult(ctx context.Context, actionKey, paramKey string) (map[st
 	if cache == nil {
 		return nil, false
 	}
-	cacheKey := actionKey + ":" + paramKey
+	cacheKey := getCacheKey(actionKey, paramKey)
 	result, ok := cache[cacheKey]
 	return result, ok
 }
