@@ -49,6 +49,15 @@ func SetActivityCache(cacheTemp cache.CommCache[map[string]any]) {
 	}
 }
 
+func (ac *Activity) initArguments() {
+	// 将 Arguments 中的 类型没有设置的，默认设置为仅default，前端不能进行设置
+	lo.ForEach(ac.Arguments, func(arg *param.BindConfig, index int) {
+		if arg.Policy == "" {
+			arg.Policy = param.KeyPolicyDefaultOnly
+		}
+	})
+}
+
 // extractDependenciesFromArguments 从 Arguments 中自动提取依赖的 activity IDs
 func (ac *Activity) extractDependenciesFromArguments(keyPrefix string) []*Activity {
 	deps := make(map[string]bool)
@@ -425,6 +434,9 @@ func (ac *Activity) executeByHookEvent(ctx context.Context, linkChar string, eve
 
 // ExtendActivity 将replaceActivity的参数和返回值，覆盖到originActivity中
 func (ac *Activity) ExtendActivity(originActivity *Activity, replaceActivity *Activity) (*Activity, error) {
+	// 默认设置参数
+	ac.initArguments()
+
 	if replaceActivity == nil && originActivity == nil {
 		return nil, fmt.Errorf("extendActivity param all is nil")
 	}

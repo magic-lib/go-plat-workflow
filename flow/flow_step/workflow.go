@@ -16,6 +16,7 @@ import (
 
 type (
 	Workflow struct {
+		Id         string              `yaml:"id" json:"id,omitempty"`                 // 工作流唯一ID
 		Name       string              `yaml:"name" json:"name,omitempty"`             // 工作流名称
 		Variables  []*param.BindConfig `yaml:"variables" json:"variables,omitempty"`   // 全局变量
 		Responses  map[string]any      `yaml:"responses" json:"responses,omitempty"`   // 请求最终返回的结构
