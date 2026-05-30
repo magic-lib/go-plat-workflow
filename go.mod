@@ -4,16 +4,19 @@ go 1.24.3
 
 require (
 	github.com/hashicorp/go-multierror v1.1.1
-	github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260426195715-12a8640acbdd
-	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260504140917-b4050b2f21ad
+	github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260528093104-d322ca9cbeb2
+	github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260512064517-6930af6128b6
+	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260530064649-e508f5bc568d
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/rs/zerolog v1.35.1
 	github.com/samber/lo v1.53.0
 	github.com/tidwall/gjson v1.18.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/ChengjinWu/gojson v0.0.0-20181113073026-04749cc2d015 // indirect
 	github.com/Knetic/govaluate v3.0.0+incompatible // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.2.0 // indirect
@@ -22,11 +25,12 @@ require (
 	github.com/VictoriaMetrics/fastcache v1.13.2 // indirect
 	github.com/andeya/ameda v1.5.3 // indirect
 	github.com/andeya/goutil v1.0.1 // indirect
+	github.com/avast/retry-go/v4 v4.6.0 // indirect
 	github.com/bwmarrin/snowflake v0.3.0 // indirect
 	github.com/bytedance/go-tagexpr/v2 v2.9.11 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic v1.14.2 // indirect
-	github.com/bytedance/sonic/loader v0.4.0 // indirect
+	github.com/bytedance/sonic v1.15.0 // indirect
+	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/coocood/freecache v1.2.4 // indirect
@@ -93,6 +97,7 @@ require (
 	github.com/soniah/evaler v2.2.0+incompatible // indirect
 	github.com/sony/sonyflake v1.2.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
+	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -109,6 +114,8 @@ require (
 	github.com/zeromicro/go-zero v1.9.4 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1-0.20260209094634-d010e7850e68 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.41.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
@@ -119,8 +126,9 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260209200024-4cfbd4190f57 // indirect
+	google.golang.org/grpc v1.79.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/gorm v1.31.1 // indirect
 )

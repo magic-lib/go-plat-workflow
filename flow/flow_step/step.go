@@ -27,7 +27,7 @@ type Step struct {
 	DependsOn  []*task.Activity `yaml:"depends_on" json:"depends_on,omitempty"` // 手动填入依赖
 	Condition  string           `yaml:"condition" json:"condition,omitempty"`   // 执行条件表达式
 	Control    task.FlowControl `yaml:"control" json:"control,omitempty"`       // 该流程的控制面板
-	Strategy   []*task.Activity `yaml:"strategy" json:"strategy,omitempty"`     // 策略列表
+	Strategies []*task.Activity `yaml:"strategies" json:"strategies,omitempty"` // 策略列表
 	stepConfig stepConfig
 }
 
@@ -174,11 +174,11 @@ func (s *Step) executeAllDependencies(ctx context.Context, args map[string]any) 
 	return args, retErr
 }
 func (s *Step) executeAllStrategy(ctx context.Context, args map[string]any) (map[string]any, error) {
-	if len(s.Strategy) == 0 {
+	if len(s.Strategies) == 0 {
 		return args, nil
 	}
 	var retErr error
-	lo.ForEachWhile(s.Strategy, func(act *task.Activity, index int) bool {
+	lo.ForEachWhile(s.Strategies, func(act *task.Activity, index int) bool {
 		newArgs, err := act.Execute(ctx, args)
 		if err != nil {
 			log.Print("execute activity error:", err)
@@ -236,7 +236,7 @@ func (s *Step) executeStepLogic(ctx context.Context, inputParams map[string]any)
 	}
 
 	// 2. 如果没有策略，直接返回
-	if len(s.Strategy) == 0 {
+	if len(s.Strategies) == 0 {
 		log.Printf("Step [%s] has no strategy to execute", s.Name)
 		return inputParams, nil
 	}

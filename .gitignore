@@ -8,6 +8,7 @@
 .alpackages/
 #Snapshots folder
 .snapshots/
+.codebuddy/
 #Testing Output folder
 .output/
 #Extension App-file

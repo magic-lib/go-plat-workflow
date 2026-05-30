@@ -32,7 +32,7 @@ steps:
   - id: step1
     name: "第一步：获取订单信息"
     condition: "true"
-    strategy:
+    strategies:
       - id: setOrderInfo
         arg_template: "{{variables.orderId}}"
         control:
@@ -49,7 +49,7 @@ steps:
     condition: "[step1.responses]"
     control:
       on_exit: "exit"
-    strategy:
+    strategies:
       - id: setOrderInfo
         arg_template: "{{variables.orderId}}"
         control:
