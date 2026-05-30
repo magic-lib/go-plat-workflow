@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工作流列表</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; background: #f4f6f9; color: #1a1a1a; min-height: 100vh; }
+    /* 顶栏 */
+    .topbar { background: #fff; border-bottom: 1px solid #e5e5e5; padding: 0 32px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; }
+    .topbar-title { font-size: 16px; font-weight: 600; color: #1a1a1a; display: flex; align-items: center; gap: 8px; }
+    .topbar-title span { color: #185FA5; }
+    /* 主体 */
+    .main { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+    /* 工具栏 */
+    .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .toolbar-left { display: flex; align-items: center; gap: 10px; }
+    .search-input { padding: 7px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; width: 240px; background: #fff; }
+    .search-input:focus { outline: none; border-color: #378ADD; }
+    /* 按钮 */
+    .btn { padding: 7px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: inherit; font-weight: 500; transition: all .15s; border: none; }
+    .btn-primary { background: #185FA5; color: #fff; }
+    .btn-primary:hover { background: #1472c4; }
+    .btn-danger { background: #fff; color: #E24B4A; border: 1px solid #f5c6c6; }
+    .btn-danger:hover { background: #fff0f0; border-color: #E24B4A; }
+    /* 统计卡片 */
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 24px; }
+    .stat-card { background: #fff; border: 1px solid #e8e8e8; border-radius: 10px; padding: 16px 20px; }
+    .stat-num { font-size: 28px; font-weight: 600; color: #185FA5; line-height: 1; }
+    .stat-label { font-size: 12px; color: #999; margin-top: 6px; }
+    /* 列表 */
+    .wf-table { background: #fff; border: 1px solid #e8e8e8; border-radius: 10px; overflow: hidden; }
+    .wf-table-header { display: grid; grid-template-columns: 180px 1fr 130px 160px 130px; gap: 0; padding: 10px 20px; background: #fafafa; border-bottom: 1px solid #e8e8e8; font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: .4px; }
+    .wf-row { display: grid; grid-template-columns: 180px 1fr 130px 160px 130px; gap: 0; padding: 14px 20px; border-bottom: 1px solid #f0f0f0; align-items: center; transition: background .1s; }
+    .wf-row:last-child { border-bottom: none; }
+    .wf-row:hover { background: #f8fbff; }
+    .wf-id { font-family: 'Fira Code', monospace; font-size: 12px; color: #185FA5; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wf-name { font-size: 13px; font-weight: 500; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .wf-name:hover { color: #185FA5; text-decoration: underline; }
+    .wf-meta { font-size: 11px; color: #999; }
+    .wf-actions { display: flex; gap: 6px; align-items: center; }
+    .action-btn { padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; border: 1px solid #ddd; background: #fff; color: #444; font-family: inherit; transition: all .12s; }
+    .action-btn:hover { background: #f0f0f0; }
+    .action-btn.edit { border-color: #B5D4F4; color: #185FA5; background: #EBF5FF; }
+    .action-btn.edit:hover { background: #d8edfb; }
+    .action-btn.del { border-color: #f5c6c6; color: #E24B4A; background: #fff0f0; }
+    .action-btn.del:hover { background: #fce0e0; }
+    /* 空状态 */
+    .empty-state { text-align: center; padding: 64px 24px; color: #bbb; }
+    .empty-state p { font-size: 14px; margin-bottom: 16px; }
+    /* Toast */
+    .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); padding: 9px 22px; border-radius: 8px; font-size: 13px; font-weight: 500; z-index: 9999; }
+    .toast.success { background: #1D9E75; color: #fff; }
+    .toast.error { background: #E24B4A; color: #fff; }
+    /* Loading */
+    .loading { text-align: center; padding: 40px; color: #aaa; font-size: 13px; }
+    /* 确认弹窗遮罩 */
+    .mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 100; display: flex; align-items: center; justify-content: center; }
+    .dialog { background: #fff; border-radius: 12px; padding: 28px 32px; width: 380px; }
+    .dialog h3 { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+    .dialog p { font-size: 13px; color: #666; margin-bottom: 24px; line-height: 1.6; }
+    .dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <div class="topbar-title">⚡ 工作流<span>配置管理</span></div>
+    <button class="btn btn-primary" @click="goCreate">+ 新建工作流</button>
+  </div>
+
+  <div class="main">
+    <!-- 统计 -->
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-num">{{ list.length }}</div>
+        <div class="stat-label">工作流总数</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">{{ todayCount }}</div>
+        <div class="stat-label">今日更新</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">{{ list.length > 0 ? fmtDate(list[0].updated_at) : '-' }}</div>
+        <div class="stat-label">最近更新</div>
+      </div>
+    </div>
+
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <input class="search-input" v-model="keyword" placeholder="搜索工作流名称或 ID..." />
+      </div>
+      <span style="font-size:12px;color:#aaa">共 {{ filtered.length }} 条</span>
+    </div>
+
+    <!-- 列表 -->
+    <div class="wf-table">
+      <div class="wf-table-header">
+        <div>Workflow ID</div>
+        <div>名称</div>
+        <div>创建时间</div>
+        <div>最后更新</div>
+        <div>操作</div>
+      </div>
+
+      <div v-if="loading" class="loading">加载中...</div>
+
+      <div v-else-if="!filtered.length" class="empty-state">
+        <p>暂无工作流</p>
+        <button class="btn btn-primary" @click="goCreate">创建第一个工作流</button>
+      </div>
+
+      <div class="wf-row" v-for="item in filtered" :key="item.id">
+        <div class="wf-id" :title="item.workflow_id">{{ item.workflow_id || '-' }}</div>
+        <div class="wf-name" @click="goEdit(item.id)" :title="item.name">{{ item.name }}</div>
+        <div class="wf-meta">{{ fmtDate(item.created_at) }}</div>
+        <div class="wf-meta">{{ fmtDateTime(item.updated_at) }}</div>
+        <div class="wf-actions">
+          <button class="action-btn edit" @click="goEdit(item.id)">编辑</button>
+          <button class="action-btn del" @click="confirmDelete(item)">删除</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 删除确认弹窗 -->
+  <div class="mask" v-if="deleteTarget" @click.self="deleteTarget=null">
+    <div class="dialog">
+      <h3>确认删除</h3>
+      <p>即将删除工作流 <strong>{{ deleteTarget.name }}</strong>（{{ deleteTarget.workflow_id }}），此操作不可撤销。</p>
+      <div class="dialog-actions">
+        <button class="btn" style="border:1px solid #ddd;background:#fff;color:#666" @click="deleteTarget=null">取消</button>
+        <button class="btn btn-danger" @click="doDelete">确认删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" :class="toast.type" v-if="toast.show">{{ toast.msg }}</div>
+</div>
+
+<script>
+const { createApp, ref, computed, reactive, onMounted } = Vue;
+const API_BASE = 'http://localhost:8080';
+
+createApp({
+  setup() {
+    const list = ref([]);
+    const loading = ref(true);
+    const keyword = ref('');
+    const deleteTarget = ref(null);
+    const toast = reactive({ show: false, msg: '', type: 'success' });
+
+    const filtered = computed(() => {
+      if (!keyword.value) return list.value;
+      const kw = keyword.value.toLowerCase();
+      return list.value.filter(item =>
+        item.name.toLowerCase().includes(kw) ||
+        (item.workflow_id || '').toLowerCase().includes(kw)
+      );
+    });
+
+    const todayCount = computed(() => {
+      const today = new Date().toDateString();
+      return list.value.filter(item => new Date(item.updated_at).toDateString() === today).length;
+    });
+
+    function fmtDate(dt) {
+      if (!dt) return '-';
+      return new Date(dt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', year: 'numeric' });
+    }
+
+    function fmtDateTime(dt) {
+      if (!dt) return '-';
+      return new Date(dt).toLocaleString('zh-CN', {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+      });
+    }
+
+    function showToast(msg, type = 'success') {
+      toast.msg = msg; toast.type = type; toast.show = true;
+      setTimeout(() => { toast.show = false; }, 2500);
+    }
+
+    async function loadList() {
+      loading.value = true;
+      try {
+        const resp = await fetch(`${API_BASE}/api/workflows`);
+        const data = await resp.json();
+        if (data.code === 0) list.value = data.data || [];
+        else showToast(data.message || '加载失败', 'error');
+      } catch (e) {
+        showToast('无法连接后端服务，请确认服务已启动', 'error');
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    function goCreate() {
+      window.location.href = 'editor.html';
+    }
+
+    function goEdit(id) {
+      window.location.href = `editor.html?id=${id}`;
+    }
+
+    function confirmDelete(item) {
+      deleteTarget.value = item;
+    }
+
+    async function doDelete() {
+      const item = deleteTarget.value;
+      if (!item) return;
+      try {
+        const resp = await fetch(`${API_BASE}/api/workflows/${item.id}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (data.code === 0) {
+          showToast('删除成功');
+          deleteTarget.value = null;
+          await loadList();
+        } else {
+          showToast(data.message || '删除失败', 'error');
+        }
+      } catch (e) {
+        showToast('删除请求失败', 'error');
+      }
+    }
+
+    onMounted(() => loadList());
+
+    return {
+      list, loading, keyword, filtered, deleteTarget, toast, todayCount,
+      fmtDate, fmtDateTime, goCreate, goEdit, confirmDelete, doDelete
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
