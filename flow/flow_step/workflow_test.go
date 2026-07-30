@@ -46,7 +46,7 @@ func TestWorkflowExecute(t *testing.T) {
 				Id:        "step1",
 				Name:      "第一步：获取订单信息",
 				Condition: "true",
-				Strategy: []*task.Activity{
+				Strategies: []*task.Activity{
 					createTestActivity("setOrderInfo", "", "", "{{variables.orderId}}", nil),
 					//createTestActivity("getOrder", ns, "GetOrderInfo", "", []*param.BindConfig{
 					//	{Key: "name", Value: "{{variables.userId}}"},
@@ -63,7 +63,7 @@ func TestWorkflowExecute(t *testing.T) {
 				Name:      "第二步：条件设置订单",
 				DependsOn: []*task.Activity{{Id: "step1"}},
 				Condition: "[step1.responses]",
-				Strategy: []*task.Activity{
+				Strategies: []*task.Activity{
 					createTestActivity("setOrderInfo", "", "", "{{variables.orderId}}", nil),
 					//createTestActivity("setOrder", ns, "SetOrderInfo", "{{variables.orderId}}", []*param.BindConfig{
 					//	{Key: "orderId", Value: "{{variables.orderId}}"},

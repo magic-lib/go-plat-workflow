@@ -7,7 +7,7 @@ variables:
     value: "U123456"
   - key: orderId
     value: "ORD789012"
-    policy: frontend   # "frontend" 强制前端 "backend" 强制后端 "frontend+" 前端优先 "backend+" 后端优先 "default" 默认
+    policy: static   # "static" 强制前端 "backend" 强制后端 "static+" 前端优先 "backend+" 后端优先 "default" 默认
 
 # 公共 Activities 资源
 activities:
@@ -16,7 +16,7 @@ activities:
     arguments:
       - key: message
         value: "工作流日志"
-        policy: frontend   # "frontend" 强制前端 "backend" 强制后端 "frontend+" 前端优先 "backend+" 后端优先 "default" 默认
+        policy: static   # "static" 强制前端 "backend" 强制后端 "static+" 前端优先 "backend+" 后端优先 "default" 默认
     control:
       ctx_cacheable: false
 
@@ -40,7 +40,9 @@ steps:
         arguments:
           - key: message
             value: "工作流日志"
-            policy: frontend   # "frontend" 强制前端 "backend" 强制后端 "frontend+" 前端优先 "backend+" 后端优先 "default" 默认
+            policy: static   # "static" 强制前端 "backend" 强制后端 "static+" 前端优先 "backend+" 后端优先 "default" 默认
+        responses:
+          - orderName: "{{setOrderInfo.responses.orderName}}"
 
   - id: step2
     name: "第二步：条件设置订单"

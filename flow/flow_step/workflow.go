@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/hashicorp/go-multierror"
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/common"
@@ -145,7 +146,7 @@ func (w *Workflow) execOneStepDependencyFromActivities(ctx context.Context, fron
 
 // execOneStepStrategyFromActivities 更新策略的activity值
 func (w *Workflow) execOneStepStrategyFromActivities(oneStep *Step) (*Step, error) {
-	allDepends := oneStep.Strategy
+	allDepends := oneStep.Strategies
 	var retErr error
 	lo.ForEachWhile(allDepends, func(activity *task.Activity, k int) bool {
 		if activity.Activity != "" {
@@ -282,7 +283,7 @@ func (w *Workflow) buildFinalResponse(result map[string]any) map[string]any {
 
 	if len(newResult) > 0 {
 		result = lo.Assign(result, newResult)
-		result[common.Responses] = newResult
+		result[activity.Responses] = newResult
 	}
 	return result
 }

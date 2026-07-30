@@ -6,11 +6,11 @@ import (
 	"github.com/magic-lib/go-plat-cache/cache"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/goroutines"
+	"github.com/magic-lib/go-plat-utils/plugins/action"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
-	"github.com/magic-lib/go-plat-workflow/action"
-	"github.com/magic-lib/go-plat-workflow/common"
 	"github.com/magic-lib/go-plat-workflow/tools"
 	"github.com/samber/lo"
 	"log"
@@ -136,7 +136,7 @@ func (ac *Activity) getActionParamKeyId(inputParams map[string]any) (string, err
 
 	actionParam := ac.getActionParam(inputParams)
 
-	actData := actionFun.ActMeta()
+	actData := actionFun.MetaData()
 	if actData.ArgumentType != nil {
 		var data any
 		var err1 error
@@ -173,7 +173,7 @@ func (ac *Activity) mergeResponseWithId(keyPrefix string, resultMap map[string]a
 	}
 
 	if actionFun != nil {
-		newParam, err := conv.ConvertForType(actionFun.ActMeta().ArgumentType, requestParams)
+		newParam, err := conv.ConvertForType(actionFun.MetaData().ArgumentType, requestParams)
 		if err == nil {
 			requestParams = newParam
 		}
@@ -186,8 +186,8 @@ func (ac *Activity) mergeResponseWithId(keyPrefix string, resultMap map[string]a
 
 	return lo.Assign(resultMap, map[string]any{
 		idKey: map[string]any{
-			common.Arguments: requestParams,
-			common.Responses: retData,
+			activity.Arguments: requestParams,
+			activity.Responses: retData,
 		},
 	})
 }

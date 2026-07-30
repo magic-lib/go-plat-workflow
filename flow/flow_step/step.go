@@ -6,8 +6,8 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/goroutines"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/templates"
-	"github.com/magic-lib/go-plat-workflow/common"
 	"github.com/magic-lib/go-plat-workflow/task"
 	"github.com/magic-lib/go-plat-workflow/tools"
 	"github.com/samber/lo"
@@ -203,7 +203,7 @@ func (s *Step) mergeResponseWithId(keyPrefix string, resultMap map[string]any, s
 
 	return lo.Assign(resultMap, map[string]any{
 		idKey: map[string]any{
-			common.Responses: shouldExecute,
+			activity.Responses: shouldExecute,
 		},
 	})
 }

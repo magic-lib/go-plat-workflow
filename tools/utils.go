@@ -3,8 +3,8 @@ package tools
 import (
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/templates"
-	"github.com/magic-lib/go-plat-workflow/common"
 	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/samber/lo"
 	"gopkg.in/yaml.v3"
@@ -53,7 +53,7 @@ func getResponseRegExp(keyPrefix string) *regexp.Regexp {
 	if ok && re != nil {
 		return re
 	}
-	retStr := fmt.Sprintf(`\{\{%s([a-zA-Z0-9_]+)\.(%s|%s)\.`, keyPrefix, common.Arguments, common.Responses)
+	retStr := fmt.Sprintf(`\{\{%s([a-zA-Z0-9_]+)\.(%s|%s)\.`, keyPrefix, activity.Arguments, activity.Responses)
 	re = regexp.MustCompile(retStr)
 	activityIdRegExpMap.Set(keyPrefix, re)
 	return re

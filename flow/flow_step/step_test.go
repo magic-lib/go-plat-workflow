@@ -6,8 +6,9 @@ import (
 	"github.com/magic-lib/go-plat-curl/curl"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/crypto"
+	"github.com/magic-lib/go-plat-utils/plugins/action"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
-	"github.com/magic-lib/go-plat-workflow/action"
+	"github.com/magic-lib/go-plat-workflow/actions"
 	"github.com/magic-lib/go-plat-workflow/flow/flow_step"
 	"github.com/magic-lib/go-plat-workflow/task"
 	"github.com/samber/lo"
@@ -37,7 +38,7 @@ type ApiAccountInfoReq struct {
 var ns = "order"
 
 func registerAction() {
-	curlInterface, err := action.CurlToActor(func() *curl.Request {
+	curlInterface, err := actions.CurlToActor(func() *curl.Request {
 		token := "rkbKlwl9OL0ew2cZ6m"
 
 		req := new(ApiAccountInfoReq)
@@ -70,9 +71,9 @@ func registerAction() {
 		})
 
 		return retList, nil
-	}, &action.ActMeta{
+	}, &action.ActMetaData{
 		Namespace: ns,
-		Activity:  "query",
+		Action:    "query",
 		Desc:      "日志",
 	})
 
@@ -87,7 +88,7 @@ func registerAction() {
 	}
 
 	lo.ForEach(actionList, func(item action.Actor, _ int) {
-		err = action.RegisterAction(item)
+		err = action.Register(item)
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -132,7 +133,7 @@ func TestStepDependencyExtraction(t *testing.T) {
 			},
 		},
 		Condition: "[validateUser.responses.name] == 'tianlin111'",
-		Strategy: []*task.Activity{
+		Strategies: []*task.Activity{
 			createTestActivity("act1", ns, "SetOrderInfo", "{{name}}", []*param.BindConfig{
 				{Key: "orderId", Value: "545435353"},
 			}),
