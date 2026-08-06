@@ -1,0 +1,548 @@
+package task
+
+import (
+	"context"
+	"fmt"
+	"github.com/magic-lib/go-plat-cache/cache"
+	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/goroutines"
+	"github.com/magic-lib/go-plat-utils/plugins/action"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
+	"github.com/magic-lib/go-plat-utils/templates"
+	"github.com/magic-lib/go-plat-utils/utils"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
+	"github.com/magic-lib/go-plat-workflow/tools"
+	"github.com/samber/lo"
+	"log"
+	"sync"
+	"time"
+)
+
+var (
+	activityCacheTime = 5 * time.Minute
+	activityCache     = cache.NewMemGoCache[map[string]any](activityCacheTime, 10*time.Minute)
+	activityLock      sync.Mutex
+)
+
+type (
+	// Activity 单个 task 配置
+	Activity struct {
+		Id          string              `yaml:"id" json:"id,omitempty"` // 唯一标识，用于区分多个相同的action
+		Name        string              `yaml:"name" json:"name"`
+		Namespace   string              `yaml:"namespace" json:"namespace,omitempty"`
+		Activity    string              `yaml:"activity" json:"activity,omitempty"`
+		Arguments   []*param.BindConfig `yaml:"arguments" json:"arguments,omitempty"`
+		ArgTemplate string              `yaml:"arg_template" json:"arg_template,omitempty"` // 如果参数直接是数字的话，则这里需要改为获取数字类型
+		Responses   map[string]any      `yaml:"responses" json:"responses"`                 // 返回的参数map，可以自定义添加内容，比如命名转换
+		DependsOn   []*Activity         `yaml:"depends_on" json:"depends_on,omitempty"`     // 依赖别的activity的Id
+		Hooks       LifecycleHooks      `yaml:"hooks" json:"hooks,omitempty"`               // activity执行时的钩子程序
+		Control     ActivityControl     `yaml:"control" json:"control,omitempty"`           // 该activity的控制面板
+	}
+)
+
+// SetActivityCache 设置缓存
+func SetActivityCache(cacheTemp cache.CommCache[map[string]any]) {
+	if cacheTemp != nil {
+		activityLock.Lock()
+		activityCache = cacheTemp
+		activityLock.Unlock()
+	}
+}
+
+func (ac *Activity) initArguments() {
+	// 将 Arguments 中的 类型没有设置的，默认设置为仅default，前端不能进行设置
+	lo.ForEach(ac.Arguments, func(arg *param.BindConfig, index int) {
+		if arg.Policy == "" {
+			arg.Policy = param.KeyPolicyDefaultOnly
+		}
+	})
+}
+
+// extractDependenciesFromArguments 从 Arguments 中自动提取依赖的 activity IDs
+func (ac *Activity) extractDependenciesFromArguments(keyPrefix string) []*Activity {
+	deps := make(map[string]bool)
+
+	for _, arg := range ac.Arguments {
+		if arg.Value != nil {
+			valueStr := conv.String(arg.Value)
+			matches := tools.ExtractDependsActivityIds(valueStr, keyPrefix)
+			for _, match := range matches {
+				deps[match] = true
+			}
+		}
+	}
+
+	// 也从 ArgTemplate 中提取
+	if ac.ArgTemplate != "" {
+		matches := tools.ExtractDependsActivityIds(ac.ArgTemplate, keyPrefix)
+		for _, match := range matches {
+			deps[match] = true
+		}
+	}
+
+	// 条件中提取
+	if ac.Control.When != "" {
+		matches := tools.ExtractDependsActivityIds(ac.Control.When, keyPrefix)
+		for _, match := range matches {
+			deps[match] = true
+		}
+	}
+
+	var result = make([]*Activity, 0)
+	for dep := range deps {
+		result = utils.AppendUniq(result, &Activity{
+			Id: dep,
+		})
+	}
+	return result
+}
+
+// GetAllDependencies 获取有效的依赖列表
+func (ac *Activity) getAllDependencies() []*Activity {
+	keyPrefix := returnKeyPrefix
+	oneDependsOnIdList := ac.extractDependenciesFromArguments(keyPrefix)
+	if len(ac.DependsOn) == 0 {
+		return oneDependsOnIdList
+	}
+	lo.ForEach(ac.DependsOn, func(dep *Activity, index int) {
+		oneDependsOnIdList = utils.AppendUniq(oneDependsOnIdList, dep)
+	})
+	return oneDependsOnIdList
+}
+func (ac *Activity) executeAllDependencies(ctx context.Context, args map[string]any) (map[string]any, error) {
+	var retErr error
+	actList := ac.getAllDependencies()
+	lo.ForEachWhile(actList, func(act *Activity, index int) bool {
+		newArgs, err := act.Execute(ctx, args)
+		if err != nil {
+			log.Print("execute activity error:", err)
+			retErr = err
+			return false
+		}
+		args = lo.Assign(args, newArgs)
+		return true
+	})
+	return args, retErr
+}
+
+func (ac *Activity) getActionParamKeyId(inputParams map[string]any) (string, error) {
+	if ac.Activity == "" {
+		return "", nil
+	}
+	actionFun, err := action.GetAction(ac.Namespace, ac.Activity)
+	if err != nil {
+		return "", err
+	}
+
+	actionParam := ac.getActionParam(inputParams)
+
+	actData := actionFun.MetaData()
+	if actData.ArgumentType != nil {
+		var data any
+		var err1 error
+		if data, err1 = conv.ConvertForType(actData.ArgumentType, actionParam); err1 != nil {
+			return "", fmt.Errorf("arguments type does not match required type: %v", actData.ArgumentType)
+		}
+		return utils.UniqueJsonId(data)
+	}
+	return utils.UniqueJsonId(actionParam)
+}
+func (ac *Activity) getActionParam(inputParams map[string]any) any {
+	var actionFunParam any = inputParams
+	if ac.ArgTemplate != "" {
+		ruleExpr := templates.NewRuleExprEngine()
+		newArgs, _ := ruleExpr.RunString(ac.ArgTemplate, inputParams)
+		actionFunParam = newArgs
+	}
+	return actionFunParam
+}
+
+func (ac *Activity) getResponseStoreKey(keyPrefix string, linkChar string) string {
+	activityName := ""
+	if ac.Namespace == "" {
+		activityName = ac.Activity
+	} else {
+		activityName = ac.Namespace + linkChar + ac.Activity
+	}
+	return keyPrefix + activityName
+}
+
+func (ac *Activity) mergeResponseWithId(keyPrefix string, resultMap map[string]any, actionFun action.Actor, requestParams any, retData any) map[string]any {
+	if ac.Id == "" {
+		return resultMap
+	}
+
+	if actionFun != nil {
+		newParam, err := conv.ConvertForType(actionFun.MetaData().ArgumentType, requestParams)
+		if err == nil {
+			requestParams = newParam
+		}
+	}
+
+	idKey := ac.Id
+	if keyPrefix != "" {
+		idKey = keyPrefix + idKey
+	}
+
+	return lo.Assign(resultMap, map[string]any{
+		idKey: map[string]any{
+			activity.Arguments: requestParams,
+			activity.Responses: retData,
+		},
+	})
+}
+
+// createResponse 生成返回的结果
+func (ac *Activity) createResponse(keyPrefix string, linkChar string, actionFun action.Actor, requestParams any, retData any) map[string]any {
+	resultMap := make(map[string]any)
+
+	//param
+	paramMap := make(map[string]any)
+	_ = conv.Unmarshal(requestParams, &paramMap)
+	if len(paramMap) > 0 {
+		resultMap = lo.Assign(resultMap, paramMap)
+	}
+
+	//return
+	retMap := make(map[string]any)
+	_ = conv.Unmarshal(retData, &retMap)
+	if len(retMap) == 0 {
+		// 不是map类型，所以这里需要保存返回值
+		actionKey := ac.getResponseStoreKey(keyPrefix, linkChar)
+		retMap[actionKey] = retData
+	}
+	resultMap = lo.Assign(resultMap, retMap)
+
+	return ac.mergeResponseWithId(keyPrefix, resultMap, actionFun, requestParams, retData)
+}
+
+// Execute 执行动作主逻辑：合并参数→执行依赖→执行主动作→合并结果
+func (ac *Activity) Execute(ctx context.Context, args map[string]any) (map[string]any, error) {
+	// 0、获取当前活动的所有参数
+	inputParams := ac.makeInputMap(args)
+	log.Println("[Execute Activity]", conv.String(ac))
+	log.Println("[Execute Arguments]", conv.String(inputParams))
+
+	execCtx := ctx
+	if ac.Control.Timeout > 0 {
+		var cancel context.CancelFunc
+		execCtx, cancel = context.WithTimeout(ctx, time.Duration(ac.Control.Timeout)*time.Second)
+		defer cancel()
+	}
+
+	keyPrefix := returnKeyPrefix
+	linkChar := namespaceLinkNameChar
+
+	if ac.Control.DelayDuration > 0 {
+		select {
+		case <-time.After(time.Duration(ac.Control.DelayDuration) * time.Second):
+		case <-execCtx.Done():
+			return inputParams, execCtx.Err()
+		}
+	} else if ac.Control.DelayDuration < 0 {
+		_, err := goroutines.GoAsyncTimeout(time.Duration(ac.Control.Timeout)*time.Second, func(paramsIn ...any) (map[string]any, error) {
+			_, err := ac.execThisAction(execCtx, keyPrefix, linkChar, inputParams)
+			if err != nil {
+				return nil, err
+			}
+			return nil, nil
+		})
+		if err != nil {
+			return inputParams, err
+		}
+		return inputParams, nil
+	}
+	return ac.execThisAction(execCtx, keyPrefix, linkChar, inputParams)
+}
+
+func (ac *Activity) getActionKeyAndParamKey(keyPrefix, linkChar string, inputParams map[string]any) (string, string) {
+	actionKey := ""
+	paramKey := ""
+	if ac.Control.CacheTime > 0 || ac.Control.CtxCacheable {
+		actionKey = ac.getResponseStoreKey(keyPrefix, linkChar)
+		var err error
+		paramKey, err = ac.getActionParamKeyId(inputParams)
+		if err != nil {
+			log.Println("execThisAction getActionParamKeyId error:", err.Error())
+		}
+		log.Println("[Execute ActionKey]", actionKey, paramKey)
+	}
+	return actionKey, paramKey
+
+}
+func (ac *Activity) execThisAction(execCtx context.Context, keyPrefix, linkChar string, inputParams map[string]any) (map[string]any, error) {
+	actionKey, paramKey := ac.getActionKeyAndParamKey(keyPrefix, linkChar, inputParams)
+
+	if ac.Control.CtxCacheable {
+		// 是否使用流程级缓存，避免始终缓存结果
+		execCtx = WithFlowCache(execCtx)
+		if cachedResult, found := getFlowCacheResult(execCtx, actionKey, paramKey); found {
+			log.Println("[Execute Cache Hit] Using cached result for:", actionKey)
+			return cachedResult, nil
+		}
+	}
+
+	if ac.Control.CacheTime > 0 {
+		activityLock.Lock()
+		//是否有缓存
+		actionResult, err := cache.NsGet[map[string]any](execCtx, activityCache, actionKey, paramKey)
+		activityLock.Unlock()
+		if len(actionResult) > 0 && err == nil {
+			return actionResult, nil
+		}
+	}
+
+	{ //执行depends
+		var err error
+		inputParams, err = ac.executeAllDependencies(execCtx, inputParams)
+		if err != nil {
+			return inputParams, err
+		}
+	}
+
+	if ac.Control.When != "" {
+		var checkBool bool
+		var err error
+		checkBool, inputParams, err = ac.execThisWhen(inputParams)
+		log.Print("execThisAction execThisWhen:", checkBool, conv.String(inputParams), err)
+		if err != nil {
+			return inputParams, fmt.Errorf("条件解析失败 when: %s error: %w, ", ac.Control.When, err)
+		}
+		if !checkBool {
+			return inputParams, nil
+		}
+	}
+
+	if ac.Activity == "" { // 当前不用执行该Activity
+		return inputParams, nil
+	}
+
+	actionFun, err := action.GetAction(ac.Namespace, ac.Activity)
+	if err != nil {
+		return inputParams, err
+	}
+
+	retData, err := ac.executeByHookEvent(execCtx, linkChar, LifecycleEventOnStart, inputParams)
+	if err != nil {
+		return inputParams, err
+	}
+
+	if len(retData) > 0 {
+		inputParams = tools.MergeNewArguments(inputParams, retData)
+	}
+
+	var actionFunParam = ac.getActionParam(inputParams)
+
+	execRetData, err := actionFun.Execute(execCtx, actionFunParam)
+	resultMap := ac.createResponse(keyPrefix, linkChar, actionFun, actionFunParam, execRetData)
+
+	log.Println("[Execute Return]", conv.String(resultMap))
+	log.Println("[Execute Error]", err)
+
+	var onErr error
+
+	retData, onErr = ac.executeByHookEvent(execCtx, linkChar, LifecycleEventOnComplete, inputParams)
+	if onErr == nil {
+		if len(retData) > 0 {
+			resultMap = tools.MergeNewArguments(resultMap, retData)
+		}
+	}
+	if err != nil {
+		retData, onErr = ac.executeByHookEvent(execCtx, linkChar, LifecycleEventOnError, inputParams)
+		if onErr == nil {
+			if len(retData) > 0 {
+				resultMap = tools.MergeNewArguments(resultMap, retData)
+			}
+		}
+		return resultMap, err
+	}
+
+	// 需要缓存该执行对象
+	if ac.Control.CacheTime > 0 {
+		activityLock.Lock()
+		_, _ = cache.NsSet[map[string]any](execCtx, activityCache, actionKey, paramKey, resultMap, time.Duration(ac.Control.CacheTime)*time.Second)
+		activityLock.Unlock()
+	}
+
+	// 缓存该执行结果到流程级别的缓存中
+	if ac.Control.CtxCacheable {
+		setFlowCacheResult(execCtx, actionKey, paramKey, resultMap)
+		log.Println("[Execute Cache Set] Cached result for:", actionKey)
+	}
+
+	retData, onErr = ac.executeByHookEvent(execCtx, linkChar, LifecycleEventOnSuccess, inputParams)
+	if onErr == nil {
+		if len(retData) > 0 {
+			resultMap = tools.MergeNewArguments(resultMap, retData)
+		}
+	}
+	resultMap = tools.MergeNewArguments(resultMap, inputParams)
+	return resultMap, nil
+}
+func (ac *Activity) execThisWhen(inputParams map[string]any) (bool, map[string]any, error) {
+	ruleExpr := templates.NewRuleExprEngine()
+	checkResult, err := ruleExpr.RunString(ac.Control.When, inputParams)
+	if err != nil {
+		return false, inputParams, fmt.Errorf("条件: %s", ac.Control.When)
+	}
+	resultBool, err := conv.Convert[bool](checkResult)
+	if err != nil {
+		return false, inputParams, fmt.Errorf("条件解析返回不是bool: %s, %w", ac.Control.When, err)
+	}
+	return resultBool, inputParams, nil
+}
+
+func (ac *Activity) makeInputMap(arguments map[string]any) map[string]any {
+	args := tools.CloneMap(arguments)
+
+	//2、将是自己id的参数覆盖进来
+	if ac.Id != "" {
+		if oneParam, ok := args[ac.Id]; ok {
+			if oneParamMap, ok1 := oneParam.(map[string]any); ok1 {
+				args = lo.Assign(args, oneParamMap)
+			}
+		}
+	}
+
+	// 本身的参数列表是否包含
+	//3、activity中自定义进行覆盖，主要是将前面流程的参数和返回值加到里面
+	args = param.MergeArgumentsByBinding(args, ac.Arguments)
+
+	//4、如果有变量，则进行覆盖
+	ruleExpr := templates.NewRuleExprEngine()
+	checkResult, _ := ruleExpr.RunString(conv.String(args), args)
+	newArgs, _ := conv.Convert[map[string]any](checkResult)
+	if len(newArgs) > 0 {
+		args = lo.Assign(args, newArgs)
+	}
+	return args
+}
+
+// ExecuteByHookEvent 检查控制条件是否满足（简化实现，实际可集成表达式引擎）
+func (ac *Activity) executeByHookEvent(ctx context.Context, linkChar string, event LifecycleEvent, args map[string]any) (map[string]any, error) {
+	if len(ac.Hooks) == 0 {
+		return nil, nil
+	}
+	if oneAct, ok := ac.Hooks[event]; ok {
+		if oneAct.Id == "" && ac.Id != "" {
+			oneAct.Id = ac.Id + linkChar + string(event)
+		}
+		return oneAct.Execute(ctx, args)
+	}
+	return nil, nil
+}
+
+// ExtendActivity 将replaceActivity的参数和返回值，覆盖到originActivity中
+func (ac *Activity) ExtendActivity(originActivity *Activity, replaceActivity *Activity) (*Activity, error) {
+	// 默认设置参数
+	ac.initArguments()
+
+	if replaceActivity == nil && originActivity == nil {
+		return nil, fmt.Errorf("extendActivity param all is nil")
+	}
+	if originActivity == nil {
+		return replaceActivity, nil
+	}
+	if replaceActivity == nil {
+		return originActivity, nil
+	}
+
+	result := &Activity{
+		Id:          originActivity.Id,
+		Name:        originActivity.Name,
+		Namespace:   originActivity.Namespace,
+		Activity:    originActivity.Activity,
+		Arguments:   originActivity.Arguments,
+		ArgTemplate: originActivity.ArgTemplate,
+		Responses:   originActivity.Responses,
+		DependsOn:   originActivity.DependsOn,
+		Hooks:       originActivity.Hooks,
+		Control:     originActivity.Control,
+	}
+
+	if result.Id == "" && replaceActivity.Id != "" {
+		result.Id = replaceActivity.Id
+	}
+	if result.Name == "" && replaceActivity.Name != "" {
+		result.Name = replaceActivity.Name
+	}
+	if result.Namespace == "" && replaceActivity.Namespace != "" {
+		result.Namespace = replaceActivity.Namespace
+	}
+	if result.Activity == "" && replaceActivity.Activity != "" {
+		result.Activity = replaceActivity.Activity
+	}
+
+	newArguments := make([]*param.BindConfig, 0)
+	if len(replaceActivity.Arguments) > 0 {
+		lo.ForEach(replaceActivity.Arguments, func(item *param.BindConfig, index int) {
+			newArguments = append(newArguments, item)
+		})
+	}
+	if len(result.Arguments) > 0 {
+		lo.ForEach(result.Arguments, func(item *param.BindConfig, index int) {
+			found := false
+			lo.ForEachWhile(newArguments, func(item2 *param.BindConfig, index2 int) bool {
+				if item2.Key == item.Key {
+					found = true
+					newArguments[index2] = item
+					return false
+				}
+				return true
+			})
+			if !found {
+				newArguments = append(newArguments, item)
+			}
+		})
+	}
+	result.Arguments = newArguments
+
+	if result.ArgTemplate == "" && replaceActivity.ArgTemplate != "" {
+		result.ArgTemplate = replaceActivity.ArgTemplate
+	}
+	if len(replaceActivity.Responses) > 0 {
+		if result.Responses == nil {
+			result.Responses = replaceActivity.Responses
+		} else {
+			result.Responses = lo.Assign(result.Responses, replaceActivity.Responses)
+		}
+	}
+	if result.DependsOn == nil && replaceActivity.DependsOn != nil {
+		result.DependsOn = replaceActivity.DependsOn
+	}
+	if result.Hooks == nil && replaceActivity.Hooks != nil {
+		result.Hooks = replaceActivity.Hooks
+	}
+
+	result.Control = ac.extendActivityControl(originActivity.Control, replaceActivity.Control)
+
+	return result, nil
+}
+
+func (ac *Activity) extendActivityControl(origin ActivityControl, replace ActivityControl) ActivityControl {
+	result := ActivityControl{
+		When:          origin.When,
+		Timeout:       origin.Timeout,
+		CacheTime:     origin.CacheTime,
+		CtxCacheable:  origin.CtxCacheable,
+		DelayDuration: origin.DelayDuration,
+	}
+
+	if result.When == "" && replace.When != "" {
+		result.When = replace.When
+	}
+	if result.Timeout == 0 && replace.Timeout != 0 {
+		result.Timeout = replace.Timeout
+	}
+	if result.CacheTime == 0 && replace.CacheTime != 0 {
+		result.CacheTime = replace.CacheTime
+	}
+	if !result.CtxCacheable && replace.CtxCacheable {
+		result.CtxCacheable = replace.CtxCacheable
+	}
+	if result.DelayDuration == 0 && replace.DelayDuration != 0 {
+		result.DelayDuration = replace.DelayDuration
+	}
+
+	return result
+}
