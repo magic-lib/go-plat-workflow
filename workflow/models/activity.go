@@ -8,6 +8,20 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow"
 )
 
+// normalizeJSONRaw 将 json.RawMessage 归一化为可持久化的字符串。
+// 当值为 nil、空字节或 JSON 的 null 字面量时，返回空字符串，
+// 避免 json.Marshal(nil) 产生 "null" 字符串写入数据库。
+func NormalizeJSONRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return ""
+	}
+	return s
+}
+
 // ActivityModel activity 模板持久化模型，对应 wf_activities 表。
 type ActivityModel struct {
 	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
@@ -71,9 +85,9 @@ func (m *ActivityModel) FromDef(def *workflow.ActivityDef) {
 		m.Kind = def.Kind
 	}
 	m.HTTPConfig = def.HTTPConfig
-	m.Arguments = string(def.Arguments)
+	m.Arguments = NormalizeJSONRaw(def.Arguments)
 	m.ArgTemplate = def.ArgTemplate
-	m.Responses = string(def.Responses)
+	m.Responses = NormalizeJSONRaw(def.Responses)
 	m.Status = def.Status
 	m.Description = def.Description
 	m.Tags = serializeTags(def.Tags)

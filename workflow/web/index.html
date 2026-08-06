@@ -2198,7 +2198,7 @@ function renderActivityTable(list) {
     }
     return `<tr>
       <td><span class="code-cell">${escHtml(a.activity_id)}</span></td>
-      <td>${testIcon}${escHtml(a.name)}${hasActivityEnvSelected ? heartbeatBarHtml(a.heartbeat) : ''}</td>
+      <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span></td>
       <td>${tagsHtml}</td>
       <td><span class="code-cell">${escHtml(a.act_namespace)}</span></td>
       <td><span class="code-cell">${escHtml(a.act_name)}</span></td>
@@ -2243,18 +2243,16 @@ function changeActivityPage(delta) {
   renderActivityTable(list);
 }
 
-// 根据心跳信息渲染进度条：≥90% 绿，≥60% 黄，≥30% 橙，<30% 红；无数据不显示。
-function heartbeatBarHtml(hb) {
+// 根据心跳信息渲染心跳图标（♥）：≥90% 绿，≥60% 黄，≥30% 橙，<30% 红；无数据不显示。
+// 仅保留图标，不显示长条进度条。
+function heartbeatIconHtml(hb) {
   if (!hb || typeof hb.ratio !== 'number') return '';
   const pct = Math.round(hb.ratio * 100);
   let cls = 'red';
   if (hb.ratio >= 0.9) cls = 'green';
   else if (hb.ratio >= 0.6) cls = 'yellow';
   else if (hb.ratio >= 0.3) cls = 'orange';
-  return `<div class="hb-wrap" title="最近1分钟心跳存活比例 ${pct}%（${hb.count} 次）">
-    <div class="hb-bar"><div class="hb-fill ${cls}" style="width:${pct}%"></div></div>
-    <span class="hb-heart ${cls}">&#10084;</span>
-  </div>`;
+  return `<span class="hb-heart ${cls}" title="最近1分钟心跳存活比例 ${pct}%（${hb.count} 次）">&#10084;</span>`;
 }
 
 // 打开 activity 编辑弹窗
