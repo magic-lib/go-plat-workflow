@@ -3,6 +3,8 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/cond"
+	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"strconv"
 	"sync"
@@ -254,8 +256,26 @@ func eventIdOf(event *mq.Event) string {
 	return event.Id
 }
 
-// RequestActivity 订阅指定 topic 并注册处理函数。
-func (w *MQWorker) RequestActivity(ctx context.Context, actNamespace, actName string, params any) (*httputil.CommResponse, error) {
+func (w *MQWorker) requestOneActivityParams(actDef *ActivityDef, params any) (any, error) {
+	if actDef.ArgTemplate == "" {
+		return params, nil
+	}
+	var argAny = params
+	ruleExpr := templates.NewRuleExprEngine()
+	newArgs, err := ruleExpr.RunString(actDef.ArgTemplate, params)
+	if err != nil {
+		return nil, err
+	}
+	if cond.IsJsonMap(conv.String(newArgs)) {
+		var argMap map[string]any
+		_ = conv.Unmarshal(newArgs, &argMap)
+		argAny = argMap
+	} else {
+		argAny = newArgs
+	}
+	return argAny, nil
+}
+func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName string, params any) (*httputil.CommResponse, error) {
 	methodTopic := getActivityTopic(actNamespace, actName)
 	resp, err := w.mqClient.Request(ctx, &mq.Event{
 		Topic:   methodTopic,
@@ -273,6 +293,43 @@ func (w *MQWorker) RequestActivity(ctx context.Context, actNamespace, actName st
 		resp.Params = ev
 	}
 	return resp, nil
+}
+
+func (w *MQWorker) requestOneActivityResponse(actDef *ActivityDef, resp *httputil.CommResponse) (*httputil.CommResponse, error) {
+	if len(actDef.Responses) == 0 {
+		return resp, nil
+	}
+
+	retString := string(actDef.Responses)
+	ruleExpr := templates.NewRuleExprEngine()
+	newRets, err := ruleExpr.RunString(retString, resp.Data)
+	if err != nil {
+		return nil, err
+	}
+	if cond.IsJsonMap(conv.String(newRets)) {
+		var argMap map[string]any
+		_ = conv.Unmarshal(newRets, &argMap)
+		resp.Data = argMap
+	} else {
+		resp.Data = newRets
+	}
+	return resp, nil
+}
+
+// RequestActivity 订阅指定 topic 并注册处理函数。
+func (w *MQWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, params any) (*httputil.CommResponse, error) {
+	if actDef.ActNamespace == "" || actDef.ActName == "" {
+		return nil, fmt.Errorf("act_namespace and act_name are required")
+	}
+	argAny, err := w.requestOneActivityParams(actDef, params)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := w.requestOneActivity(ctx, actDef.ActNamespace, actDef.ActName, argAny)
+	if err != nil {
+		return nil, err
+	}
+	return w.requestOneActivityResponse(actDef, resp)
 }
 
 // Stop 停止消费端，并清理心跳协程与 redis 连接。

@@ -21,7 +21,10 @@ func TestMQWorkerRequest(t *testing.T) {
 		panic(err)
 	}
 	defer w.Stop()
-	data, err := w.RequestActivity(context.Background(), "credit-server", "credit_order_status", map[string]any{
+	data, err := w.RequestActivity(context.Background(), &workflow.ActivityDef{
+		ActNamespace: "credit-server",
+		ActName:      "credit_order_status",
+	}, map[string]any{
 		"audit_order_id": 555,
 	})
 	if err != nil {

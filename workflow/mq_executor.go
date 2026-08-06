@@ -133,21 +133,21 @@ func (e *MQExecutor) TestNode(ctx context.Context, payload *TestNodePayload, red
 //   - topic 为 activity/{actNamespace}/{actName}，与分布式 worker 端 SubscribeActivity 订阅的 topic 一致
 //
 // 流程：根据环境 Redis 配置构建连接 -> 创建 MQWorker -> 调用 RequestActivity 同步等待远程监听程序执行。
-func (e *MQExecutor) RequestActivity(ctx context.Context, project, env, actNamespace, actName string, params any, redisCfg *RedisConfig) (*httputil.CommResponse, error) {
-	if actNamespace == "" || actName == "" {
+func (e *MQExecutor) RequestActivity(ctx context.Context, env string, actDef *ActivityDef, params any, redisCfg *RedisConfig) (*httputil.CommResponse, error) {
+	if actDef.ActNamespace == "" || actDef.ActName == "" {
 		return nil, fmt.Errorf("act_namespace and act_name are required")
 	}
 	c, err := buildConnect(redisCfg)
 	if err != nil {
 		return nil, err
 	}
-	worker, err := NewMQWorker(project, env, c)
+	worker, err := NewMQWorker(actDef.Project, env, c)
 	if err != nil {
 		return nil, err
 	}
 	defer worker.Stop()
 
-	return worker.RequestActivity(ctx, actNamespace, actName, params)
+	return worker.RequestActivity(ctx, actDef, params)
 }
 
 // RunNodeForCondSwitch 本地执行 condSwitch 类型节点。

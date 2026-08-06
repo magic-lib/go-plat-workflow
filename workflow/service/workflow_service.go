@@ -6,8 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
-	"github.com/magic-lib/go-plat-utils/cond"
-	"github.com/magic-lib/go-plat-utils/templates"
 	"io"
 	"net/http"
 	"regexp"
@@ -912,23 +910,7 @@ func (s *WorkflowService) TestActivity(ctx context.Context, req *TestActivityReq
 	//    - 命名空间/活动名（act_namespace/act_name）从 activity 配置获取
 	//    - 测试参数（InputParams）来自前端传入
 	//    - topic 为 activity/{actNamespace}/{actName}，与远程 worker 端 SubscribeActivity 订阅一致
-	var argAny any = req.InputParams
-	if actDef.ArgTemplate != "" {
-		ruleExpr := templates.NewRuleExprEngine()
-		newArgs, err := ruleExpr.RunString(actDef.ArgTemplate, req.InputParams)
-		if err != nil {
-			return nil, err
-		}
-		if cond.IsJsonMap(conv.String(newArgs)) {
-			var argMap map[string]any
-			_ = conv.Unmarshal(newArgs, &argMap)
-			argAny = argMap
-		} else {
-			argAny = newArgs
-		}
-	}
-
-	resp, err := s.mqExecutor.RequestActivity(ctx, req.Project, req.EnvName, actDef.ActNamespace, actDef.ActName, argAny, redisCfg)
+	resp, err := s.mqExecutor.RequestActivity(ctx, req.EnvName, actDef, req.InputParams, redisCfg)
 
 	// 6. 整理结果
 	result := &TestActivityResult{}
