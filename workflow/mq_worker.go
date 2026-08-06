@@ -6,6 +6,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -291,6 +292,9 @@ func (w *MQWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 	retString := ""
 	if len(actDef.Responses) > 0 {
 		retString = string(actDef.Responses)
+		if strings.ToLower(retString) == "null" {
+			retString = ""
+		}
 	}
 	data, err := ruleEngine.RenderObject(retString, resp.Data)
 	if err != nil {
