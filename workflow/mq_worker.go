@@ -280,7 +280,7 @@ func (w *MQWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 		return nil, fmt.Errorf("act_namespace and act_name are required")
 	}
 	ruleEngine := templates.NewRuleExprEngine()
-	argAny, err := ruleEngine.RenderExpr(actDef.ArgTemplate, params)
+	argAny, err := ruleEngine.RenderObject(actDef.ArgTemplate, params)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +292,7 @@ func (w *MQWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 	if len(actDef.Responses) > 0 {
 		retString = string(actDef.Responses)
 	}
-	data, err := ruleEngine.RenderExpr(retString, resp.Data)
+	data, err := ruleEngine.RenderObject(retString, resp.Data)
 	if err != nil {
 		return nil, err
 	}
