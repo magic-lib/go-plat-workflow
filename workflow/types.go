@@ -130,7 +130,8 @@ type NodeDef struct {
 	Params json.RawMessage `json:"params,omitempty"`
 	// Outputs 节点返回值定义（出参），描述执行该节点后能得到哪些值，供下游节点引用。
 	// 格式如 [{"key":"name","label":"用户名","type":"string","description":"查询出的用户名称"}]
-	Outputs json.RawMessage `json:"outputs,omitempty"`
+	// 注意：不使用 omitempty，否则空数组/空值会被 json 序列化跳过，导致保存后读取不到、编辑回显丢失。
+	Outputs json.RawMessage `json:"outputs"`
 	// Kind 节点分类：condition（查询获取类）/ action（策略执行类）
 	// condition 类节点可在连接中选择 True/False 分支，action 类仅 Success/Failure
 	Kind string `json:"kind,omitempty"`
@@ -544,6 +545,9 @@ type ActivityDef struct {
 	ArgTemplate string `json:"arg_template,omitempty"`
 	// Responses 自定义返回值映射，JSON 格式
 	Responses json.RawMessage `json:"responses,omitempty"`
+	// ReturnValues 返回值设置列表（每一项从活动返回值 map 中提取指定 key 重命名输出）。
+	// 若某一项 Key 为空，表示该返回值项返回活动返回的所有内容。
+	ReturnValues json.RawMessage `json:"return_values,omitempty"`
 	// Status 状态：1=启用，0=禁用
 	Status int8 `json:"status"`
 	// Description 描述
@@ -560,6 +564,29 @@ type ActivityDef struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// ActivityReturnValue 返回值设置项。
+// 用于从活动返回值（map）中提取指定 key 重命名为返回值名称输出。
+//   - Name 返回值名称（必填），作为下游引用时的标识。
+//   - Key 从返回值 map 中取值的 key。为空表示返回活动返回的所有内容；
+//     非空表示从返回值 map 中取对应 key 的值。
+//     可选值来源于测试成功记录的返回结果 map 中所有的 key。
+type ActivityReturnValue struct {
+	// Name 返回值名称（必填）
+	Name string `json:"name"`
+	// Key 取值 key；空表示返回全部内容
+	Key string `json:"key,omitempty"`
+	// Type 返回值类型，用于输出时做格式转换。常用取值：string/number/boolean/array/object/json。
+	// 空表示不做转换（保持原值）。
+	Type string `json:"type,omitempty"`
+}
+
+type ActivityLogValue struct {
+	RootChainID string         `json:"root_chain_id"`
+	TraceID     string         `json:"trace_id"`
+	SpanID      string         `json:"span_id"`
+	Attributes  map[string]any `json:"attributes"`
+}
+
 // ActivityStore activity 模板仓储接口。
 type ActivityStore interface {
 	// Create 创建 activity
@@ -574,6 +601,108 @@ type ActivityStore interface {
 	Delete(ctx context.Context, project, activityID string) error
 	// NextActivityID 生成下一个 activity 自动 ID（如 A000001）
 	NextActivityID(ctx context.Context) (string, error)
+}
+
+// ============================================================
+// Node 内多 Activity 编排（方案 A：仅在单个 activity 类型节点内部执行）
+// ============================================================
+
+// Activity 执行模式：并行 / 串行。
+// 用于 activity 类型节点内部编排多个 activity 时，声明每个 activity 相对前一个节点的执行方式。
+const (
+	// ActivityModeParallel 并行：与前一个已完成的节点（或上游）同时发起执行。
+	// 首个元素前的并行元素会与首个元素一起并发执行。
+	ActivityModeParallel = "parallel"
+	// ActivityModeSerial 串行：等前一个元素执行完成后再顺序执行。
+	ActivityModeSerial = "serial"
+)
+
+// ActivityItemDef 单个 activity 编排项，对应 activity 类型节点内部编排列表（二维 stages）中的一项。
+// 与 ActivityDef 的区别：这里只描述「在哪个 namespace 下执行哪个 activity」以及参数绑定，
+// 参数/返回值映射等复用所选 activity 模板（ActNamespace+ActName 唯一确定一个 activity 模板）。
+//
+// 二维编排模型（与 commnode.ActivityNode 的 stages 一致）：
+//   - 外层数组（stages）按序「串行」执行；
+//   - 内层数组（同一 stage）内的多个 activity「并行」执行；
+//   - 后续 stage / 后续 activity 的参数可引用前面 activity 的返回值（{{id.responses}}），
+//     或引用节点参数定义（{{node_param_key}}）。
+type ActivityItemDef struct {
+	// ActNamespace 活动命名空间（对应 action.RegisterActor 的 Namespace）。
+	ActNamespace string `json:"act_namespace"`
+	// ActName 活动名称（对应 action.RegisterActor 的 Action 名称）。
+	ActName string `json:"act_name"`
+	// Mode 已废弃：并行/串行改由二维 stages 结构表达（外层串行、内层并行），前端不再使用此字段。
+	// Deprecated: 使用 NodeActivityConfig.Stages 二维数组替代。
+	Mode string `json:"mode,omitempty"`
+	// Name 展示名称（可选，方便 UI 识别，不入库逻辑使用）。
+	Name string `json:"name,omitempty"`
+	// Args 参数绑定：key 为 activity 的参数名（对应 arguments 中的 key），value 描述该参数的值来源。
+	// 可选；为空时 worker 使用 activity 模板中的默认参数值。
+	Args map[string]ActivityArgBind `json:"args,omitempty"`
+}
+
+// ActivityArgBind 单个 activity 参数的取值绑定。
+//   - Source="value"：使用 Value 作为固定值（可填空字符串表示用 activity 模板默认值）。
+//   - Source="ref_act"：引用本节点中「排在当前 activity 之前」的某个 activity 的输出（返回值或参数值），
+//     Ref 为引用路径，形如 {{id.responses}} / {{id.responses.field}} / {{id.arguments.key}}（id 为前序 activity 实例 id）。
+//   - Source="ref_node"：引用本节点参数定义中的某个 key，Ref 形如 {{node_param_key}}。
+type ActivityArgBind struct {
+	// Source 值来源："value"（固定值，默认）、"ref_act"（引用前序 activity）、"ref_node"（引用本节点参数）。
+	Source string `json:"source,omitempty"`
+	// Value 固定值来源时填写。
+	Value string `json:"value,omitempty"`
+	// Ref 引用来源时的引用路径（见 ActivityArgBind 注释中的语法）。
+	Ref string `json:"ref,omitempty"`
+}
+
+// ActivityArgSourceValue 固定值来源标识。
+const ActivityArgSourceValue = "value"
+
+// ActivityArgSourceRefAct 引用前序 activity 输出（返回值/参数值）来源标识。
+const ActivityArgSourceRefAct = "ref_act"
+
+// ActivityArgSourceRefNode 引用本节点参数定义来源标识。
+const ActivityArgSourceRefNode = "ref_node"
+
+// ActivityRefPathPrefix 引用路径语法：以 "{{" 开头、以 "}}" 结尾，中间为引用表达式。
+// 引用表达式语法（与 commnode.ActivityNode 内部执行模型一致）：
+//   - {{id}}                前序 activity 实例 id 的返回值整体（等价 {{id.responses}}）
+//   - {{id.responses}}      前序 activity 返回值整体
+//   - {{id.responses.field}} 前序 activity 返回值内的某个字段
+//   - {{id.arguments.key}}  前序 activity 被传入的参数值内的某个字段
+//   - {{node_param_key}}   本节点参数定义中的某个 key（运行时作为消息 data 的顶层 key）
+//
+// 内部执行结构（公共约定 / 运行时数据模型）：
+// 每个 activity 执行后，其运行时上下文以「实例 id」为键暴露在共享变量空间 paramx.ParamCtx 中，
+// 结构等价于：
+//
+//	map[instanceId]struct{
+//	    responses map[string]any // 该 activity 的返回值（整体可用 {{id.responses}}，单字段用 {{id.responses.field}}）
+//	    arguments map[string]any // 调用该 activity 时传入的参数值（单字段用 {{id.arguments.key}}）
+//	}
+//
+// 同时本节点参数定义（NodeDef.Params）以顶层 key 形式注入消息 data，供 {{node_param_key}} 引用。
+// 前序集合 = 按二维 stages 扁平顺序排在当前 activity 之前的所有 activity（外层串行，故其返回值已先就绪）。
+const ActivityRefPathPrefix = "{{"
+
+// NodeActivityConfig activity 类型节点的内部编排配置。
+// 约定存放在 NodeDef.Configuration.node_config.stages（二维数组）中。
+//   - 外层数组：串行执行的「阶段（stage）」；
+//   - 内层数组：同一阶段内「并行」执行的 activity 列表。
+//
+// 兼容旧结构：
+//   - 旧扁平数组 configuration.activities（含 mode）在读取时由前端转换为 stages；
+//   - 当 stages 为空且 node_config.act_namespace/act_name 存在时，worker 回退执行单个 activity。
+//
+// 引用语义（与 commnode.ActivityNode 一致，详见 ActivityRefPathPrefix 注释）：
+//   - 后续 activity 参数可引用前面 activity 的返回值或参数值，路径形如 {{id.responses.field}} / {{id.arguments.key}}；
+//   - 也可引用本节点参数定义，路径形如 {{node_param_key}}。
+//   - 重要约束：同一 stage 内的 activity 是「并行同时」执行的，彼此不可保证先后，故**不能互相引用**；
+//     只有「串行排在前面」的 stage 中的 activity 才可被引用（前端 prevActivitiesBefore 已按此约束过滤）。
+type NodeActivityConfig struct {
+	// Stages 二维编排：外层串行（阶段），内层并行（同阶段 activity）。
+	// 每个元素结构同 ActivityItemDef（含 act_namespace/act_name/id/arguments）。
+	Stages [][]ActivityItemDef `json:"stages"`
 }
 
 // ============================================================
@@ -665,6 +794,15 @@ type ActivityLogDef struct {
 	ErrorMsg string `json:"error_msg,omitempty"`
 	// Error 兼容 worker 上报的 "error" 字段名（采集时合并到 ErrorMsg）
 	Error string `json:"error,omitempty"`
+	// RootChainID 根链 ID，用于按根链聚合查询整个流程的日志
+	RootChainID string `json:"root_chain_id,omitempty"`
+	// TraceID 链路 ID（分布式追踪），用于串联一次完整执行的所有日志
+	TraceID string `json:"trace_id,omitempty"`
+	// SpanID 跨度 ID（分布式追踪），标识本次 activity 执行的跨度
+	SpanID string `json:"span_id,omitempty"`
+	// Attributes 动态附加属性（任意 JSON），用于存储与本次执行相关的自定义键值对，
+	// 例如业务维度标记、扩展上下文等，便于后续按属性检索或展示。
+	Attributes json.RawMessage `json:"attributes,omitempty"`
 	// CreatedAt 落库时间
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -681,6 +819,12 @@ type ActivityLogFilter struct {
 	EventID string `json:"event_id,omitempty"`
 	// Env 环境名精确匹配（如 dev/test/prod）
 	Env string `json:"env,omitempty"`
+	// RootChainID 根链 ID 精确匹配
+	RootChainID string `json:"root_chain_id,omitempty"`
+	// TraceID 链路 ID 精确匹配
+	TraceID string `json:"trace_id,omitempty"`
+	// SpanID 跨度 ID 精确匹配
+	SpanID string `json:"span_id,omitempty"`
 	// Keyword 关键词模糊匹配 payload/result/error_msg
 	Keyword string `json:"keyword,omitempty"`
 	// Start 时间范围起点（unix 秒，包含）

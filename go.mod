@@ -8,6 +8,8 @@ require (
 	github.com/redis/go-redis/v9 v9.14.1
 	github.com/rs/zerolog v1.35.1
 	github.com/rulego/rulego v0.36.0
+	github.com/samber/lo v1.52.0
+	go.uber.org/multierr v1.11.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.1
 )
@@ -99,7 +101,6 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rs/xid v1.6.0 // indirect
-	github.com/samber/lo v1.52.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/soniah/evaler v2.2.0+incompatible // indirect
 	github.com/sony/sonyflake v1.2.0 // indirect
@@ -121,7 +122,6 @@ require (
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect

@@ -50,6 +50,10 @@ type activityLogRecord struct {
 	Payload      any    `json:"payload,omitempty"`
 	Result       any    `json:"result,omitempty"`
 	Error        string `json:"error,omitempty"`
+	RootChainID  string `json:"root_chain_id,omitempty"`
+	TraceID      string `json:"trace_id,omitempty"`
+	SpanID       string `json:"span_id,omitempty"`
+	Attributes   any    `json:"attributes,omitempty"`
 }
 
 // MQWorker 分布式任务执行端（worker）。
@@ -142,16 +146,16 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	mqHandler := func(ctx context.Context, event *mq.Event) (any, error) {
 		start := time.Now()
 		// 执行前记一条 info 日志
-		w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), 0, event.Payload, nil, "")
+		w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), 0, event.Payload, nil, "", "", nil)
 
 		resp, herr := handler(ctx, event.Payload)
 
 		durationMs := time.Since(start).Milliseconds()
 		if herr != nil {
 			// 执行失败记一条 error 日志
-			w.pushActivityLog(actNamespace, actName, event, "error", start.Unix(), durationMs, event.Payload, nil, herr.Error())
+			w.pushActivityLog(actNamespace, actName, event, "error", start.Unix(), durationMs, event.Payload, nil, herr.Error(), "", nil)
 		} else {
-			w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), durationMs, event.Payload, resp, "")
+			w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), durationMs, event.Payload, resp, "", "", nil)
 		}
 		return resp, herr
 	}
@@ -219,10 +223,23 @@ func (w *MQWorker) reportHeartbeatOnce() {
 	_ = w.redisCli.Expire(context.Background(), key, heartbeatInterval*3).Err()
 }
 
-// pushActivityLog 向 redis list 推送一条 activity 执行日志（服务端消费后落库）
-func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event, level string, ts, durationMs int64, payload, result any, errMsg string) {
+// pushActivityLog 向 redis list 推送一条 activity 执行日志（服务端消费后落库）。
+// rootChainID 为根链 ID（可为空）；attributes 为动态附加属性（任意可序列化对象，可为 nil）。
+// trace_id / span_id 优先从 event.Headers 中的 Trace-Id / Span-Id 提取（worker 发送时已注入）。
+func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event, level string, ts, durationMs int64, payload, result any, errMsg, rootChainID string, attributes any) {
 	if w.redisCli == nil {
 		return
+	}
+	traceID := ""
+	spanID := ""
+	if event != nil && event.Headers != nil {
+		traceID = event.Headers.Get("Trace-Id")
+		spanID = event.Headers.Get("Span-Id")
+	}
+	// root_chain_id 兜底：外部未显式传入时，用触发本次执行的 event.Id 作为根链 ID，
+	// 保证单 activity 调用场景下也能按链路聚合查询（上游后续可经 Headers.Root-Chain-Id 注入真实值覆盖）。
+	if rootChainID == "" && event != nil && event.Id != "" {
+		rootChainID = event.Id
 	}
 	rec := activityLogRecord{
 		Project:      w.project,
@@ -236,6 +253,10 @@ func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event
 		Payload:      payload,
 		Result:       result,
 		Error:        errMsg,
+		RootChainID:  rootChainID,
+		TraceID:      traceID,
+		SpanID:       spanID,
+		Attributes:   attributes,
 	}
 	key := activityLogKeyPrefix + getMQNamespace(w.project, w.env)
 	pipe := w.redisCli.Pipeline()
@@ -300,6 +321,7 @@ func (w *MQWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 	if err != nil {
 		return nil, err
 	}
+	// 需要对返回值类型进行判断，然后进行转换
 	resp.Data = data
 	return resp, nil
 }

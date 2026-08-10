@@ -78,7 +78,9 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 /* Modal */
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; justify-content: center; align-items: flex-start; padding-top: 60px; }
 .modal-overlay.show { display: flex; }
-.modal { background: var(--card-bg); border-radius: 12px; padding: 28px; width: 680px; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,.15); }
+.modal { background: var(--card-bg); border-radius: 12px; padding: 28px; width: 820px; max-height: 82vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,.15); }
+/* 加宽弹窗（如 Node 编辑/添加）：更宽的排版空间 */
+.modal.wide { width: 1040px; max-width: 96vw; max-height: 88vh; }
 .modal h2 { font-size: 1.25rem; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
 .modal-close { background: none; border: none; font-size: 1.4rem; color: var(--text-muted); cursor: pointer; padding: 0 4px; line-height: 1; border-radius: 4px; transition: all .15s; }
 .modal-close:hover { color: var(--danger); background: #fee2e2; }
@@ -417,11 +419,20 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
         </div>
       </div>
       <div class="form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <label>返回值设置 (ReturnValues) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（从活动返回值 map 中提取指定 key 重命名输出；key 留空表示返回全部内容）</span></label>
+          <button class="btn btn-sm btn-outline" onclick="addReturnValueRow()" type="button">+ 添加返回值</button>
+        </div>
+        <div id="act-return-values-container" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+          <div id="act-return-values-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无返回值设置</div>
+        </div>
+      </div>
+      <div class="form-group">
         <label>参数模板 (ArgTemplate，可选) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">支持 {{id.responses.field}} 语法</span></label>
         <input id="act-arg-template" placeholder='{"name": "{{$.responses.name}}"}'>
       </div>
       <div class="form-group">
-        <label>返回值映射 (Responses JSON，可选)</label>
+        <label>返回值模版 (Responses JSON，可选)</label>
         <textarea id="act-responses" placeholder='{"user_id": "id"}'></textarea>
       </div>
       <div class="form-group">
@@ -442,7 +453,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
   <!-- 复制 Activity 弹窗 -->
   <div class="modal-overlay" id="copy-act-overlay">
-    <div class="modal" id="copy-act-modal" style="width:760px;max-width:96vw">
+    <div class="modal" id="copy-act-modal" style="width:880px;max-width:96vw">
       <h2>从其它项目复制 Activity<button class="modal-close" onclick="closeCopyActivityModal()" title="关闭">&times;</button></h2>
       <div class="form-row" style="align-items:flex-end">
         <div class="form-group" style="flex:1">
@@ -471,7 +482,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
   <!-- Activity 远程监听代码示例弹窗 -->
   <div class="modal-overlay" id="act-listener-overlay">
-    <div class="modal" id="act-listener-modal" style="width:760px;max-width:96vw">
+    <div class="modal" id="act-listener-modal" style="width:880px;max-width:96vw">
       <h2 id="act-listener-title">远程监听代码<button class="modal-close" onclick="closeActivityListenerCode()" title="关闭">&times;</button></h2>
       <div class="form-row">
         <div class="form-group">
@@ -754,7 +765,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 <!-- Node Modal -->
 <div class="modal-overlay" id="node-modal-overlay">
-  <div class="modal" id="node-modal">
+  <div class="modal wide" id="node-modal">
     <h2 id="node-modal-title">新增 Node<button class="modal-close" onclick="closeNodeModal()" title="关闭">&times;</button></h2>
     <input type="hidden" id="node-is-edit">
     <input type="hidden" id="node-node-id">
@@ -768,42 +779,36 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
       <div class="form-group">
         <label>类型 *</label>
         <select id="node-type" onchange="onNodeTypeChange()">
-          <option value="log">log</option>
-          <option value="jsTransform">jsTransform</option>
-          <option value="jsFilter">jsFilter</option>
-          <option value="condSwitch">condSwitch（条件判断，仅做语法条件判断）</option>
-          <option value="jsSwitch">jsSwitch</option>
-          <option value="restApiCall">restApiCall</option>
-          <option value="mqttClient">mqttClient</option>
-          <option value="kafkaProducer">kafkaProducer</option>
-          <option value="redisClient">redisClient</option>
-          <option value="dbClient">dbClient</option>
-          <option value="rpcCall">rpcCall</option>
-          <option value="grpcCall">grpcCall</option>
-          <option value="delay">delay</option>
-          <option value="transform">transform</option>
-          <option value="msgTypeSwitch">msgTypeSwitch</option>
-          <option value="filter">filter</option>
-          <option value="activity">activity</option>
+          <option value="custom/Activity">custom/Activity（活动编排）</option>
+          <option value="custom/CondSwitch">custom/CondSwitch（条件判断，仅做语法条件判断）</option>
           <option value="end">end（结束节点）</option>
-          <option value="custom">custom</option>
         </select>
       </div>
     </div>
-    <div class="form-row" id="node-activity-section" style="display:none">
-      <div class="form-group" style="grid-column:1/-1">
-        <label>选择 Activity <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（选中后自动填充配置与参数）</span></label>
-        <select id="node-activity-select" onchange="onActivitySelect()">
-          <option value="">-- 自定义输入 --</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>活动命名空间 (act_namespace)</label>
-        <input id="node-act-namespace" placeholder="例如 test" oninput="syncActivityConfig()">
-      </div>
-      <div class="form-group">
-        <label>活动名称 (act_name) *</label>
-        <input id="node-act-name" placeholder="例如 add" oninput="syncActivityConfig()">
+    <div class="form-group" id="node-activity-section" style="display:none">
+      <label style="display:block">
+        <span>Activity 编排（二维数组：外层阶段<strong>串行</strong>执行，同阶段内活动<strong>并行</strong>执行）</span>
+      </label>
+      <p style="font-size:.78rem;color:var(--text-muted);margin:4px 0 8px">
+        每个「阶段」依次串行执行；同一阶段内的多个 Activity 并发执行。后续阶段（或后续活动）的参数可引用前面 Activity 的返回值，也可引用本节点的参数定义。
+      </p>
+      <!-- 阶段容器：每个 .stage 是一个串行阶段 -->
+      <div id="node-activity-stages" style="display:flex;flex-direction:column;gap:10px"></div>
+      <!-- 全局：新建串行阶段 -->
+      <button type="button" class="btn btn-sm btn-primary" style="margin-top:10px" onclick="addActivityStage()">+ 新建串行阶段</button>
+      <div id="node-activity-empty" class="override-empty" style="margin-top:8px;display:none">尚未添加任何阶段，请点击「新建串行阶段」并选择 Activity。</div>
+      <!-- 兼容旧结构：单 activity 自定义输入（仅当未添加任何阶段时可用） -->
+      <div id="node-activity-custom" style="display:none;margin-top:10px">
+        <div class="form-row">
+          <div class="form-group">
+            <label>活动命名空间 (act_namespace)</label>
+            <input id="node-act-namespace" placeholder="例如 test" oninput="syncActivityConfig()">
+          </div>
+          <div class="form-group">
+            <label>活动名称 (act_name) *</label>
+            <input id="node-act-name" placeholder="例如 add" oninput="syncActivityConfig()">
+          </div>
+        </div>
       </div>
     </div>
     <div class="form-row">
@@ -847,20 +852,20 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
       <textarea id="node-additional-info">{}</textarea>
     </div>
     <div class="form-group">
-      <label style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;justify-content:space-between;align-items:center">
         <span>参数定义</span>
         <button class="btn btn-sm btn-outline" onclick="addParamRow()" type="button">+ 添加参数</button>
-      </label>
-      <div id="node-params-container" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+      </div>
+      <div id="node-params-container" style="margin-top:10px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
         <div id="param-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无参数定义</div>
       </div>
     </div>
     <div class="form-group">
-      <label style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;justify-content:space-between;align-items:center">
         <span>返回值定义 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（执行该节点后可得到的值，供下游节点引用）</span></span>
         <button class="btn btn-sm btn-outline" onclick="addOutputRow()" type="button">+ 添加返回值</button>
-      </label>
-      <div id="node-outputs-container" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+      </div>
+      <div id="node-outputs-container" style="margin-top:10px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
         <div id="output-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无返回值定义</div>
       </div>
     </div>
@@ -877,7 +882,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 <!-- Test Node Modal -->
 <div class="modal-overlay" id="test-node-modal-overlay">
-  <div class="modal" id="test-node-modal" style="width:760px;max-width:96vw">
+  <div class="modal" id="test-node-modal" style="width:880px;max-width:96vw">
     <h2 id="test-node-modal-title">测试 Node<button class="modal-close" onclick="closeTestNodeModal()" title="关闭">&times;</button></h2>
     <input type="hidden" id="test-node-id">
     <div class="form-row">
@@ -925,7 +930,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 <!-- Test Activity Modal -->
 <div class="modal-overlay" id="test-activity-modal-overlay">
-  <div class="modal" id="test-activity-modal" style="width:760px;max-width:96vw">
+  <div class="modal" id="test-activity-modal" style="width:880px;max-width:96vw">
     <h2 id="test-activity-modal-title">测试 Activity<button class="modal-close" onclick="closeTestActivityModal()" title="关闭">&times;</button></h2>
     <div id="test-activity-name" style="margin:-4px 0 12px;color:var(--primary);font-size:.92rem;font-weight:600"></div>
     <input type="hidden" id="test-activity-id">
@@ -975,7 +980,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 <!-- Activity 日志查看弹窗 -->
 <div class="modal-overlay" id="activity-logs-modal-overlay">
-  <div class="modal" id="activity-logs-modal" style="width:840px;max-width:96vw">
+  <div class="modal" id="activity-logs-modal" style="width:960px;max-width:96vw">
     <h2 id="activity-logs-modal-title">执行日志<button class="modal-close" onclick="closeActivityLogsModal()" title="关闭">&times;</button></h2>
     <div id="activity-logs-name" style="margin:-4px 0 12px;color:var(--primary);font-size:.92rem;font-weight:600"></div>
     <div class="log-search-row">
@@ -989,6 +994,9 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
         <option value="error">error</option>
       </select>
       <input id="log-event-id" placeholder="链路ID" style="width:160px" onkeydown="if(event.key==='Enter')loadActivityLogs()">
+      <input id="log-root-chain-id" placeholder="root_chain_id" style="width:160px" onkeydown="if(event.key==='Enter')loadActivityLogs()">
+      <input id="log-trace-id" placeholder="trace_id" style="width:160px" onkeydown="if(event.key==='Enter')loadActivityLogs()">
+      <input id="log-span-id" placeholder="span_id" style="width:150px" onkeydown="if(event.key==='Enter')loadActivityLogs()">
       <button class="btn btn-sm btn-primary" onclick="loadActivityLogs()">搜索</button>
       <button class="btn btn-sm btn-outline" onclick="clearLogFilters()">重置</button>
     </div>
@@ -1055,7 +1063,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 <!-- Flowchart Modal -->
 <div class="modal-overlay" id="flowchart-modal-overlay">
-  <div class="modal" id="flowchart-modal" style="width:1000px;max-width:96vw">
+  <div class="modal" id="flowchart-modal" style="width:1100px;max-width:96vw">
     <h2 id="flowchart-modal-title">流程图<button class="modal-close" onclick="closeFlowchartModal()" title="关闭">&times;</button></h2>
     <div class="flowchart-wrap">
       <div class="mermaid" id="flowchart-mermaid"></div>
@@ -1068,7 +1076,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 <!-- Release History Modal -->
 <div class="modal-overlay" id="release-modal-overlay">
-  <div class="modal" style="width:860px;max-width:96vw">
+    <div class="modal" style="width:960px;max-width:96vw">
     <h2 id="release-modal-title">发布记录<button class="modal-close" onclick="closeReleaseModal()" title="关闭">&times;</button></h2>
     <p style="margin:0 0 10px;color:var(--text-muted);font-size:.82rem">线上生效版本不允许删除；其余版本可直接删除。点击"设为生效"切换生产环境使用的版本（历史记录只增不改）。</p>
     <div class="table-wrap" style="max-height:60vh;overflow-y:auto">
@@ -1085,7 +1093,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 <!-- DSL View Modal -->
 <div class="modal-overlay" id="dsl-modal-overlay">
-  <div class="modal" style="width:860px;max-width:96vw">
+    <div class="modal" style="width:960px;max-width:96vw">
     <h2 id="dsl-modal-title">DSL 内容<button class="modal-close" onclick="closeDslModal()" title="关闭">&times;</button></h2>
     <pre id="dsl-modal-content" style="max-height:65vh;overflow:auto;background:#1e293b;color:#e2e8f0;padding:14px;border-radius:8px;font-size:.8rem;white-space:pre-wrap;word-break:break-all"></pre>
     <div class="modal-footer">
@@ -1112,7 +1120,7 @@ function copyDslContent() {
 
 <!-- Project Modal -->
 <div class="modal-overlay" id="project-modal-overlay">
-  <div class="modal" id="project-modal" style="width:760px">
+  <div class="modal" id="project-modal" style="width:880px">
     <h2 id="project-modal-title">项目管理<button class="modal-close" onclick="closeProjectModal()" title="关闭">&times;</button></h2>
     <input type="hidden" id="project-is-edit">
     <div class="form-row">
@@ -1238,7 +1246,7 @@ function copyDslContent() {
 
 <!-- 项目配置查询结果弹窗 -->
 <div class="modal-overlay" id="project-config-overlay">
-  <div class="modal" id="project-config-modal" style="width:720px">
+  <div class="modal" id="project-config-modal" style="width:840px">
     <h2 id="project-config-title">项目配置<button class="modal-close" onclick="closeProjectConfigModal()" title="关闭">&times;</button></h2>
     <div id="project-config-body" style="max-height:60vh;overflow-y:auto">
       <div class="empty-state"><p>暂无数据</p></div>
@@ -1775,23 +1783,14 @@ function openNodeModal(node) {
   document.getElementById('node-status').value = node ? String(node.status) : '1';
   document.getElementById('node-configuration').value = node ? prettyJson(node.configuration) : '{\n  "jsScript": "return {msg: \'hello\'};"\n}';
   document.getElementById('node-additional-info').value = node ? prettyJson(node.additional_info) : '{}';
-  // 回显 activity 命名空间/活动名称（优先读 node_config，兼容旧版顶层字段）
+  // 回显 activity 编排（优先读 configuration.activities，兼容旧版 node_config 单 activity）
   let nodeCfg = {};
   if (node && node.configuration) {
     try { nodeCfg = typeof node.configuration === 'string' ? JSON.parse(node.configuration) : node.configuration; } catch(e) { /* ignore */ }
   }
   const nc = (nodeCfg && nodeCfg.node_config) || {};
-  document.getElementById('node-act-namespace').value = nc.act_namespace || nodeCfg.act_namespace || '';
-  document.getElementById('node-act-name').value = nc.act_name || nodeCfg.act_name || '';
-  onNodeTypeChange();
-  // 如果缓存为空则先加载 activity 列表再匹配（act_namespace/act_name 仅存于 node_config）
-  if (window._activityCache.length === 0) {
-    refreshActivityCache().then(() => populateActivitySelect(nc.act_namespace, nc.act_name));
-  } else {
-    populateActivitySelect(nc.act_namespace, nc.act_name);
-  }
-  document.getElementById('node-description').value = node ? node.description || '' : '';
-  // 加载参数
+  // 先加载本节点参数定义（#node-params-container），确保后续渲染 activity 参数明细时，
+  // 「引用节点」来源能正确列出节点参数下拉，编辑回显时也能自动选中已绑定的节点参数。
   clearParamRows();
   if (node && node.params) {
     try {
@@ -1801,16 +1800,63 @@ function openNodeModal(node) {
       }
     } catch(e) { /* ignore */ }
   }
-  // 加载返回值定义
-  clearOutputRows();
-  if (node && node.outputs) {
-    try {
-      const outputs = typeof node.outputs === 'string' ? JSON.parse(node.outputs) : node.outputs;
-      if (Array.isArray(outputs)) {
-        outputs.forEach(o => addOutputRow(o.key, o.label, o.type, o.description));
-      }
-    } catch(e) { /* ignore */ }
+  // 还原已选活动（二维数组：stages）
+  const stagesRoot = document.getElementById('node-activity-stages');
+  stagesRoot.querySelectorAll('.stage').forEach(el => el.remove());
+  let stages = parseStagesFromConfig(nodeCfg, nc);
+  if (stages.length > 0) {
+    stages.forEach(stage => addActivityStage(stage));
+    document.getElementById('node-activity-empty').style.display = 'none';
+    document.getElementById('node-activity-custom').style.display = 'none';
+    document.getElementById('node-act-namespace').value = '';
+    document.getElementById('node-act-name').value = '';
+  } else {
+    document.getElementById('node-activity-empty').style.display = '';
+    document.getElementById('node-activity-custom').style.display = '';
+    document.getElementById('node-act-namespace').value = nc.act_namespace || nodeCfg.act_namespace || '';
+    document.getElementById('node-act-name').value = nc.act_name || nodeCfg.act_name || '';
   }
+  onNodeTypeChange();
+  // 如果缓存为空则先加载 activity 列表，加载完成后刷新各阶段下拉并重渲染已选 activity 的参数明细
+  const afterCache = () => {
+    document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
+    // 缓存就绪后用真实中文名补全卡片标题（编辑回显时若缓存未加载，标题可能暂为 ns/act_name）
+    document.querySelectorAll('#node-activity-stages .act-item').forEach(row => {
+      const ns = row.getAttribute('data-ns') || '';
+      const nm = row.getAttribute('data-name') || '';
+      const cacheAct = (window._activityCache || []).find(a => a.act_namespace === ns && a.act_name === nm);
+      if (cacheAct && cacheAct.name) {
+        row.setAttribute('data-display-name', cacheAct.name);
+        const titleSpan = row.querySelector('.act-item-name');
+        if (titleSpan) {
+          // 仅替换标题中第一个文本节点（中文名部分），保留括号内的 ns/act_name 与 #id
+          titleSpan.childNodes[0].nodeValue = cacheAct.name + '  ';
+        }
+      }
+    });
+    document.querySelectorAll('#node-activity-stages .act-item').forEach(row => renderActivityItemParams(row));
+    // 缓存就绪后补齐各卡片的测试示例展示
+    document.querySelectorAll('#node-activity-stages .act-item').forEach(row => {
+      const sampleBox = row.querySelector('.act-sample-box');
+      if (sampleBox) loadActivitySample(row.getAttribute('data-ns') || '', row.getAttribute('data-name') || '', sampleBox);
+    });
+    // 缓存就绪后再渲染返回值定义：依赖本节点 Activity 引用，确保来源/类型/Activity选择/字段正确回显
+    clearOutputRows();
+    if (node && node.outputs) {
+      try {
+        const outputs = typeof node.outputs === 'string' ? JSON.parse(node.outputs) : node.outputs;
+        if (Array.isArray(outputs)) {
+          outputs.forEach(o => addOutputRow({ key: o.key, label: o.label, type: o.type, source: o.source || 'value', ref: o.ref || '', value: o.value || '' }));
+        }
+      } catch(e) { /* ignore */ }
+    }
+  };
+  if (window._activityCache.length === 0) {
+    refreshActivityCache().then(afterCache);
+  } else {
+    afterCache();
+  }
+  document.getElementById('node-description').value = node ? node.description || '' : '';
   document.getElementById('node-modal-overlay').classList.add('show');
 }
 
@@ -1822,7 +1868,7 @@ function closeNodeModal() {
 // 类型切换为 activity 时显示命名空间/活动名称区域
 function onNodeTypeChange() {
   const type = document.getElementById('node-type').value;
-  const isActivity = type === 'activity';
+  const isActivity = type === 'custom/Activity';
   document.getElementById('node-activity-section').style.display = isActivity ? '' : 'none';
   if (!isActivity) {
     // 非 activity 类型，恢复命名空间/活动名称可编辑
@@ -1830,11 +1876,22 @@ function onNodeTypeChange() {
     document.getElementById('node-act-name').readOnly = false;
   }
   if (isActivity) {
+    // 切换到 activity 且阶段为空时，若 configuration.node_config 有旧单 activity，则重建为首阶段首项
+    if (collectStages().length === 0) {
+      let cfg = {};
+      try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
+      const ncc = (cfg && cfg.node_config) || {};
+      if (ncc.act_namespace && ncc.act_name) {
+        addActivityStage([{ act_namespace: ncc.act_namespace, act_name: ncc.act_name, id: '', name: '', args: {} }]);
+        document.getElementById('node-activity-empty').style.display = 'none';
+        document.getElementById('node-activity-custom').style.display = 'none';
+      }
+    }
     syncActivityConfig();
-    populateActivitySelect();
+    document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
   }
   // condSwitch：显示条件串输入，并回填已有条件
-  const isCond = type === 'condSwitch';
+  const isCond = type === 'custom/CondSwitch';
   document.getElementById('node-cond-section').style.display = isCond ? '' : 'none';
   if (isCond) {
     let cfg = {};
@@ -1847,7 +1904,7 @@ function onNodeTypeChange() {
 
 // 将条件串输入框的内容写入 Configuration（CommConfiguration 结构：node_config.conditon 等）
 function syncCondConfig() {
-  if (document.getElementById('node-type').value !== 'condSwitch') return;
+  if (document.getElementById('node-type').value !== 'custom/CondSwitch') return;
   let cfg;
   try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
   if (typeof cfg !== 'object' || cfg === null) cfg = {};
@@ -1861,100 +1918,675 @@ function syncCondConfig() {
   document.getElementById('node-configuration').value = prettyJson(cfg);
 }
 
-// 填充 activity 下拉列表
-function populateActivitySelect(selectedNs, selectedName) {
-  const sel = document.getElementById('node-activity-select');
+// 收集所有阶段（二维数组）：外层为串行阶段，内层为该阶段并行执行的 activity 列表。
+// 每个元素：{ act_namespace, act_name, id, name, args }
+function collectStages() {
+  const stages = [];
+  document.querySelectorAll('#node-activity-stages .stage').forEach(stageEl => {
+    const acts = [];
+    stageEl.querySelectorAll('.act-item').forEach(row => {
+      acts.push({
+        act_namespace: row.getAttribute('data-ns') || '',
+        act_name: row.getAttribute('data-name') || '',
+        id: row.getAttribute('data-id') || '',
+        name: row.getAttribute('data-display-name') || (row.getAttribute('data-ns') + '/' + row.getAttribute('data-name')),
+        args: collectActivityArgBinds(row)
+      });
+    });
+    stages.push(acts);
+  });
+  return stages;
+}
+
+// 收集全部已选 activity（跨所有阶段，扁平化），用于去重下拉等。
+function collectAllActivities() {
+  const all = [];
+  collectStages().forEach(stage => stage.forEach(it => all.push(it)));
+  return all;
+}
+
+// 从 node 配置解析出二维 stages 结构，兼容历史格式：
+//   1) node_config.activities（新二维数组，直接返回）
+//   2) node_config.stages（旧二维数组，直接返回）
+//   3) activities（旧扁平数组 + mode）：连续 serial 起新 stage，其后的 parallel 并入同 stage
+//   4) node_config.act_namespace + act_name（旧单 activity）
+function parseStagesFromConfig(nodeCfg, nc) {
+  nc = nc || {};
+  if (nodeCfg && Array.isArray(nodeCfg.node_config && nodeCfg.node_config.activities)) {
+    const raw = nodeCfg.node_config.activities;
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw.map(stage => (Array.isArray(stage) ? stage : []).map(it => ({
+        act_namespace: it.act_namespace || '',
+        act_name: it.act_name || '',
+        id: it.id || '',
+        name: it.name || (it.act_namespace + '/' + it.act_name),
+        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {})
+      })));
+    }
+  }
+  if (nodeCfg && Array.isArray(nodeCfg.node_config && nodeCfg.node_config.stages)) {
+    const raw = nodeCfg.node_config.stages;
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw.map(stage => (Array.isArray(stage) ? stage : []).map(it => ({
+        act_namespace: it.act_namespace || '',
+        act_name: it.act_name || '',
+        id: it.id || '',
+        name: it.name || (it.act_namespace + '/' + it.act_name),
+        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {})
+      })));
+    }
+  }
+  if (nodeCfg && Array.isArray(nodeCfg.activities) && nodeCfg.activities.length > 0) {
+    const stages = [];
+    let cur = null;
+    nodeCfg.activities.forEach(it => {
+      const mode = it.mode === 'parallel' ? 'parallel' : 'serial';
+      const item = {
+        act_namespace: it.act_namespace || '',
+        act_name: it.act_name || '',
+        id: it.id || '',
+        name: it.name || (it.act_namespace + '/' + it.act_name),
+        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {})
+      };
+      if (mode === 'serial' || cur === null) {
+        cur = [item];
+        stages.push(cur);
+      } else {
+        cur.push(item);
+      }
+    });
+    return stages;
+  }
+  if (nc.act_namespace && nc.act_name) {
+    return [[{ act_namespace: nc.act_namespace, act_name: nc.act_name, id: '', name: '', args: {} }]];
+  }
+  return [];
+}
+
+// 将后端 arguments 数组（[{key,value}]）转换为前端 args 绑定结构（{key:{source,value,ref}}）
+function convertArgumentsToArgs(argumentsArr) {
+  const args = {};
+  if (!Array.isArray(argumentsArr)) return args;
+  argumentsArr.forEach(a => {
+    const k = a.key || '';
+    if (!k) return;
+    const src = a.source || 'value';
+    const val = a.value !== undefined ? String(a.value) : '';
+    const ref = a.ref !== undefined && a.ref !== null && a.ref !== '' ? a.ref : val;
+    args[k] = { source: src, value: val, ref: ref };
+  });
+  return args;
+}
+
+// 新建一个串行阶段（stage），可传入初始 activity 列表（用于回显）。
+// stageActs: [{ act_namespace, act_name, id, name, args }]
+function addActivityStage(stageActs) {
+  const root = document.getElementById('node-activity-stages');
+  const stageIdx = root.querySelectorAll('.stage').length; // 0-based，用于展示序号
+  const stage = document.createElement('div');
+  stage.className = 'stage';
+  stage.style.cssText = 'border:1px solid #bae6fd;border-left:4px solid #0ea5e9;border-radius:var(--radius);padding:10px;background:#f0f9ff';
+  stage.innerHTML =
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+      '<span class="stage-index" style="display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;border-radius:6px;background:#ecfeff;color:#0e7490;font-size:.78rem;font-weight:700">S' + (stageIdx + 1) + '</span>' +
+      '<span style="font-size:.8rem;color:var(--text-muted)">串行阶段（与上一阶段顺序执行，本阶段内 Activity 并行）</span>' +
+      '<button type="button" class="btn btn-sm btn-outline" style="margin-left:auto" onclick="removeActivityStage(this)" title="删除此阶段">删除阶段</button>' +
+    '</div>' +
+    '<div class="stage-acts" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>' +
+    '<div style="display:flex;align-items:center;gap:6px">' +
+      '<select class="stage-act-select" onchange="onActivityAddToStage(this)" style="flex:1;min-width:0;padding:5px 8px;font-size:.8rem">' +
+        '<option value="">+ 添加 Activity 到本阶段（并行）</option>' +
+      '</select>' +
+    '</div>';
+  root.appendChild(stage);
+  // 渲染该阶段内的活动
+  const acts = Array.isArray(stageActs) ? stageActs : [];
+  acts.forEach(it => addActivityItemRow(it, stage));
+  refreshStageIndex();
+  // 填充本阶段下拉（排除已选）
+  populateStageSelect(stage);
+  // 隐藏空提示与单 activity 旧入口
+  document.getElementById('node-activity-empty').style.display = 'none';
+  document.getElementById('node-activity-custom').style.display = 'none';
+  syncActivityConfig();
+}
+
+// 删除一个阶段（连同其内 activity）
+function removeActivityStage(btn) {
+  const stage = btn.closest('.stage');
+  if (stage) stage.remove();
+  refreshStageIndex();
+  if (collectStages().length === 0) {
+    document.getElementById('node-activity-empty').style.display = '';
+    document.getElementById('node-activity-custom').style.display = '';
+  } else {
+    // 阶段减少后重渲染所有引用下拉（前序集合变化）
+    document.querySelectorAll('#node-activity-stages .act-item').forEach(r => renderActivityItemParams(r));
+  }
+  document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
+  syncActivityConfig();
+}
+
+// 重新编号阶段序号
+function refreshStageIndex() {
+  document.querySelectorAll('#node-activity-stages .stage').forEach((stage, i) => {
+    const idx = stage.querySelector('.stage-index');
+    if (idx) idx.textContent = 'S' + (i + 1);
+  });
+}
+
+// 填充某个阶段内的"添加 Activity"下拉（允许同一 activity 重复添加，不做去重禁用）
+function populateStageSelect(stage) {
+  const sel = stage.querySelector('.stage-act-select');
+  if (!sel) return;
   const acts = window._activityCache || [];
-  sel.innerHTML = '<option value="">-- 自定义输入 --</option>';
+  sel.innerHTML = '<option value="">+ 添加 Activity 到本阶段（并行）</option>';
   acts.forEach(a => {
     const val = a.act_namespace + '|' + a.act_name;
     const label = a.name + ' (' + a.act_namespace + '/' + a.act_name + ')';
     sel.innerHTML += '<option value="' + escHtml(val) + '">' + escHtml(label) + '</option>';
   });
-  // 尝试匹配已有的 namespace+name
-  const nsInput = document.getElementById('node-act-namespace');
-  const nameInput = document.getElementById('node-act-name');
-  if (selectedNs && selectedName) {
-    const matchVal = selectedNs + '|' + selectedName;
-    if (sel.querySelector('option[value="' + matchVal.replace(/"/g,'&quot;') + '"]')) {
-      sel.value = matchVal;
-      // 匹配到已选 activity，命名空间/活动名称不可修改
-      nsInput.readOnly = true;
-      nameInput.readOnly = true;
-    } else {
-      nsInput.readOnly = false;
-      nameInput.readOnly = false;
-    }
-  } else {
-    nsInput.readOnly = false;
-    nameInput.readOnly = false;
-  }
+  sel.value = '';
 }
 
-// 选中 activity: 自动填充 namespace、name、arguments 和 params
-function onActivitySelect() {
-  const nsInput = document.getElementById('node-act-namespace');
-  const nameInput = document.getElementById('node-act-name');
-  const selVal = document.getElementById('node-activity-select').value;
-  if (!selVal) {
-    // 用户选择"自定义输入"，恢复可编辑
-    nsInput.readOnly = false;
-    nameInput.readOnly = false;
-    syncActivityConfig();
-    return;
-  }
-  const parts = selVal.split('|');
+// 从某阶段的下拉选择 activity，追加到该阶段（并行）。支持同一 activity 重复添加（各自独立 id/参数）。
+function onActivityAddToStage(sel) {
+  const stage = sel.closest('.stage');
+  if (!stage || !sel.value) return;
+  const parts = sel.value.split('|');
   const ns = parts[0] || '';
   const name = parts[1] || '';
-  nsInput.value = ns;
-  nameInput.value = name;
-  // 选择 activity 后，命名空间/活动名称不可修改
-  nsInput.readOnly = true;
-  nameInput.readOnly = true;
-  // 从缓存中找到匹配的 activity
   const act = (window._activityCache || []).find(a => a.act_namespace === ns && a.act_name === name);
-  if (!act) { syncActivityConfig(); return; }
-  // 将 activity 的默认配置同步到 Configuration
-  let cfg;
-  try {
-    cfg = JSON.parse(document.getElementById('node-configuration').value || '{}');
-  } catch (e) { cfg = {}; }
-  // 统一为 CommConfiguration 结构：act_namespace/act_name 仅存于 node_config，不再写 JSON 顶层
-  if (typeof cfg !== 'object' || cfg === null) cfg = {};
-  if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
-  cfg.node_config.act_namespace = ns;
-  cfg.node_config.act_name = name;
-  if (act.activity_type) cfg.node_config.activity_type = act.activity_type; else delete cfg.node_config.activity_type;
-  // 保证 CommConfiguration 各字段存在
-  if (typeof cfg.arg_mapping === 'undefined') cfg.arg_mapping = {};
-  if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
-  if (typeof cfg.arguments === 'undefined') cfg.arguments = [];
-  if (typeof cfg.responses === 'undefined') cfg.responses = {};
-  // 合并 arguments
-  let args = act.arguments;
-  if (typeof args === 'string') { try { args = JSON.parse(args); } catch(e) { args = null; } }
-  if (args && Array.isArray(args) && args.length > 0) {
-    cfg.arguments = args;
-    // 选择 activity 后，参数定义列表直接继承 activity 的 arguments（之后可继续修改/添加）
-    clearParamRows();
-    args.forEach(p => addParamRow(p.key, p.label, p.type, p.required, p.default_value || p.value, p.description, p.policy));
-  }
-  if (act.arg_template) cfg.arg_template = act.arg_template; else delete cfg.arg_template;
-  if (act.responses) {
-    let resp = act.responses;
-    if (typeof resp === 'string') { try { resp = JSON.parse(resp); } catch(e) { resp = null; } }
-    if (resp && Object.keys(resp).length > 0) cfg.responses = resp; else delete cfg.responses;
-  } else {
-    delete cfg.responses;
-  }
-  document.getElementById('node-configuration').value = prettyJson(cfg);
+  const dispName = act ? act.name : (ns + '/' + name);
+  addActivityItemRow({ act_namespace: ns, act_name: name, id: '', name: dispName, args: {} }, stage);
+  // 重新填充所有阶段下拉（同一 activity 可重复添加，无需去重）
+  document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
+  syncActivityConfig();
 }
 
-// 将命名空间/活动名称同步进 Configuration（写入 node_config.act_namespace / node_config.act_name）
+// 生成全局唯一的 activity 实例 id（当未显式指定时）。
+// 同一 activity 可在 node 内重复添加多次（参数不同效果不同），必须有唯一 id 作为后端 stepId/引用标识。
+function genUniqueActivityId(ns, name) {
+  const base = (ns && name) ? (ns + '_' + name) : (name || 'act');
+  const exist = new Set(collectAllActivities().map(it => it.id).filter(Boolean));
+  let i = 1;
+  let cand;
+  do {
+    cand = base + '_' + i;
+    i++;
+  } while (exist.has(cand) && i < 10000);
+  return cand;
+}
+
+// 在每个阶段内追加一行已选 activity（并行卡片）
+function addActivityItemRow(item, stage) {
+  const list = stage.querySelector('.stage-acts');
+  if (!list) return;
+  // 未指定 id 时生成唯一实例 id（允许同一 activity 重复添加）
+  const instId = (item.id && String(item.id).trim()) ? item.id : genUniqueActivityId(item.act_namespace || '', item.act_name || '');
+  // 解析中文显示名：优先用传入 name；为空时尝试从 activity 缓存按 ns/name 匹配真实中文名；再回退到 ns/act_name
+  const cacheAct = (window._activityCache || []).find(a => a.act_namespace === (item.act_namespace || '') && a.act_name === (item.act_name || ''));
+  const dispName = (item.name && String(item.name).trim()) ? item.name
+    : (cacheAct && cacheAct.name ? cacheAct.name : ((item.act_namespace || '') + '/' + (item.act_name || '')));
+  const row = document.createElement('div');
+  row.className = 'act-item';
+  row.setAttribute('data-ns', item.act_namespace || '');
+  row.setAttribute('data-name', item.act_name || '');
+  row.setAttribute('data-id', instId || '');
+  row.setAttribute('data-display-name', dispName);
+  try { row.setAttribute('data-args', JSON.stringify(item.args || {})); } catch(e) { row.setAttribute('data-args', '{}'); }
+  row.style.cssText = 'padding:8px 10px;border:1px solid #e2e8f0;border-left:4px solid #94a3b8;border-radius:var(--radius);background:#ffffff';
+  const title = dispName ? (dispName + '  ') : '';
+  // 该 activity 配置的输出返回值（执行后会返回的值），从缓存同步展示，方便配置人理解
+  let rvHtml = '<span style="color:var(--text-muted);font-size:.76rem">无 ReturnValues 配置</span>';
+  let rvList = [];
+  try { rvList = cacheAct && cacheAct.return_values ? (typeof cacheAct.return_values === 'string' ? JSON.parse(cacheAct.return_values) : cacheAct.return_values) : []; } catch(e) { rvList = []; }
+  if (Array.isArray(rvList) && rvList.length > 0) {
+    rvHtml = rvList.map(rv => {
+      const nm = escHtml(rv.name || '');
+      const ky = rv.key ? (' ← ' + escHtml(rv.key)) : '';
+      const tp = rv.type ? (' <span style="color:var(--text-muted)">(' + escHtml(rv.type) + ')</span>') : '';
+      return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:1px 7px;border:1px solid var(--border);border-radius:10px;background:#eef6ff;color:#0e7490;font-family:monospace;font-size:.72rem">' + nm + ky + tp + '</span>';
+    }).join('');
+  }
+  row.innerHTML =
+    '<div style="display:flex;align-items:center;gap:8px">' +
+      '<span class="act-item-name" style="flex:1;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(title) + '<span style="color:var(--text-muted);font-weight:400">(' + escHtml(item.act_namespace) + '/' + escHtml(item.act_name) + ')</span></span>' +
+      '<button type="button" class="btn btn-sm btn-outline" onclick="toggleActivityParams(this)" title="展开/收起参数">参数</button>' +
+      '<button type="button" class="btn btn-sm btn-outline" onclick="removeActivityItem(this)" title="移除">移除</button>' +
+    '</div>' +
+    '<div style="margin-top:4px;font-size:.74rem;color:#0e7490;font-family:monospace;word-break:break-all" title="实例 ID（用于参数引用与后端执行 stepId）">实例ID: ' + escHtml(instId) + '</div>' +
+    '<div style="margin-top:6px">' +
+      '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:2px">返回值 (ReturnValues)：执行后输出</div>' +
+      '<div>' + rvHtml + '</div>' +
+    '</div>' +
+    '<div class="act-sample-box" data-ns="' + escAttr(item.act_namespace || '') + '" data-name="' + escAttr(item.act_name || '') + '" style="margin-top:6px;display:none"></div>' +
+    '<div class="act-params-box" style="display:none;margin-top:8px;border-top:1px dashed var(--border);padding-top:8px"></div>';
+  list.appendChild(row);
+  renderActivityItemParams(row);
+  // 默认展开参数明细，便于直接进行参数映射
+  const box = row.querySelector('.act-params-box');
+  if (box) box.style.display = '';
+  // 缓存已就绪时直接加载最近成功测试示例；否则交给 openNodeModal 的 afterCache 统一补
+  if (window._activityCache && window._activityCache.length > 0) {
+    loadActivitySample(item.act_namespace || '', item.act_name || '', row.querySelector('.act-sample-box'));
+  }
+}
+
+// 加载并展示某个 activity 最近一次成功测试的结果示例，帮助配置人理解实际返回结构。
+// 通过 ns/act_name 从缓存反查 activity_id，再请求测试记录接口，取第一条 status=success 的 result 渲染。
+async function loadActivitySample(ns, name, boxEl) {
+  if (!boxEl) return;
+  const act = (window._activityCache || []).find(a => a.act_namespace === ns && a.act_name === name);
+  const activityId = act ? act.activity_id : '';
+  if (!activityId) { boxEl.style.display = 'none'; return; }
+  try {
+    const p = getProject();
+    if (!p) { boxEl.style.display = 'none'; return; }
+    const records = await api('/api/activities/' + encodeURIComponent(activityId) + '/test-records?project=' + encodeURIComponent(p));
+    let latest = null;
+    for (const r of (records || [])) {
+      if (r.status === 'success') { latest = r; break; }
+    }
+    if (!latest) { boxEl.style.display = 'none'; return; }
+    let obj = latest.result;
+    if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch (e) { obj = null; } }
+    let preview = '';
+    if (obj && typeof obj === 'object') {
+      preview = JSON.stringify(obj, null, 2);
+    } else if (obj !== null && obj !== undefined) {
+      preview = String(obj);
+    }
+    if (!preview) { boxEl.style.display = 'none'; return; }
+    boxEl.innerHTML =
+      '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:2px">最近一次成功测试返回示例</div>' +
+      '<pre style="margin:0;max-height:160px;overflow:auto;background:#0f172a;color:#e2e8f0;padding:8px 10px;border-radius:6px;font-size:.72rem;line-height:1.4;white-space:pre-wrap;word-break:break-all">' + escHtml(preview) + '</pre>';
+    boxEl.style.display = '';
+  } catch (e) {
+    boxEl.style.display = 'none';
+  }
+}
+
+// 展开/收起当前 activity 的参数明细
+function toggleActivityParams(btn) {
+  const row = btn.closest('.act-item');
+  if (!row) return;
+  const box = row.querySelector('.act-params-box');
+  if (!box) return;
+  if (box.style.display === 'none') {
+    renderActivityItemParams(row);
+    box.style.display = '';
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+// 收集当前 activity item 内所有参数的绑定（来自 .arg-bind-row）
+// bind 结构：{ source: 'value'|'ref_act'|'ref_node', value, ref }
+function collectActivityArgBinds(row) {
+  const binds = {};
+  row.querySelectorAll('.arg-bind-row').forEach(r => {
+    const key = r.getAttribute('data-arg-key') || '';
+    if (!key) return;
+    const source = r.querySelector('.arg-src') ? r.querySelector('.arg-src').value : 'value';
+    let value = '';
+    let ref = '';
+    if (source === 'value') {
+      value = r.querySelector('.arg-val') ? r.querySelector('.arg-val').value : '';
+    } else {
+      const finalEl = r.querySelector('.arg-ref-final');
+      if (finalEl) {
+        ref = finalEl.value || ''; // 新三级联动：此处已是拼装好的最终路径
+      } else {
+        ref = r.querySelector('.arg-ref') ? r.querySelector('.arg-ref').value : '';
+      }
+      value = ref; // 引用模式最终值即引用路径字符串
+    }
+    binds[key] = { source: source, value: value, ref: ref };
+  });
+  return binds;
+}
+
+// 计算「可引用」的前序 activity 列表。
+// 关键约束：只有「串行排在前面」的 stage 中的 activity 才能被引用——
+// 同 stage 内的 activity 是并行同时执行的，彼此无法保证先后，故不能互相引用。
+// 返回 [{ id, act_name, ns, params:[{key,label}] }]，均为当前 row 所属 stage 之前的所有 stage 的 activity。
+function prevActivitiesBefore(row) {
+  const stages = Array.from(document.querySelectorAll('#node-activity-stages .stage'));
+  const myStage = row.closest('.stage');
+  const myIdx = stages.indexOf(myStage);
+  const prevs = [];
+  stages.forEach((stage, si) => {
+    if (si >= myIdx) return; // 仅取「前面」的 stage，跳过当前及之后的（含同 stage 并行兄弟）
+    stage.querySelectorAll('.act-item').forEach(prev => {
+      prevs.push(prev);
+    });
+  });
+  return prevs.map(prev => {
+    const ns = prev.getAttribute('data-ns') || '';
+    const name = prev.getAttribute('data-name') || '';
+    const id = prev.getAttribute('data-id') || name; // 无显式 id 时用 act_name 作为引用标识
+    const act = (window._activityCache || []).find(a => a.act_namespace === ns && a.act_name === name);
+    let params = [];
+    if (act && act.arguments) {
+      try { params = (typeof act.arguments === 'string') ? JSON.parse(act.arguments || '[]') : (act.arguments || []); } catch(e) { params = []; }
+    }
+    // 该前序 activity 的 ReturnValues 列表（每项 {name, key, type}），用于「引用前序」时直接选择返回值字段
+    let returnValues = [];
+    if (act && act.return_values) {
+      try { returnValues = (typeof act.return_values === 'string') ? JSON.parse(act.return_values || '[]') : (act.return_values || []); } catch(e) { returnValues = []; }
+    }
+    return { id: id, act_name: name, ns: ns, params: Array.isArray(params) ? params : [], returnValues: Array.isArray(returnValues) ? returnValues : [] };
+  });
+}
+
+// 收集本节点参数定义（来自节点参数表单），用于"引用节点参数"下拉
+function nodeParamDefs() {
+  const defs = [];
+  document.querySelectorAll('#node-params-container .param-row').forEach(r => {
+    const key = r.querySelector('.param-key') ? r.querySelector('.param-key').value.trim() : '';
+    const label = r.querySelector('.param-label') ? r.querySelector('.param-label').value.trim() : '';
+    if (key) defs.push({ key: key, label: label });
+  });
+  return defs;
+}
+
+// 渲染某个 activity item 的参数明细 + 可编辑绑定输入
+// 绑定来源三选：
+//   1) value      手工配置（固定值）
+//   2) ref_act    引用前面某 Activity 的返回值（路径形如 {{id.responses}} 或 {{id.responses.field}}）
+//   3) ref_node   引用本节点的参数定义（路径形如 {{node_param_key}}）
+function renderActivityItemParams(row) {
+  const box = row.querySelector('.act-params-box');
+  if (!box) return;
+  const ns = row.getAttribute('data-ns') || '';
+  const name = row.getAttribute('data-name') || '';
+  let existingBinds = {};
+  try { existingBinds = JSON.parse(row.getAttribute('data-args') || '{}') || {}; } catch(e) { existingBinds = {}; }
+  const act = (window._activityCache || []).find(a => a.act_namespace === ns && a.act_name === name);
+  let params = [];
+  if (act && act.arguments) {
+    try {
+      params = (typeof act.arguments === 'string') ? JSON.parse(act.arguments || '[]') : (act.arguments || []);
+    } catch (e) { params = []; }
+  }
+
+  // 信息明细表
+  const infoRows = params.map(p => {
+    const key = escHtml(p.key || '-');
+    const label = escHtml(p.label || '');
+    const type = escHtml(p.type || (p.value_type || '-'));
+    const req = p.required ? '<span style="color:#dc2626">必填</span>' : '<span style="color:var(--text-muted)">可选</span>';
+    const def = (p.value !== undefined && p.value !== null && p.value !== '') ? escHtml(String(p.value))
+              : (p.default_value !== undefined && p.default_value !== null && p.default_value !== '') ? escHtml(String(p.default_value)) : '-';
+    const desc = escHtml(p.description || '');
+    const policy = escHtml(p.policy || '-');
+    return '<tr>' +
+      '<td style="font-family:monospace;font-weight:600;white-space:nowrap">' + key + '</td>' +
+      '<td>' + label + '</td>' +
+      '<td style="white-space:nowrap">' + type + '</td>' +
+      '<td style="white-space:nowrap">' + req + '</td>' +
+      '<td style="white-space:nowrap">' + def + '</td>' +
+      '<td style="white-space:nowrap">' + policy + '</td>' +
+      '<td style="color:var(--text-muted);max-width:220px">' + (desc || '-') + '</td>' +
+    '</tr>';
+  }).join('');
+  const infoTable = params.length > 0
+    ? '<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:6px">参数明细</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:.8rem">' +
+        '<thead><tr style="background:#f3f4f6">' +
+          '<th style="padding:6px 8px;text-align:left">参数 Key</th>' +
+          '<th style="padding:6px 8px;text-align:left">标签</th>' +
+          '<th style="padding:6px 8px;text-align:left">类型</th>' +
+          '<th style="padding:6px 8px;text-align:left">必填</th>' +
+          '<th style="padding:6px 8px;text-align:left">默认值</th>' +
+          '<th style="padding:6px 8px;text-align:left">策略</th>' +
+          '<th style="padding:6px 8px;text-align:left">描述</th>' +
+        '</tr></thead>' +
+        '<tbody>' + infoRows + '</tbody>' +
+      '</table>'
+    : '<div style="font-size:.8rem;color:var(--text-muted);padding:4px 0">该 Activity 无参数定义（无可映射字段）</div>';
+
+  // 引用来源下拉选项
+  const prevs = prevActivitiesBefore(row);
+  const nodeParams = nodeParamDefs();
+  // 本节点参数下拉：直接列出参数定义中的 key，生成 {{key}}
+  const nodeRefOptions = nodeParams.map(p =>
+    '<option value="' + escAttr('{{' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
+  ).join('');
+
+  // 前序 activity 的"参数值"key 列表（来自其 arguments 定义，前端有缓存），用于引用精确字段
+  const prevArgKeysById = {};
+  prevs.forEach(p => {
+    const keys = (p.params || []).map(pp => pp.key || '').filter(Boolean);
+    prevArgKeysById[p.id] = keys;
+  });
+
+  // 根据已存引用路径 b.ref 反推联动控件初值：{ refId, refType, refField, raw }
+  function argParseRefPath(ref) {
+    const m = /^\\{\\{([^}]+)\\}\\}$/.exec((ref || '').trim());
+    if (!m) return { raw: ref || '' };
+    const inner = m[1];
+    const dot = inner.indexOf('.');
+    if (dot < 0) return { refId: inner, refType: 'responses', refField: '' };
+  const refId = inner.slice(0, dot);
+  const rest = inner.slice(dot + 1);
+  if (rest === 'responses') return { refId: refId, refType: 'responses', refField: '' };
+  if (rest === 'arguments') return { refId: refId, refType: 'arguments', refField: '' };
+  if (rest.startsWith('responses.')) return { refId: refId, refType: 'responses_field', refField: rest.slice('responses.'.length) };
+  if (rest.startsWith('arguments.')) return { refId: refId, refType: 'arguments', refField: rest.slice('arguments.'.length) };
+  return { refId: refId, refType: 'responses', refField: rest };
+}
+  // 根据联动控件拼出最终引用路径
+  function argBuildRefPath(refId, refType, refField) {
+    if (!refId) return '';
+    const field = (refField || '').trim();
+    let inner;
+    if (refType === 'responses') inner = refId + '.responses';
+    // 返回值.字段：field 为空（未选具体字段，或所选 return_value 的 key 为空=返回全部）一律回退为整体 {{id.responses}}
+    else if (refType === 'responses_field') inner = refId + '.responses' + (field ? '.' + field : '');
+    else if (refType === 'arguments') inner = refId + '.arguments.' + (field || 'key');
+    else inner = refId;
+    return '{{' + inner + '}}';
+  }
+  // 生成「引用前序」第三级字段选择下拉：
+  //   - type=responses_field：列出前序 activity 的 ReturnValues（显示的字段名即引用路径里的 field，对应 ReturnValue.Name）
+  //   - type=arguments：列出前序 activity 的 arguments key
+  //   - type=responses：无字段（整体引用），返回空串
+  function argRenderRefFieldSlot(prevs, prevId, type, selectedField) {
+    if (type === 'responses') return '';
+    const prev = (prevs || []).find(p => p.id === prevId);
+    if (!prev) {
+      return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">请先选择前序 Activity</span>';
+    }
+    if (type === 'responses_field') {
+      const rvs = prev.returnValues || [];
+      if (rvs.length === 0) {
+        return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">该 Activity 无 ReturnValues 配置</span>';
+      }
+      const opts = rvs.map(rv => {
+        const rvName = rv.name || '';
+        const rvKey = rv.key || '';
+        const label = rvName + (rvKey ? ' (' + rvKey + ')' : '');
+        return '<option value="' + escAttr(rvName) + '"' + (rvName === selectedField ? ' selected' : '') + '>' + escHtml(label) + '</option>';
+      }).join('');
+      return '<select class="arg-refield" onchange="onRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+          '<option value="">— 选择返回值字段 —</option>' + opts + '</select>';
+    }
+    // type === 'arguments'
+    const keys = (prev.params || []).map(pp => pp.key || '').filter(Boolean);
+    if (keys.length === 0) {
+      return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">该 Activity 无参数定义</span>';
+    }
+    const opts = keys.map(k => '<option value="' + escAttr(k) + '"' + (k === selectedField ? ' selected' : '') + '>' + escHtml(k) + '</option>').join('');
+    return '<select class="arg-refield" onchange="onRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+        '<option value="">— 选择参数 key —</option>' + opts + '</select>';
+}
+  // rebuildRefFieldSlot 已提升为全局函数（供 onRefChange 跨作用域调用）
+
+  // 逐参数绑定行：调用全局可复用函数，便于来源切换时仅局部重建当前行，避免整卡重渲染串扰其它参数
+  const bindRows = params.map(p => {
+    const key = p.key || '';
+    const bind = existingBinds[key] || {};
+    const defVal = (p.value !== undefined && p.value !== null && p.value !== '') ? String(p.value)
+                 : (p.default_value !== undefined && p.default_value !== null && p.default_value !== '') ? String(p.default_value) : '';
+    bind._defVal = defVal;
+    return argRenderArgBindRow(row, key, bind, { prevs: prevs, nodeParams: nodeParams, nodeRefOptions: nodeRefOptions });
+  }).join('');
+
+  box.innerHTML = infoTable +
+    '<div style="font-size:.78rem;font-weight:600;color:var(--text);margin:10px 0 4px">参数值绑定</div>' +
+    (params.length > 0
+      ? '<div class="arg-bind-list" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:6px 10px">' + bindRows + '</div>'
+      : '');
+
+  // 回显：反填联动控件初值
+  row.querySelectorAll('.arg-bind-row').forEach(r => {
+    const bkey = r.getAttribute('data-arg-key') || '';
+    const b = existingBinds[bkey];
+    if (!b || !b.ref) return;
+    const wrap = r.querySelector('.arg-input-wrap');
+    if (!wrap) return;
+    const parsed = argParseRefPath(b.ref);
+    if (Object.prototype.hasOwnProperty.call(parsed, 'raw')) {
+      // 无法反推的裸路径：直接作为节点参数最终值
+      const nodeSel = wrap.querySelector('.arg-ref-node');
+      if (nodeSel) nodeSel.value = parsed.raw;
+      return;
+    }
+    if (b.source === 'ref_node') {
+      const nodeSel = wrap.querySelector('.arg-ref-node');
+      if (nodeSel) nodeSel.value = b.ref;
+      return;
+    }
+    const prevSel = wrap.querySelector('.arg-ref');
+    const typeSel = wrap.querySelector('.arg-reftype');
+    const fieldInput = wrap.querySelector('.arg-refield');
+    if (prevSel && parsed.refId) prevSel.value = parsed.refId;
+    if (typeSel && parsed.refType) typeSel.value = parsed.refType;
+    if (fieldInput && parsed.refField) fieldInput.value = parsed.refField;
+  });
+}
+
+// 来源切换：手工配置 / 引用前序Activity / 引用节点参数
+// 关键：仅局部重建「当前参数行」的输入控件，不重渲染整张卡片，
+// 保证同一 Activity 内多个参数各自独立配置、互不串扰。
+function onArgSourceChange(sel) {
+  const rowBind = sel.closest('.arg-bind-row');
+  if (!rowBind) return;
+  const wrap = rowBind.querySelector('.arg-input-wrap');
+  if (!wrap) return;
+  const actItem = sel.closest('.act-item');
+  if (!actItem) return;
+  const key = rowBind.getAttribute('data-arg-key') || '';
+  const newSrc = sel.value;
+  // 先把整卡所有参数行的实时值（来自 DOM）同步回 data-args，作为权威快照（不影响其它行 DOM）
+  const liveBinds = collectActivityArgBinds(actItem);
+  if (key) {
+    const b = liveBinds[key] || {};
+    b.source = newSrc;
+    if (newSrc === 'value') { b.ref = ''; } // 切回手工配置时清空引用路径
+    liveBinds[key] = b;
+  }
+  actItem.setAttribute('data-args', JSON.stringify(liveBinds));
+  // 仅重建当前参数行的输入控件（局部重建），其它行的 DOM 与已选值完全保留
+  const prevs = prevActivitiesBefore(actItem);
+  const nodeParams = nodeParamDefs();
+  const nodeRefOptions = nodeParams.map(p =>
+    '<option value="' + escAttr('{{' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
+  ).join('');
+  const bind = liveBinds[key] || {};
+  wrap.innerHTML = argRenderArgInput(key, bind, { prevs: prevs, nodeParams: nodeParams, nodeRefOptions: nodeRefOptions });
+  // 回填联动初值（引用前序/引用节点时）
+  if (bind.ref) {
+    const parsed = argParseRefPath(bind.ref);
+    if (Object.prototype.hasOwnProperty.call(parsed, 'raw')) {
+      const nodeSel = wrap.querySelector('.arg-ref-node');
+      if (nodeSel) nodeSel.value = parsed.raw;
+    } else if (bind.source === 'ref_node') {
+      const nodeSel = wrap.querySelector('.arg-ref-node');
+      if (nodeSel) nodeSel.value = bind.ref;
+    } else {
+      const prevSel = wrap.querySelector('.arg-ref');
+      const typeSel = wrap.querySelector('.arg-reftype');
+      const fieldInput = wrap.querySelector('.arg-refield');
+      if (prevSel && parsed.refId) prevSel.value = parsed.refId;
+      if (typeSel && parsed.refType) typeSel.value = parsed.refType;
+      if (fieldInput && parsed.refField) fieldInput.value = parsed.refField;
+    }
+  }
+  syncActivityConfig();
+}
+
+// 引用下拉/输入变化：拼装最终引用路径写入同行的 .arg-ref-final，供 collect 读取
+function onRefChange(sel) {
+  const wrap = sel.closest('.arg-input-wrap');
+  if (!wrap) return;
+  let finalInput = wrap.querySelector('.arg-ref-final');
+  if (!finalInput) return;
+  const nodeSel = wrap.querySelector('.arg-ref-node');
+  if (nodeSel) {
+    // 引用节点参数：value 即最终路径 {{key}}
+    finalInput.value = nodeSel.value || '';
+  } else {
+    // 引用前序：三级联动拼装
+    const prevSel = wrap.querySelector('.arg-ref');
+    const typeSel = wrap.querySelector('.arg-reftype');
+    const slot = wrap.querySelector('.arg-ref-field-slot');
+    // 若切换的是取值类型，重建第三级字段下拉（从 ReturnValues / arguments key 列表）
+    if (sel === typeSel) {
+      rebuildRefFieldSlot(wrap);
+    }
+    // 切换前序 Activity 后：整行输入控件随新前序重建（取值类型选项、第三级字段均按新前序动态生成），
+    // 并回填当前已选的前序 Activity，保证其余状态不丢、不串扰。
+    if (sel === prevSel) {
+      const rowBind = sel.closest('.arg-bind-row');
+      const key = rowBind ? (rowBind.getAttribute('data-arg-key') || '') : '';
+      const prevs = argGetPrevsForWrap(wrap);
+      const nodeParams = nodeParamDefs();
+      const nodeRefOptions = nodeParams.map(p =>
+        '<option value="' + escAttr('{{' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
+      ).join('');
+      const bind = { source: 'ref_act', ref: '{{' + prevSel.value + '.responses}}' };
+      wrap.innerHTML = argRenderArgInput(key, bind, { prevs: prevs, nodeParams: nodeParams, nodeRefOptions: nodeRefOptions });
+      const newPrevSel = wrap.querySelector('.arg-ref');
+      if (newPrevSel && prevSel.value) newPrevSel.value = prevSel.value;
+      finalInput = wrap.querySelector('.arg-ref-final'); // wrap 已重建，需重新获取最终值输入节点
+    }
+    const fieldSel = wrap.querySelector('.arg-refield');
+    const refId = prevSel ? prevSel.value : '';
+    const typeSelNow = wrap.querySelector('.arg-reftype');
+    const refType = typeSelNow ? typeSelNow.value : 'responses';
+    const refField = fieldSel ? fieldSel.value : '';
+    if (finalInput) finalInput.value = argBuildRefPath(refId, refType, refField);
+  }
+  syncActivityConfig();
+}
+
+// 移除一行 activity
+function removeActivityItem(btn) {
+  const row = btn.closest('.act-item');
+  if (row) row.remove();
+  if (collectAllActivities().length === 0) {
+    document.getElementById('node-activity-empty').style.display = '';
+    document.getElementById('node-activity-custom').style.display = '';
+  } else {
+    // 移除后前序活动集合变化，重渲染剩余 item 的引用下拉
+    document.querySelectorAll('#node-activity-stages .act-item').forEach(r => renderActivityItemParams(r));
+  }
+  document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
+  syncActivityConfig();
+}
+
+// 将二维 activities 编排同步进 Configuration.node_config.activities
+// 每个 stage 为数组，元素结构：{ act_namespace, act_name, id, arguments:[{key,value}] }
 function syncActivityConfig() {
-  if (document.getElementById('node-type').value !== 'activity') return;
-  const ns = document.getElementById('node-act-namespace').value.trim();
-  const name = document.getElementById('node-act-name').value.trim();
+  if (document.getElementById('node-type').value !== 'custom/Activity') return;
+  // 把每个 activity 当前 DOM 中的参数绑定实时值同步回 data-args，
+  // 作为后续整卡重渲染（来源切换/移除/缓存加载）的权威快照，避免多行之间互相覆盖
+  document.querySelectorAll('#node-activity-stages .act-item').forEach(row => {
+    try { row.setAttribute('data-args', JSON.stringify(collectActivityArgBinds(row))); } catch (e) {}
+  });
   let cfg;
   try {
     cfg = JSON.parse(document.getElementById('node-configuration').value || '{}');
@@ -1963,8 +2595,35 @@ function syncActivityConfig() {
   }
   if (typeof cfg !== 'object' || cfg === null) cfg = {};
   if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
-  if (ns) cfg.node_config.act_namespace = ns; else delete cfg.node_config.act_namespace;
-  if (name) cfg.node_config.act_name = name; else delete cfg.node_config.act_name;
+
+  const stages = collectStages();
+  if (stages.length > 0 && stages.some(s => s.length > 0)) {
+    // 二维数组写入 node_config.activities（与后端 ActivityNode.Init 的 cfgActs.Activities 结构一致）
+    cfg.node_config.activities = stages.map(stage => stage.map(it => {
+      const args = it.args || {};
+        const argumentsArr = Object.keys(args).map(k => {
+          const b = args[k] || {};
+          return { key: k, source: b.source || 'value', value: b.value !== undefined ? b.value : (b.ref || ''), ref: b.ref || '' };
+        });
+      return {
+        act_namespace: it.act_namespace,
+        act_name: it.act_name,
+        id: it.id || it.act_name,
+        arguments: argumentsArr
+      };
+    }));
+    delete cfg.node_config.stages; // 废弃旧的 stages 结构
+    delete cfg.activities; // 废弃旧的扁平 activities 结构
+    delete cfg.node_config.activity_type;
+    delete cfg.node_config.act_namespace; // 不再需要单 activity 回退字段
+    delete cfg.node_config.act_name;
+  } else {
+    // 无阶段
+    delete cfg.node_config.stages;
+    delete cfg.activities;
+    delete cfg.node_config.act_namespace;
+    delete cfg.node_config.act_name;
+  }
   document.getElementById('node-configuration').value = prettyJson(cfg);
 }
 
@@ -1987,15 +2646,48 @@ async function saveNode() {
     body.params = collectParams();
     body.outputs = collectOutputs();
   } catch (e) { showToast('JSON 格式错误: ' + e.message, 'error'); return; }
-  // activity 类型：确保命名空间/活动名称写入 Configuration.node_config
-  if (body.type === 'activity') {
-    const ns = document.getElementById('node-act-namespace').value.trim();
-    const name = document.getElementById('node-act-name').value.trim();
-    if (name === '') { showToast('activity 类型必须填写活动名称', 'error'); return; }
+  // 将「节点参数配置」「返回值定义」同步写入 Configuration 第一层，供节点执行时调用：
+  //   params  -> configuration.arguments（param.BindConfig 数组：[{ key, value, policy }]）
+  //   outputs -> configuration.responses（返回值定义数组：[{ key, label, type, source, value|ref }]）
+  syncParamsToConfigArguments(body);
+  // activity 类型：校验 activity 编排，并写入 Configuration
+  if (body.type === 'custom/Activity') {
     if (typeof body.configuration !== 'object' || body.configuration === null) body.configuration = {};
     if (!body.configuration.node_config || typeof body.configuration.node_config !== 'object') body.configuration.node_config = {};
-    if (ns) body.configuration.node_config.act_namespace = ns; else delete body.configuration.node_config.act_namespace;
-    body.configuration.node_config.act_name = name;
+    const stages = collectStages();
+    const flat = [];
+    stages.forEach(s => s.forEach(it => flat.push(it)));
+    if (flat.length > 0) {
+      // 二维 activities 模式：每项都必须有 act_name
+      for (const it of flat) {
+        if (!it.act_name) { showToast('每个 Activity 都必须填写活动名称 (act_name)', 'error'); return; }
+      }
+      body.configuration.node_config.activities = stages.map(stage => stage.map(it => {
+        const args = it.args || {};
+        const argumentsArr = Object.keys(args).map(k => {
+          const b = args[k] || {};
+          return { key: k, source: b.source || 'value', value: b.value !== undefined ? b.value : (b.ref || ''), ref: b.ref || '' };
+        });
+        return {
+          act_namespace: it.act_namespace,
+          act_name: it.act_name,
+          id: it.id || it.act_name,
+          arguments: argumentsArr
+        };
+      }));
+      delete body.configuration.node_config.stages;
+      delete body.configuration.activities;
+      delete body.configuration.node_config.act_namespace;
+      delete body.configuration.node_config.act_name;
+    } else {
+      // 旧单 activity 自定义输入模式
+      const name = document.getElementById('node-act-name').value.trim();
+      if (name === '') { showToast('activity 类型必须填写活动名称', 'error'); return; }
+      delete body.configuration.node_config.stages;
+      delete body.configuration.activities;
+      delete body.configuration.node_config.act_namespace;
+      delete body.configuration.node_config.act_name;
+    }
   }
 
   try {
@@ -2298,6 +2990,15 @@ function openActivityModal(act) {
   let resp = act ? act.responses : null;
   if (typeof resp === 'object' && resp !== null) resp = JSON.stringify(resp);
   document.getElementById('act-responses').value = resp ? (typeof resp === 'string' ? resp : JSON.stringify(resp)) : '';
+  // 返回值设置 (ReturnValues) 回显
+  clearReturnValueRows();
+  let rvs = act ? act.return_values : null;
+  if (typeof rvs === 'string') { try { rvs = JSON.parse(rvs); } catch(e) { rvs = null; } }
+  if (Array.isArray(rvs) && rvs.length > 0) {
+    rvs.forEach(it => addReturnValueRow(it.name, it.key || '', it.type || ''));
+  }
+  // 异步加载测试成功记录的返回 map 所有 key，回填 key 下拉选项
+  loadReturnValueKeyOptions(act ? act.activity_id : '');
   document.getElementById('act-modal-overlay').classList.add('show');
 }
 
@@ -2547,6 +3248,7 @@ async function saveActivity() {
     arguments: argumentsVal,
     arg_template: document.getElementById('act-arg-template').value.trim(),
     responses: responsesVal,
+    return_values: collectReturnValues(),
     status: parseInt(document.getElementById('act-status').value),
     description: document.getElementById('act-description').value.trim(),
     tags: document.getElementById('act-tags').value.split(',').map(s => s.trim()).filter(s => s !== ''),
@@ -2957,6 +3659,9 @@ function clearLogFilters() {
   document.getElementById('log-keyword').value = '';
   document.getElementById('log-level').value = '';
   document.getElementById('log-event-id').value = '';
+  document.getElementById('log-root-chain-id').value = '';
+  document.getElementById('log-trace-id').value = '';
+  document.getElementById('log-span-id').value = '';
   const envSel = document.getElementById('log-env');
   // 重置为 Activities 列表当前所选环境，而非固定"全部"
   if (envSel) envSel.value = getActivityListEnv();
@@ -2972,10 +3677,16 @@ async function loadActivityLogs() {
   const kw = document.getElementById('log-keyword').value.trim();
   const lv = document.getElementById('log-level').value;
   const ev = document.getElementById('log-event-id').value.trim();
+  const rootChain = document.getElementById('log-root-chain-id').value.trim();
+  const trace = document.getElementById('log-trace-id').value.trim();
+  const span = document.getElementById('log-span-id').value.trim();
   const env = document.getElementById('log-env') ? document.getElementById('log-env').value.trim() : '';
   if (kw) params.set('keyword', kw);
   if (lv) params.set('level', lv);
   if (ev) params.set('event_id', ev);
+  if (rootChain) params.set('root_chain_id', rootChain);
+  if (trace) params.set('trace_id', trace);
+  if (span) params.set('span_id', span);
   if (env) params.set('env', env);
   params.set('page', String(_logPage));
   params.set('page_size', String(_logPageSize));
@@ -3027,6 +3738,9 @@ function renderLogItem(r) {
   left.push('<span class="log-meta">' + esc(t) + '</span>');
   if (r.env) left.push('<span class="log-meta">env=' + esc(r.env) + '</span>');
   if (r.event_id) left.push('<span class="log-meta">trace=' + esc(r.event_id) + '</span>');
+  if (r.root_chain_id) left.push('<span class="log-meta">rc=' + esc(r.root_chain_id) + '</span>');
+  if (r.trace_id) left.push('<span class="log-meta">tid=' + esc(r.trace_id) + '</span>');
+  if (r.span_id) left.push('<span class="log-meta">sid=' + esc(r.span_id) + '</span>');
   if (typeof r.duration_ms === 'number') left.push('<span class="log-meta">' + r.duration_ms + 'ms</span>');
   const segs = [];
   segs.push('<div class="log-item-head">' + left.join('') + '</div>');
@@ -3036,6 +3750,8 @@ function renderLogItem(r) {
   if (errStr) segs.push('<div class="log-json" style="background:#3f1d1d;color:#fecaca">' + esc(errStr) + '</div>');
   if (payloadStr) segs.push('<div class="log-json"><span class="k">payload:</span> ' + esc(trunc(payloadStr, 800)) + '</div>');
   if (resultStr) segs.push('<div class="log-json"><span class="k">result:</span> ' + esc(trunc(resultStr, 800)) + '</div>');
+  const attrStr = toStr(r.attributes);
+  if (attrStr) segs.push('<div class="log-json" style="background:#1e293b;color:#cbd5e1"><span class="k">attributes:</span> ' + esc(trunc(attrStr, 800)) + '</div>');
   return '<div class="log-item">' + segs.join('') + '</div>';
 }
 
@@ -3329,6 +4045,77 @@ function collectParams() {
   return params;
 }
 
+// 将节点参数定义（params）按类型转换后写入 Configuration 第一层 arguments。
+// 对应后端 commnode.CommConfiguration.Arguments（[]*param.BindConfig），
+// 每项仅保留 key / value / policy 三个字段。
+function paramsToBindConfigs(params) {
+  return (params || [])
+    .filter(p => p && p.key)
+    .map(p => ({
+      key: p.key,
+      value: castParamValue(p.value, p.type),
+      policy: p.policy || 'frontend+'
+    }));
+}
+
+// 按参数类型把默认值字符串转换成对应的 JS 类型；无法转换时原样返回字符串。
+function castParamValue(raw, type) {
+  const s = raw === undefined || raw === null ? '' : String(raw);
+  if (s === '') return '';
+  if (type === 'number') {
+    const n = Number(s);
+    return isNaN(n) ? s : n;
+  }
+  if (type === 'boolean') {
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+    return s;
+  }
+  if (type === 'json') {
+    try { return JSON.parse(s); } catch (e) { return s; }
+  }
+  return s;
+}
+
+// 保存时把 params / outputs 同步进 Configuration 第一层。
+// params  -> configuration.arguments（BindConfig 数组）
+// outputs -> configuration.responses（返回值定义数组，原样保留 source/value/ref）
+// 对应集合为空时移除该字段，避免残留旧数据。
+function syncParamsToConfigArguments(body) {
+  if (typeof body.configuration !== 'object' || body.configuration === null) body.configuration = {};
+  const args = paramsToBindConfigs(body.params);
+  if (args.length > 0) {
+    body.configuration.arguments = args;
+  } else {
+    delete body.configuration.arguments;
+  }
+  const resp = outputsToResponses(body.outputs);
+  if (resp.length > 0) {
+    body.configuration.responses = resp;
+  } else {
+    delete body.configuration.responses;
+  }
+}
+
+// 将返回值定义（outputs）转换为 Configuration 第一层 responses 数组。
+// 保留 key/label/type/source，并按 source 保留对应的取值字段：
+//   value    -> value（按 type 转换后的字面量）
+//   ref_act  -> ref（{{actId.responses[.field]}} / {{actId.arguments[.key]}}）
+//   ref_node -> ref（{{nodeParamKey}}）
+function outputsToResponses(outputs) {
+  return (outputs || [])
+    .filter(o => o && o.key)
+    .map(o => {
+      const item = { key: o.key, label: o.label || '', type: o.type || '', source: o.source || 'value' };
+      if (item.source === 'value') {
+        item.value = castParamValue(o.value, o.type);
+      } else {
+        item.ref = o.ref || '';
+      }
+      return item;
+    });
+}
+
 function clearParamRows() {
   const container = document.getElementById('node-params-container');
   container.querySelectorAll('.param-row').forEach(r => r.remove());
@@ -3341,7 +4128,22 @@ function clearParamRows() {
 // ============================================================
 let outputSeq = 0;
 
-function addOutputRow(key, label, type, description) {
+// 返回值类型下拉（与 Activity 返回值设置一致：含"不转换"）
+const OUTPUT_TYPE_OPTIONS = ['', 'string', 'number', 'boolean', 'array', 'object', 'json'];
+const OUTPUT_TYPE_LABELS = { '': '不转换', 'string': 'string', 'number': 'number', 'boolean': 'boolean', 'array': 'array', 'object': 'object', 'json': 'json' };
+function outputTypeHTML(type) {
+  return OUTPUT_TYPE_OPTIONS.map(t =>
+    '<option value="' + t + '"' + ((type||'') === t ? ' selected' : '') + '>' + OUTPUT_TYPE_LABELS[t] + '</option>'
+  ).join('');
+}
+
+function addOutputRow(opts) {
+  opts = opts || {};
+  const key = opts.key || '';
+  const label = opts.label || '';
+  const type = opts.type || '';
+  const source = opts.source || 'value'; // value=手工配置, ref_act=activity选择
+  const ref = opts.ref || '';
   outputSeq++;
   const container = document.getElementById('node-outputs-container');
   const emptyEl = document.getElementById('output-rows-empty');
@@ -3351,18 +4153,28 @@ function addOutputRow(key, label, type, description) {
   row.className = 'param-row';
   row.id = 'output-row-' + outputSeq;
   row.innerHTML = `
-    <input class="output-key" placeholder="键 (key)" value="${esc(key||'')}">
-    <input class="output-label" placeholder="显示名 (label)" value="${esc(label||'')}">
-    <select class="output-type">
-      <option value="string" ${type==='string'?'selected':''}>string</option>
-      <option value="number" ${type==='number'?'selected':''}>number</option>
-      <option value="boolean" ${type==='boolean'?'selected':''}>boolean</option>
-      <option value="json" ${type==='json'?'selected':''}>json</option>
-    </select>
-    <input class="output-desc" placeholder="描述 (description)" value="${esc(description||'')}">
+    <span class="output-input-wrap" style="flex:1;display:flex;gap:6px;align-items:center;min-width:0"></span>
     <button class="btn-remove-param" onclick="removeOutputRow('output-row-${outputSeq}')" title="删除此返回值">&times;</button>
   `;
   container.appendChild(row);
+  const wrap = row.querySelector('.output-input-wrap');
+  wrap.innerHTML = outputRenderInput({ key: key, label: label, type: type, source: source, ref: ref });
+  // 回显引用联动初值
+  if (source === 'ref_act' && ref) {
+    const parsed = outputParseRefPath(ref);
+    if (!Object.prototype.hasOwnProperty.call(parsed, 'raw')) {
+      const prevSel = wrap.querySelector('.arg-ref');
+      const typeSel = wrap.querySelector('.arg-reftype');
+      const fieldInput = wrap.querySelector('.arg-refield');
+      if (prevSel && parsed.refId) prevSel.value = parsed.refId;
+      if (typeSel && parsed.refType) typeSel.value = parsed.refType;
+      if (fieldInput && parsed.refField) fieldInput.value = parsed.refField;
+    }
+  }
+  if (source === 'ref_node' && ref) {
+    const nSel = wrap.querySelector('.output-ref-node');
+    if (nSel) nSel.value = ref;
+  }
 }
 
 function removeOutputRow(rowId) {
@@ -3375,16 +4187,334 @@ function removeOutputRow(rowId) {
   }
 }
 
+// ============================================================
+// Node 返回值定义：来源联动（手工配置 / activity选择）
+// activity选择 与「引用前序」同构，但可选范围为本节点已配置的全部 Activity 的参数与返回值
+// ============================================================
+
+// 本节点已配置的全部 Activity（按阶段顺序），每项含 {id, act_name, ns, params, returnValues}
+function outputAllActivities() {
+  const rows = document.querySelectorAll('#node-activity-stages .act-item');
+  const list = [];
+  rows.forEach(prev => {
+    list.push(prev);
+  });
+  return list.map(prev => {
+    const ns = prev.getAttribute('data-ns') || '';
+    const name = prev.getAttribute('data-name') || '';
+    const id = prev.getAttribute('data-id') || name; // 无显式 id 时用 act_name 作为引用标识
+    const act = (window._activityCache || []).find(a => a.act_namespace === ns && a.act_name === name);
+    let params = [];
+    if (act && act.arguments) {
+      try { params = (typeof act.arguments === 'string') ? JSON.parse(act.arguments || '[]') : (act.arguments || []); } catch(e) { params = []; }
+    }
+    let returnValues = [];
+    if (act && act.return_values) {
+      try { returnValues = (typeof act.return_values === 'string') ? JSON.parse(act.return_values || '[]') : (act.return_values || []); } catch(e) { returnValues = []; }
+    }
+    return { id: id, act_name: name, ns: ns, params: Array.isArray(params) ? params : [], returnValues: Array.isArray(returnValues) ? returnValues : [] };
+  });
+}
+
+// 解析引用路径 → 联动初值
+function outputParseRefPath(ref) {
+  const m = /^\{\{([^}]+)\}\}$/.exec((ref || '').trim());
+  if (!m) return { raw: ref || '' };
+  const inner = m[1];
+  const dot = inner.indexOf('.');
+  if (dot < 0) return { refId: inner, refType: 'ref_node', refField: '' };
+  const refId = inner.slice(0, dot);
+  const rest = inner.slice(dot + 1);
+  if (rest === 'responses') return { refId: refId, refType: 'responses', refField: '' };
+  if (rest === 'arguments') return { refId: refId, refType: 'arguments', refField: '' };
+  if (rest.startsWith('responses.')) return { refId: refId, refType: 'responses_field', refField: rest.slice('responses.'.length) };
+  if (rest.startsWith('arguments.')) return { refId: refId, refType: 'arguments', refField: rest.slice('arguments.'.length) };
+  return { refId: refId, refType: 'responses', refField: rest };
+}
+
+// 联动控件拼出最终引用路径
+// 取值类型与字段的拼装规则（与 activity 参数逻辑一致）：
+//   - responses / responses_field 但字段为空 → {{id.responses}}（整体，不带尾点）
+//   - responses_field 且字段非空       → {{id.responses.<field>}}
+//   - arguments 但字段为空             → {{id.arguments}}
+//   - arguments 且字段非空             → {{id.arguments.<field>}}
+// 即：字段为空时不保留尾点，降级为对应整体形式。
+function outputBuildRefPath(refId, refType, refField) {
+  if (!refId) return '';
+  const field = (refField || '').trim();
+  let inner;
+  if (refType === 'responses' || (refType === 'responses_field' && !field)) inner = refId + '.responses';
+  else if (refType === 'responses_field') inner = refId + '.responses.' + field;
+  else if (refType === 'arguments') inner = refId + '.arguments' + (field ? '.' + field : '');
+  else inner = refId;
+  return '{{' + inner + '}}';
+}
+
+// 取值类型下拉（带隐藏逻辑：无 ReturnValues 则隐藏「返回值.字段」，无 params 则隐藏「参数值.字段」）
+function outputRenderRefTypeSel(prev, parsed) {
+  const hasReturnValues = !!(prev && Array.isArray(prev.returnValues) && prev.returnValues.length > 0);
+  const hasParams = !!(prev && Array.isArray(prev.params) && prev.params.length > 0);
+  let effType = parsed.refType || 'responses';
+  if (effType === 'responses_field' && !hasReturnValues) effType = 'responses';
+  if (effType === 'arguments' && !hasParams) effType = 'responses';
+  let html = '<select class="arg-reftype" onchange="onOutputRefChange(this)" style="flex:1 1 96px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">';
+  html += '<option value="responses"' + (effType === 'responses' ? ' selected' : '') + '>返回值整体</option>';
+  if (hasReturnValues) html += '<option value="responses_field"' + (effType === 'responses_field' ? ' selected' : '') + '>返回值.字段</option>';
+  if (hasParams) html += '<option value="arguments"' + (effType === 'arguments' ? ' selected' : '') + '>参数值.字段</option>';
+  html += '</select>';
+  return html;
+}
+
+// 第三级字段下拉（返回值字段 / 参数 key）
+function outputRenderRefFieldSlot(prevs, prevId, type, selectedField) {
+  if (type === 'responses') return '';
+  const prev = (prevs || []).find(p => p.id === prevId);
+  if (!prev) return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">请先选择 Activity</span>';
+  if (type === 'responses_field') {
+    const rvs = prev.returnValues || [];
+    if (rvs.length === 0) return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">该 Activity 无 ReturnValues 配置</span>';
+    const opts = rvs.map(rv => {
+      const rvName = rv.name || '';
+      const rvKey = rv.key || '';
+      // return_value 的 key 为空表示返回活动返回的全部内容：选中后等价「返回值整体」，
+      // 选项 value 置空，拼路径时回退为 {{id.responses}}（与返回全部数据完全一致）
+      const val = rvKey === '' ? '' : rvName;
+      const label = rvName + (rvKey ? ' (' + rvKey + ')' : '');
+      return '<option value="' + escAttr(val) + '"' + (val === selectedField ? ' selected' : '') + '>' + escHtml(label) + '</option>';
+    }).join('');
+    return '<select class="arg-refield" onchange="onOutputRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+        '<option value="">— 选择返回值字段 —</option>' + opts + '</select>';
+  }
+  const keys = (prev.params || []).map(pp => pp.key || '').filter(Boolean);
+  if (keys.length === 0) return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">该 Activity 无参数定义</span>';
+  const opts = keys.map(k => '<option value="' + escAttr(k) + '"' + (k === selectedField ? ' selected' : '') + '>' + escHtml(k) + '</option>').join('');
+  return '<select class="arg-refield" onchange="onOutputRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+      '<option value="">— 选择参数 key —</option>' + opts + '</select>';
+}
+
+// 来源选择框（手工配置 / activity选择），紧跟在类型选择框之后，宽度收窄
+function outputSourceSelectHTML(source) {
+  const s = source || 'value';
+  return '<select class="output-source" onchange="onOutputSourceChange(this)" style="flex:0 0 78px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' +
+    '<option value="value"' + (s === 'value' ? ' selected' : '') + '>手工配置</option>' +
+    '<option value="ref_act"' + (s === 'ref_act' ? ' selected' : '') + '>activity选择</option>' +
+    '<option value="ref_node"' + (s === 'ref_node' ? ' selected' : '') + '>引用节点</option>' +
+    '</select>';
+}
+
+// 渲染单行输入控件（按来源）
+function outputRenderInput(bind) {
+  bind = bind || {};
+  const source = bind.source || 'value';
+  if (source === 'ref_act') {
+    const prevs = outputAllActivities();
+    const parsed = bind.ref ? outputParseRefPath(bind.ref) : { refId: '', refType: 'responses', refField: '' };
+    const refId = parsed.refId || '';
+    const curPrev = refId ? (prevs.find(p => p.id === refId) || null) : null;
+    const key = bind.key || '';
+    const label = bind.label || '';
+    const type = bind.type || '';
+    const prevOpts = '<option value="">— 选择 Activity —</option>' + prevs.map(p =>
+      '<option value="' + escAttr(p.id) + '"' + (p.id === refId ? ' selected' : '') + '>' + escHtml((p.act_name || p.id) + ' (' + p.ns + ')') + '</option>'
+    ).join('');
+    let html = '<input class="output-key" placeholder="键 (key)" value="' + esc(key) + '" style="flex:1 1 70px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+      '<input class="output-label" placeholder="显示名 (label)" value="' + esc(label) + '" style="flex:1 1 70px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' +
+      '<select class="output-type" style="flex:0 0 70px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + outputTypeHTML(type) + '</select>' +
+      outputSourceSelectHTML(source) +
+      '<span class="arg-ref-combo" style="flex:1 1 200px;display:flex;gap:4px;align-items:center;min-width:0">' +
+        '<select class="arg-ref" onchange="onOutputRefChange(this)" style="flex:1 1 120px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' + prevOpts + '</select>' +
+        outputRenderRefTypeSel(curPrev, parsed) +
+      '</span>' +
+      '<span class="arg-ref-field-slot" style="flex:1 1 120px;display:flex;gap:4px;align-items:center;min-width:0">' + outputRenderRefFieldSlot(prevs, refId, parsed.refType, parsed.refField) + '</span>';
+    html += '<input type="hidden" class="output-ref-final" value="' + escAttr(bind.ref || '') + '">';
+    return html;
+  }
+  if (source === 'ref_node') {
+    // 引用节点参数定义：列出本节点已定义的参数 key，生成 {{key}}
+    const nodeParams = nodeParamDefs();
+    const nodeRef = bind.ref || '';
+    const key = bind.key || '';
+    const label = bind.label || '';
+    const type = bind.type || '';
+    let refCtrl;
+    if (nodeParams.length === 0) {
+      refCtrl = '<span style="flex:1;color:var(--text-muted);font-size:.78rem">本节点未定义参数，无法引用</span>';
+    } else {
+      const opts = nodeParams.map(p =>
+        '<option value="' + escAttr('{{' + p.key + '}}') + '"' + ('{{' + p.key + '}}' === nodeRef ? ' selected' : '') + '>' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
+      ).join('');
+      refCtrl = '<select class="output-ref-node" onchange="onOutputRefChange(this)" style="flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+        '<option value="">— 选择节点参数 —</option>' + opts + '</select>';
+    }
+    let html = '<input class="output-key" placeholder="键 (key)" value="' + esc(key) + '" style="flex:1 1 70px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+      '<input class="output-label" placeholder="显示名 (label)" value="' + esc(label) + '" style="flex:1 1 70px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' +
+      '<select class="output-type" style="flex:0 0 70px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + outputTypeHTML(type) + '</select>' +
+      outputSourceSelectHTML(source) +
+      refCtrl;
+    html += '<input type="hidden" class="output-ref-final" value="' + escAttr(bind.ref || '') + '">';
+    return html;
+  }
+  // 手工配置：key / label / 类型 / 配置值(表达式)
+  const key = bind.key || '';
+  const label = bind.label || '';
+  const type = bind.type || '';
+  const value = bind.value || '';
+  return '<input class="output-key" placeholder="键 (key)" value="' + esc(key) + '" style="flex:1 1 90px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+    '<input class="output-label" placeholder="显示名 (label)" value="' + esc(label) + '" style="flex:1 1 90px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' +
+    '<select class="output-type" style="flex:0 0 70px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + outputTypeHTML(type) + '</select>' +
+    outputSourceSelectHTML(bind.source) +
+    '<input class="output-value" placeholder="配置值/表达式" value="' + esc(value) + '" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">';
+}
+
+// 重建第三级字段下拉
+function outputRebuildRefFieldSlot(wrap) {
+  const prevSel = wrap.querySelector('.arg-ref');
+  const typeSel = wrap.querySelector('.arg-reftype');
+  const slot = wrap.querySelector('.arg-ref-field-slot');
+  if (!prevSel || !typeSel || !slot) return;
+  const prevs = outputAllActivities();
+  const prev = prevs.find(p => p.id === prevSel.value) || null;
+  slot.innerHTML = outputRenderRefFieldSlot(prevs, prevSel.value, typeSel.value, '');
+}
+
+// 来源切换：手工配置 / activity选择（局部重建当前行）
+function onOutputSourceChange(sel) {
+  const row = sel.closest('.param-row');
+  if (!row) return;
+  const wrap = row.querySelector('.output-input-wrap');
+  if (!wrap) return;
+  const newSrc = sel.value;
+  // 保留已填值（key/label/type 在两种来源下都保留；value 与 ref 各自保留）
+  const prevKey = row.querySelector('.output-key') ? row.querySelector('.output-key').value.trim() : '';
+  const prevLabel = row.querySelector('.output-label') ? row.querySelector('.output-label').value.trim() : '';
+  const prevType = row.querySelector('.output-type') ? row.querySelector('.output-type').value : '';
+  const prevValue = row.querySelector('.output-value') ? row.querySelector('.output-value').value : '';
+  const finalInput = row.querySelector('.output-ref-final');
+  const prevRef = finalInput ? finalInput.value.trim() : '';
+  const bind = {
+    source: newSrc,
+    key: prevKey,
+    label: prevLabel,
+    type: prevType,
+    value: prevValue,
+    ref: prevRef,
+  };
+  wrap.innerHTML = outputRenderInput(bind);
+  // 回显引用联动初值
+  if (newSrc === 'ref_act' && bind.ref) {
+    const parsed = outputParseRefPath(bind.ref);
+    if (!Object.prototype.hasOwnProperty.call(parsed, 'raw')) {
+      const pSel = wrap.querySelector('.arg-ref');
+      const tSel = wrap.querySelector('.arg-reftype');
+      const fInput = wrap.querySelector('.arg-refield');
+      if (pSel && parsed.refId) pSel.value = parsed.refId;
+      if (tSel && parsed.refType) tSel.value = parsed.refType;
+      if (fInput && parsed.refField) fInput.value = parsed.refField;
+    }
+  }
+  if (newSrc === 'ref_node' && bind.ref) {
+    const nSel = wrap.querySelector('.output-ref-node');
+    if (nSel) nSel.value = bind.ref;
+  }
+}
+
+// 引用下拉/输入变化：拼装最终引用路径写入 .output-ref-final
+function onOutputRefChange(sel) {
+  const wrap = sel.closest('.output-input-wrap');
+  if (!wrap) return;
+  let finalInput = wrap.querySelector('.output-ref-final');
+  if (!finalInput) return;
+  // 引用节点参数：直接以下拉选中值（形如 {{key}}）作为最终引用路径
+  const nodeSel = wrap.querySelector('.output-ref-node');
+  if (nodeSel && sel === nodeSel) {
+    finalInput.value = nodeSel.value;
+    return;
+  }
+  const prevSel = wrap.querySelector('.arg-ref');
+  const typeSel = wrap.querySelector('.arg-reftype');
+  const slot = wrap.querySelector('.arg-ref-field-slot');
+  // 切换取值类型：重建第三级字段
+  if (sel === typeSel) {
+    outputRebuildRefFieldSlot(wrap);
+  }
+  // 切换 Activity：整行随新 Activity 重建（取值类型选项、字段均动态生成），回填当前已选 Activity 与 key/label/type
+  if (sel === prevSel) {
+    const parsed = outputParseRefPath(finalInput.value);
+    const refId = prevSel.value;
+    const prevs = outputAllActivities();
+    const curPrev = refId ? (prevs.find(p => p.id === refId) || null) : null;
+    const row = sel.closest('.param-row');
+    const key = row && row.querySelector('.output-key') ? row.querySelector('.output-key').value.trim() : '';
+    const label = row && row.querySelector('.output-label') ? row.querySelector('.output-label').value.trim() : '';
+    const type = row && row.querySelector('.output-type') ? row.querySelector('.output-type').value : '';
+    // 保留当前来源（切换 Activity 时来源不变，必须带回，否则重建后 .output-source 丢失，collectOutputs 会回退为 value）
+    const curSource = row && row.querySelector('.output-source') ? row.querySelector('.output-source').value : 'ref_act';
+    const typeSelHTML = outputRenderRefTypeSel(curPrev, parsed.refType ? parsed : { refType: 'responses' });
+    let html = '<input class="output-key" placeholder="键 (key)" value="' + esc(key) + '" style="flex:1 1 80px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+      '<input class="output-label" placeholder="显示名 (label)" value="' + esc(label) + '" style="flex:1 1 80px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' +
+      '<select class="output-type" style="flex:0 0 80px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + outputTypeHTML(type) + '</select>' +
+      outputSourceSelectHTML(curSource) +
+      '<span class="arg-ref-combo" style="flex:1 1 160px;display:flex;gap:4px;align-items:center;min-width:0">' +
+        '<select class="arg-ref" onchange="onOutputRefChange(this)" style="flex:1 1 90px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+          '<option value="">— 选择 Activity —</option>' + prevs.map(p =>
+            '<option value="' + escAttr(p.id) + '"' + (p.id === refId ? ' selected' : '') + '>' + escHtml((p.act_name || p.id) + ' (' + p.ns + ')') + '</option>'
+          ).join('') + '</select>' +
+        typeSelHTML +
+      '</span>';
+    html += '<span class="arg-ref-field-slot" style="flex:1 1 120px;display:flex;gap:4px;align-items:center;min-width:0">' + outputRenderRefFieldSlot(prevs, refId, (curPrev && parsed.refType) || 'responses', parsed.refField || '') + '</span>';
+    html += '<input type="hidden" class="output-ref-final" value="' + escAttr(finalInput.value) + '">';
+    wrap.innerHTML = html;
+    const newPrevSel = wrap.querySelector('.arg-ref');
+    if (newPrevSel && refId) newPrevSel.value = refId;
+    finalInput = wrap.querySelector('.output-ref-final');
+  }
+  // 拼装最终引用路径
+  const pSel = wrap.querySelector('.arg-ref');
+  const tSel = wrap.querySelector('.arg-reftype');
+  const fInput = wrap.querySelector('.arg-refield');
+  if (pSel && tSel) {
+    finalInput.value = outputBuildRefPath(pSel.value, tSel.value, fInput ? fInput.value : '');
+  }
+}
+
 function collectOutputs() {
   const rows = document.querySelectorAll('#node-outputs-container .param-row');
   const outputs = [];
   rows.forEach(row => {
-    const key = row.querySelector('.output-key').value.trim();
-    const label = row.querySelector('.output-label').value.trim();
-    const type = row.querySelector('.output-type').value;
-    const description = row.querySelector('.output-desc').value.trim();
+    const source = row.querySelector('.output-source') ? row.querySelector('.output-source').value : 'value';
+    const key = row.querySelector('.output-key') ? row.querySelector('.output-key').value.trim() : '';
+    const label = row.querySelector('.output-label') ? row.querySelector('.output-label').value.trim() : '';
+    const type = row.querySelector('.output-type') ? row.querySelector('.output-type').value : '';
+    const out = { key: key, label: label, type: type, source: source };
+    if (source === 'value') {
+      const valueEl = row.querySelector('.output-value');
+      out.value = valueEl ? valueEl.value : '';
+    } else if (source === 'ref_act') {
+      const finalInput = row.querySelector('.output-ref-final');
+      let ref = finalInput ? finalInput.value.trim() : '';
+      // 兜底：若隐藏域为空（如时序/重建导致未写入），用当前下拉实时拼装，确保选择不丢
+      if (!ref) {
+        const pSel = row.querySelector('.arg-ref');
+        const tSel = row.querySelector('.arg-reftype');
+        const fInput = row.querySelector('.arg-refield');
+        if (pSel && tSel) {
+          ref = outputBuildRefPath(pSel.value, tSel.value, fInput ? fInput.value : '');
+        }
+      }
+      out.ref = ref;
+    } else if (source === 'ref_node') {
+      // 引用节点参数定义：最终路径为 {{key}}，与「手工配置」共用 value 字段语义不同，单独存 ref
+      const finalInput = row.querySelector('.output-ref-final');
+      let ref = finalInput ? finalInput.value.trim() : '';
+      // 兜底：隐藏域为空时用当前下拉实时取值，确保选择不丢
+      if (!ref) {
+        const nSel = row.querySelector('.output-ref-node');
+        if (nSel) ref = nSel.value;
+      }
+      out.ref = ref;
+    }
     if (key) {
-      outputs.push({ key, label, type, description });
+      outputs.push(out);
     }
   });
   return outputs;
@@ -3474,6 +4604,110 @@ function collectActParams() {
     params.push({ key, label, type, required, policy, value: value === '' ? '' : value, description });
   });
   return params;
+}
+
+// ============================================================
+// Activity 返回值设置 (ReturnValues)
+// ============================================================
+// 当前 activity 最近一条测试成功记录中提取出的返回值 map key 列表（全局缓存，供 key 下拉/输入提示使用）
+let _returnValueKeyOptions = [];
+
+// 异步加载最近一条测试成功记录中的返回值 map 全部 key。
+// 仅取「最近的一条」测试成功记录（按接口返回顺序，第一条 success 视为最近），而非多条合并。
+async function loadReturnValueKeyOptions(activityId) {
+  _returnValueKeyOptions = [];
+  try {
+    const p = getProject();
+    if (!activityId || !p) return;
+    const records = await api('/api/activities/' + encodeURIComponent(activityId) + '/test-records?project=' + encodeURIComponent(p));
+    // 找到最近一条（列表第一条）测试成功的记录
+    let latest = null;
+    for (const r of (records || [])) {
+      if (r.status === 'success') { latest = r; break; }
+    }
+    if (latest) {
+      let obj = latest.result;
+      if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch (e) { obj = null; } }
+      if (obj && typeof obj === 'object') {
+        _returnValueKeyOptions = Object.keys(obj);
+      }
+    }
+    // 重新渲染已存在行的 key 输入提示
+    document.querySelectorAll('#act-return-values-container .rv-row').forEach(renderReturnValueKeyOptions);
+  } catch (e) { /* 忽略加载失败 */ }
+}
+
+// 渲染某行的 key 候选（datalist 提示，支持手动输入）
+function renderReturnValueKeyOptions(row) {
+  const input = row.querySelector('.rv-key');
+  if (!input) return;
+  let dl = row.querySelector('.rv-key-list');
+  if (!dl) {
+    // 首次创建 datalist
+    dl = document.createElement('datalist');
+    dl.className = 'rv-key-list';
+    dl.id = 'rv-keylist-' + Math.random().toString(36).slice(2);
+    input.setAttribute('list', dl.id);
+    row.appendChild(dl);
+  }
+  dl.innerHTML = _returnValueKeyOptions.map(k =>
+    '<option value="' + escAttr(k) + '">' + escHtml(k) + '</option>'
+  ).join('');
+}
+
+function addReturnValueRow(name, key, type) {
+  const container = document.getElementById('act-return-values-container');
+  const emptyEl = document.getElementById('act-return-values-empty');
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  const typeOptions = ['', 'string', 'number', 'boolean', 'array', 'object', 'json'];
+  const typeLabels = { '': '不转换', 'string': 'string', 'number': 'number', 'boolean': 'boolean', 'array': 'array', 'object': 'object', 'json': 'json' };
+  const typeHTML = typeOptions.map(t =>
+    '<option value="' + t + '"' + ((type||'') === t ? ' selected' : '') + '>' + typeLabels[t] + '</option>'
+  ).join('');
+
+  const row = document.createElement('div');
+  row.className = 'rv-row';
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px dotted #eef0f3';
+  row.innerHTML = `
+    <input class="rv-name" placeholder="返回值名称" value="${esc(name||'')}" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">
+    <input class="rv-key" placeholder="返回值 key（留空=返回所有内容，可手动输入）" value="${esc(key||'')}" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">
+    <select class="rv-type" title="输出格式转换类型" style="flex:0 0 96px;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">${typeHTML}</select>
+    <button class="btn-remove-param" onclick="removeReturnValueRow(this)" title="删除此返回值">&times;</button>
+  `;
+  container.appendChild(row);
+  renderReturnValueKeyOptions(row);
+}
+
+function removeReturnValueRow(btn) {
+  const row = btn.closest('.rv-row');
+  if (row) row.remove();
+  const container = document.getElementById('act-return-values-container');
+  if (!container.querySelector('.rv-row')) {
+    const emptyEl = document.getElementById('act-return-values-empty');
+    if (emptyEl) emptyEl.style.display = '';
+  }
+}
+
+function collectReturnValues() {
+  const rows = document.querySelectorAll('#act-return-values-container .rv-row');
+  const list = [];
+  rows.forEach(row => {
+    const name = row.querySelector('.rv-name').value.trim();
+    const key = row.querySelector('.rv-key').value;
+    const type = row.querySelector('.rv-type') ? row.querySelector('.rv-type').value : '';
+    if (!name) return; // 跳过未填名称的空行
+    list.push({ name: name, key: key || '', type: type || '' });
+  });
+  return list;
+}
+
+function clearReturnValueRows() {
+  const container = document.getElementById('act-return-values-container');
+  if (!container) return;
+  container.querySelectorAll('.rv-row').forEach(r => r.remove());
+  const emptyEl = document.getElementById('act-return-values-empty');
+  if (emptyEl) emptyEl.style.display = '';
 }
 
 function clearActParamRows() {
@@ -5298,6 +6532,168 @@ try {
   });
   window.addEventListener('scroll', () => pop.classList.remove('show'), true);
 })();
+
+// ===== 参数值绑定相关全局函数（供 renderActivityItemParams / onArgSourceChange / onRefChange 跨作用域复用） =====
+
+// 根据已存引用路径 b.ref 反推联动控件初值：{ refId, refType, refField, raw }
+function argParseRefPath(ref) {
+  const m = /^\{\{([^}]+)\}\}$/.exec((ref || '').trim());
+  if (!m) return { raw: ref || '' };
+  const inner = m[1];
+  const dot = inner.indexOf('.');
+  if (dot < 0) return { refId: inner, refType: 'responses', refField: '' };
+  const refId = inner.slice(0, dot);
+  const rest = inner.slice(dot + 1);
+  if (rest === 'responses') return { refId: refId, refType: 'responses', refField: '' };
+  if (rest === 'arguments') return { refId: refId, refType: 'arguments', refField: '' };
+  if (rest.startsWith('responses.')) return { refId: refId, refType: 'responses_field', refField: rest.slice('responses.'.length) };
+  if (rest.startsWith('arguments.')) return { refId: refId, refType: 'arguments', refField: rest.slice('arguments.'.length) };
+  return { refId: refId, refType: 'responses', refField: rest };
+}
+// 根据联动控件拼出最终引用路径
+function argBuildRefPath(refId, refType, refField) {
+  if (!refId) return '';
+  const field = (refField || '').trim();
+  let inner;
+  if (refType === 'responses') inner = refId + '.responses';
+  // 返回值.字段：field 为空（未选具体字段，或所选 return_value 的 key 为空=返回全部）一律回退为整体 {{id.responses}}
+  else if (refType === 'responses_field') inner = refId + '.responses' + (field ? '.' + field : '');
+  else if (refType === 'arguments') inner = refId + '.arguments.' + (field || 'key');
+  else inner = refId;
+  return '{{' + inner + '}}';
+}
+// 生成「引用前序」第三级字段选择下拉
+function argRenderRefFieldSlot(prevs, prevId, type, selectedField) {
+  if (type === 'responses') return '';
+  const prev = (prevs || []).find(p => p.id === prevId);
+  if (!prev) {
+    return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">请先选择前序 Activity</span>';
+  }
+  if (type === 'responses_field') {
+    const rvs = prev.returnValues || [];
+    if (rvs.length === 0) {
+      return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">该 Activity 无 ReturnValues 配置</span>';
+    }
+    const opts = rvs.map(rv => {
+      const rvName = rv.name || '';
+      const rvKey = rv.key || '';
+      // return_value 的 key 为空表示返回活动返回的全部内容：选中后等价「返回值整体」，
+      // 选项 value 置空，拼路径时回退为 {{id.responses}}（与返回全部数据完全一致）
+      const val = rvKey === '' ? '' : rvName;
+      const label = rvName + (rvKey ? ' (' + rvKey + ')' : '');
+      return '<option value="' + escAttr(val) + '"' + (val === selectedField ? ' selected' : '') + '>' + escHtml(label) + '</option>';
+    }).join('');
+    return '<select class="arg-refield" onchange="onRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+        '<option value="">— 选择返回值字段 —</option>' + opts + '</select>';
+  }
+  const keys = (prev.params || []).map(pp => pp.key || '').filter(Boolean);
+  if (keys.length === 0) {
+    return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">该 Activity 无参数定义</span>';
+  }
+  const opts = keys.map(k => '<option value="' + escAttr(k) + '"' + (k === selectedField ? ' selected' : '') + '>' + escHtml(k) + '</option>').join('');
+  return '<select class="arg-refield" onchange="onRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+      '<option value="">— 选择参数 key —</option>' + opts + '</select>';
+}
+// 生成「引用前序」第二级取值类型下拉（全局函数，供 argRenderArgInput / onRefChange 跨作用域调用）：
+//   - 返回值整体：始终可选
+//   - 返回值.字段：仅当前序 Activity 配置了 ReturnValues（后端返回值）时可选，否则隐藏
+//   - 参数值.字段：仅当前序 Activity 有参数列表（arguments）时可选，否则隐藏
+function argRenderRefTypeSel(prev, parsed) {
+  const hasReturnValues = !!(prev && Array.isArray(prev.returnValues) && prev.returnValues.length > 0);
+  const hasParams = !!(prev && Array.isArray(prev.params) && prev.params.length > 0);
+  // 若已选类型因前序无对应配置而不再可选，回退到「返回值整体」
+  let effType = parsed.refType || 'responses_field';
+  if (effType === 'responses_field' && !hasReturnValues) effType = 'responses';
+  if (effType === 'arguments' && !hasParams) effType = 'responses';
+  let html = '<select class="arg-reftype" onchange="onRefChange(this)" style="flex:0 0 auto;width:auto;max-width:160px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">';
+  html += '<option value="responses"' + (effType === 'responses' ? ' selected' : '') + '>返回值整体</option>';
+  if (hasReturnValues) {
+    html += '<option value="responses_field"' + (effType === 'responses_field' ? ' selected' : '') + '>返回值.字段</option>';
+  }
+  if (hasParams) {
+    html += '<option value="arguments"' + (effType === 'arguments' ? ' selected' : '') + '>参数值.字段</option>';
+  }
+  html += '</select>';
+  return html;
+}
+// 单个参数绑定行的「输入控件」部分 HTML（返回 .arg-input-wrap 内部内容，供来源切换时局部重建）
+function argRenderArgInput(key, bind, argCtx) {
+  const prevs = argCtx.prevs || [];
+  const nodeParams = argCtx.nodeParams || [];
+  const nodeRefOptions = argCtx.nodeRefOptions || '';
+  const src = bind.source === 'ref_act' ? 'ref_act' : (bind.source === 'ref_node' ? 'ref_node' : 'value');
+  const defVal = (typeof bind._defVal !== 'undefined') ? bind._defVal : (bind.value !== undefined ? bind.value : '');
+  const valVal = src === 'value' ? (bind.value !== undefined ? bind.value : defVal) : (bind.ref || '');
+
+  if (src === 'value') {
+    return '<input class="arg-val" value="' + escAttr(valVal) + '" placeholder="手工配置（留空则用活动默认值）" oninput="syncActivityConfig()" style="flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">';
+  } else if (src === 'ref_node') {
+    const parsed = argParseRefPath(bind.ref);
+    if (nodeParams.length === 0) {
+      return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">本节点未定义参数，无法引用</span>';
+    }
+    const selVal = Object.prototype.hasOwnProperty.call(parsed, 'raw') ? parsed.raw : (bind.ref || '');
+    let html = '<select class="arg-ref-node" onchange="onRefChange(this)" style="flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+        '<option value="">— 选择节点参数 —</option>' + nodeRefOptions +
+      '</select>';
+    html += (Object.prototype.hasOwnProperty.call(parsed, 'raw') && parsed.raw)
+      ? '<input class="arg-ref-final" type="hidden" value="' + escAttr(parsed.raw) + '">'
+      : '<input class="arg-ref-final" type="hidden" value="' + escAttr(selVal) + '">';
+    return html;
+  }
+  const parsed = argParseRefPath(bind.ref);
+  if (prevs.length === 0) {
+    return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">前面没有可引用的 Activity（并行阶段的兄弟不可互相引用）</span>';
+  }
+  const prevSel = '<select class="arg-ref" onchange="onRefChange(this)" style="flex:1 1 120px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+      '<option value="">— 前序 Activity —</option>' +
+      prevs.map(p => '<option value="' + escAttr(p.id) + '"' + (p.id === parsed.refId ? ' selected' : '') + '>' + escHtml(p.act_name + ' #' + p.id) + '</option>').join('') +
+    '</select>';
+  const curPrev = parsed.refId ? (prevs.find(p => p.id === parsed.refId) || null) : null;
+  const typeSel = argRenderRefTypeSel(curPrev, parsed);
+  const fieldSlot = '<span class="arg-ref-field-slot" data-prev="' + escAttr(parsed.refId || '') + '" data-type="' + escAttr(parsed.refType || 'responses_field') + '">' +
+      argRenderRefFieldSlot(prevs, parsed.refId || '', parsed.refType || 'responses_field', parsed.refField || '') + '</span>';
+  const finalHidden = '<input class="arg-ref-final" type="hidden" value="' + escAttr(bind.ref || '') + '">';
+  return prevSel + typeSel + fieldSlot + finalHidden;
+}
+// 单个参数绑定行的完整 HTML（全局可复用，renderActivityItemParams 整卡渲染时调用）
+// argCtx: { prevs, nodeParams, nodeRefOptions }
+function argRenderArgBindRow(row, key, bind, argCtx) {
+  const prevs = argCtx.prevs || [];
+  const src = bind.source === 'ref_act' ? 'ref_act' : (bind.source === 'ref_node' ? 'ref_node' : 'value');
+  const hasPrev = prevs.length > 0;
+  const effSrc = (src === 'ref_act' && !hasPrev) ? 'value' : src;
+  const srcOptions =
+    '<option value="value"' + (effSrc === 'value' ? ' selected' : '') + '>手工配置</option>' +
+    (hasPrev ? '<option value="ref_act"' + (effSrc === 'ref_act' ? ' selected' : '') + '>引用前序</option>' : '') +
+    '<option value="ref_node"' + (effSrc === 'ref_node' ? ' selected' : '') + '>引用节点</option>';
+
+  return '<div class="arg-bind-row" data-arg-key="' + escAttr(key) + '" style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px dotted #eef0f3;min-width:0">' +
+      '<span style="font-family:monospace;font-weight:600;font-size:.78rem;flex:0 0 130px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + escAttr(key) + '">' + escHtml(key) + '</span>' +
+      '<select class="arg-src" onchange="onArgSourceChange(this)" style="flex:0 0 auto;width:auto;max-width:140px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + srcOptions + '</select>' +
+      '<span class="arg-input-wrap" style="display:flex;flex:1;gap:6px;min-width:0;overflow:hidden">' + argRenderArgInput(key, bind, argCtx) + '</span>' +
+    '</div>';
+}
+// 切换前序 activity 或取值类型时，重建第三级字段下拉内容（全局函数，供 onRefChange 跨作用域调用）
+function argGetPrevsForWrap(wrap) {
+  const row = wrap.closest('.act-item');
+  return row ? prevActivitiesBefore(row) : [];
+}
+function rebuildRefFieldSlot(wrap) {
+  const slot = wrap.querySelector('.arg-ref-field-slot');
+  if (!slot) return;
+  const prevSel = wrap.querySelector('.arg-ref');
+  const typeSel = wrap.querySelector('.arg-reftype');
+  const fieldSel = wrap.querySelector('.arg-refield');
+  const prevId = prevSel ? prevSel.value : '';
+  const type = typeSel ? typeSel.value : 'responses_field';
+  const selected = fieldSel ? fieldSel.value : '';
+  const row = wrap.closest('.act-item');
+  const prevs = row ? prevActivitiesBefore(row) : [];
+  slot.setAttribute('data-prev', prevId);
+  slot.setAttribute('data-type', type);
+  slot.innerHTML = argRenderRefFieldSlot(prevs, prevId, type, selected);
+}
 </script>
 </body>
 </html>

@@ -22,6 +22,10 @@ type ActivityLogModel struct {
 	Payload      string    `gorm:"column:payload;type:json" json:"payload"`
 	Result       string    `gorm:"column:result;type:json" json:"result"`
 	ErrorMsg     string    `gorm:"column:error_msg;type:text" json:"error_msg"`
+	RootChainID  string    `gorm:"column:root_chain_id;type:varchar(128);index;Default:''" json:"root_chain_id"`
+	TraceID      string    `gorm:"column:trace_id;type:varchar(128);index;Default:''" json:"trace_id"`
+	SpanID       string    `gorm:"column:span_id;type:varchar(128);index;Default:''" json:"span_id"`
+	Attributes   string    `gorm:"column:attributes;type:json" json:"attributes"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -45,6 +49,10 @@ func (m *ActivityLogModel) ToDef() *workflow.ActivityLogDef {
 		Payload:      json.RawMessage(m.Payload),
 		Result:       json.RawMessage(m.Result),
 		ErrorMsg:     m.ErrorMsg,
+		RootChainID:  m.RootChainID,
+		TraceID:      m.TraceID,
+		SpanID:       m.SpanID,
+		Attributes:   json.RawMessage(m.Attributes),
 		CreatedAt:    m.CreatedAt,
 	}
 }
@@ -62,4 +70,8 @@ func (m *ActivityLogModel) FromDef(def *workflow.ActivityLogDef) {
 	m.Payload = string(def.Payload)
 	m.Result = string(def.Result)
 	m.ErrorMsg = def.ErrorMsg
+	m.RootChainID = def.RootChainID
+	m.TraceID = def.TraceID
+	m.SpanID = def.SpanID
+	m.Attributes = string(def.Attributes)
 }

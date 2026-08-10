@@ -36,6 +36,7 @@ type ActivityModel struct {
 	Arguments    string    `gorm:"type:text" json:"arguments"`
 	ArgTemplate  string    `gorm:"column:arg_template;type:text" json:"arg_template"`
 	Responses    string    `gorm:"type:text" json:"responses"`
+	ReturnValues string    `gorm:"column:return_values;type:text" json:"return_values"`
 	Status       int8      `gorm:"default:1;index" json:"status"`
 	Description  string    `gorm:"type:varchar(512)" json:"description"`
 	Tags         string    `gorm:"type:varchar(512)" json:"tags"`
@@ -62,6 +63,7 @@ func (m *ActivityModel) ToDef() *workflow.ActivityDef {
 		Arguments:    json.RawMessage(m.Arguments),
 		ArgTemplate:  m.ArgTemplate,
 		Responses:    json.RawMessage(m.Responses),
+		ReturnValues: json.RawMessage(m.ReturnValues),
 		Status:       m.Status,
 		Description:  m.Description,
 		CreatedAt:    m.CreatedAt,
@@ -88,6 +90,7 @@ func (m *ActivityModel) FromDef(def *workflow.ActivityDef) {
 	m.Arguments = NormalizeJSONRaw(def.Arguments)
 	m.ArgTemplate = def.ArgTemplate
 	m.Responses = NormalizeJSONRaw(def.Responses)
+	m.ReturnValues = NormalizeJSONRaw(def.ReturnValues)
 	m.Status = def.Status
 	m.Description = def.Description
 	m.Tags = serializeTags(def.Tags)

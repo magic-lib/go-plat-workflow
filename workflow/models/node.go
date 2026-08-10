@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"time"
 
 	"gorm.io/gorm"
@@ -48,18 +49,54 @@ func (NodeModel) TableName() string {
 	return "wf_nodes"
 }
 
+// 节点类型历史别名映射。
+// 早期版本自定义节点在库中存储的是无命名空间的值（activity/condSwitch），
+// 现统一改为带 custom/ 前缀以与 rulego 原生节点区分，并在加载时做兼容归一化，
+// 保证存量数据无需手动迁移即可被 builder / executor 正确识别。
+var nodeTypeAlias = map[string]string{
+	"activity":   common.ActivityNodeTypeName,
+	"condSwitch": common.CondSwitchNodeTypeName,
+}
+
+// normalizeNodeType 将历史类型值归一化为当前规范值。
+// 未知类型（如 rulego 原生 log/jsTransform 或已带 custom/ 前缀的自定义类型）原样返回。
+func normalizeNodeType(t string) string {
+	if norm, ok := nodeTypeAlias[t]; ok {
+		return norm
+	}
+	return t
+}
+
 // ToNodeDef 将数据库模型转换为 NodeDef。
+// Type 字段会经过 normalizeNodeType 兼容存量数据中无 custom/ 前缀的旧值。
+// 注意：json.RawMessage("") 是非法 JSON，序列化会报错导致回显失败，故对空值回退为合法空对象/数组。
 func (m *NodeModel) ToNodeDef() *workflow.NodeDef {
+	conf := m.Configuration
+	if len(conf) == 0 {
+		conf = "{}"
+	}
+	additional := m.AdditionalInfo
+	if len(additional) == 0 {
+		additional = "{}"
+	}
+	params := m.Params
+	if len(params) == 0 {
+		params = "[]"
+	}
+	outputs := m.Outputs
+	if len(outputs) == 0 {
+		outputs = "[]"
+	}
 	return &workflow.NodeDef{
 		Project:        m.Project,
 		NodeID:         m.NodeID,
 		Name:           m.Name,
-		Type:           m.Type,
+		Type:           normalizeNodeType(m.Type),
 		DebugMode:      m.DebugMode,
-		Configuration:  json.RawMessage(m.Configuration),
-		AdditionalInfo: json.RawMessage(m.AdditionalInfo),
-		Params:         json.RawMessage(m.Params),
-		Outputs:        json.RawMessage(m.Outputs),
+		Configuration:  json.RawMessage(conf),
+		AdditionalInfo: json.RawMessage(additional),
+		Params:         json.RawMessage(params),
+		Outputs:        json.RawMessage(outputs),
 		Kind:           m.Kind,
 		Category:       m.Category,
 		Description:    m.Description,
@@ -75,13 +112,21 @@ func (m *NodeModel) FromNodeDef(def *workflow.NodeDef) {
 	m.Name = def.Name
 	m.Type = def.Type
 	m.DebugMode = def.DebugMode
-	m.Configuration = string(def.Configuration)
-	m.AdditionalInfo = string(def.AdditionalInfo)
-	m.Params = string(def.Params)
-	m.Outputs = string(def.Outputs)
+	m.Configuration = rawOr(def.Configuration, "{}")
+	m.AdditionalInfo = rawOr(def.AdditionalInfo, "{}")
+	m.Params = rawOr(def.Params, "[]")
+	m.Outputs = rawOr(def.Outputs, "[]")
 	m.Kind = def.Kind
 	m.Category = def.Category
 	m.Description = def.Description
 	m.Status = def.Status
 	m.Version = def.Version
+}
+
+// rawOr 将 json.RawMessage 转为字符串，nil 或空时回退为 fallback（合法 JSON）。
+func rawOr(raw json.RawMessage, fallback string) string {
+	if len(raw) == 0 {
+		return fallback
+	}
+	return string(raw)
 }

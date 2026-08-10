@@ -122,6 +122,7 @@ func (r *ActivityRepo) Update(ctx context.Context, def *workflow.ActivityDef) er
 			"arguments":     models.NormalizeJSONRaw(def.Arguments),
 			"arg_template":  def.ArgTemplate,
 			"responses":     models.NormalizeJSONRaw(def.Responses),
+			"return_values": models.NormalizeJSONRaw(def.ReturnValues),
 			"status":        def.Status,
 			"description":   def.Description,
 			"tags":          models.SerializeActivityTags(def.Tags),

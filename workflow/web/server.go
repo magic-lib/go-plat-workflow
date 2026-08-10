@@ -1241,6 +1241,9 @@ func (ws *WebServer) handleListActivityLogs(w http.ResponseWriter, r *http.Reque
 		EventID:      q.Get("event_id"),
 		Env:          q.Get("env"),
 		Keyword:      q.Get("keyword"),
+		RootChainID:  q.Get("root_chain_id"),
+		TraceID:      q.Get("trace_id"),
+		SpanID:       q.Get("span_id"),
 	}
 	if v := q.Get("start"); v != "" {
 		if n, e := strconv.ParseInt(v, 10, 64); e == nil {

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"io"
 	"net/http"
 	"regexp"
@@ -89,7 +90,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		activityRepo:           activityRepo,
 		activityTestRecordRepo: activityTestRecordRepo,
 		activityLogRepo:        activityLogRepo,
-		mqExecutor:             workflow.NewMQExecutor(),
+		mqExecutor:             workflow.NewMQExecutorWithLogAndEnv(activityLogRepo, envConfigRepo),
 		dslBuilder:             builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
 		engine:                 engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
 	}
@@ -641,16 +642,10 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 		return nil, err
 	}
 
-	// 3. 查询环境配置（用于构建 Redis 连接）
-	redisCfg, err := s.getRedisConfig(ctx, req.Project, req.EnvName)
-	if err != nil {
-		return nil, err
-	}
-
 	// 4. 构建环境变量（可选）
 	envVars := make(map[string]string)
 	if req.EnvName != "" {
-		if envDef, e := s.envConfigRepo.GetByName(ctx, req.Project, req.EnvName); e == nil && envDef != nil {
+		if envDef, e := s.envConfigRepo.GetByName(ctx, nodeDef.Project, req.EnvName); e == nil && envDef != nil {
 			for _, v := range envDef.EnvVars {
 				envVars[v.Key] = v.Value
 			}
@@ -659,14 +654,12 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 
 	// 5. 通过 MQ 调用分布式 worker 执行
 	payload := &workflow.TestNodePayload{
-		Project:     req.Project,
 		NodeID:      req.NodeID,
+		Env:         req.EnvName,
 		NodeDef:     nodeDef,
-		NodeName:    nodeDef.Name,
 		InputParams: req.InputParams,
-		EnvVars:     envVars,
 	}
-	resp, err := s.mqExecutor.TestNode(ctx, payload, redisCfg)
+	resp, err := s.mqExecutor.TestNode(ctx, payload)
 
 	// 6. 整理结果
 	result := &TestNodeResult{}
@@ -896,21 +889,33 @@ func (s *WorkflowService) TestActivity(ctx context.Context, req *TestActivityReq
 		return nil, err
 	}
 
-	// 4. 构建环境变量（可选）
-	envVars := make(map[string]string)
-	if req.EnvName != "" {
-		if envDef, e := s.envConfigRepo.GetByName(ctx, req.Project, req.EnvName); e == nil && envDef != nil {
-			for _, v := range envDef.EnvVars {
-				envVars[v.Key] = v.Value
-			}
-		}
+	worker, err := s.mqExecutor.BuildWorker(req.EnvName, actDef.Project, redisCfg)
+	if err != nil {
+		return nil, err
 	}
+	defer worker.Stop()
 
 	// 5. 通过 MQ 同步调用远程监听程序执行该 activity：
 	//    - 命名空间/活动名（act_namespace/act_name）从 activity 配置获取
 	//    - 测试参数（InputParams）来自前端传入
 	//    - topic 为 activity/{actNamespace}/{actName}，与远程 worker 端 SubscribeActivity 订阅一致
-	resp, err := s.mqExecutor.RequestActivity(ctx, req.EnvName, actDef, req.InputParams, redisCfg)
+	traceId := id.GetUUID(conv.String(time.Now()))
+	spanId := req.ActivityID
+	resp, err := s.mqExecutor.RequestActivity(ctx, worker, actDef, req.InputParams, &workflow.ActivityLogValue{
+		RootChainID: "",
+		TraceID:     traceId,
+		SpanID:      spanId,
+		Attributes: map[string]any{
+			"activity_id":        req.ActivityID,
+			"project":            req.Project,
+			"env_name":           req.EnvName,
+			"activity_type":      kind,
+			"activity_name":      actDef.Name,
+			"activity_namespace": actDef.ActNamespace,
+			"trace_id":           traceId,
+			"span_id":            spanId,
+		},
+	})
 
 	// 6. 整理结果
 	result := &TestActivityResult{}

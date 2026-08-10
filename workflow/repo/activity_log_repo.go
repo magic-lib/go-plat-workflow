@@ -53,6 +53,15 @@ func (r *ActivityLogRepo) ListByActivity(ctx context.Context, project, actName s
 		if filter.Env != "" {
 			query = query.Where("env = ?", filter.Env)
 		}
+		if filter.RootChainID != "" {
+			query = query.Where("root_chain_id = ?", filter.RootChainID)
+		}
+		if filter.TraceID != "" {
+			query = query.Where("trace_id = ?", filter.TraceID)
+		}
+		if filter.SpanID != "" {
+			query = query.Where("span_id = ?", filter.SpanID)
+		}
 		if filter.Keyword != "" {
 			kw := "%" + filter.Keyword + "%"
 			query = query.Where("payload LIKE ? OR result LIKE ? OR error_msg LIKE ?", kw, kw, kw)
