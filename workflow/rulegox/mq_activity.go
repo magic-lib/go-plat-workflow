@@ -3,8 +3,10 @@ package rulegox
 import (
 	"context"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +36,9 @@ const (
 	//   namespace 即 getMQNamespace 生成的项目+环境标识
 	HeartbeatKeyPrefix   = "workflow:heartbeat:"
 	ActivityLogKeyPrefix = "workflow:activity:log:"
+	HeaderTraceIdKey     = "X-Trace-Id"
+	HeaderSpanIdKey      = "X-Span-Id"
+	HeaderRootChainIdKey = "X-Root-Chain-Id"
 )
 
 // activityLogRecord 单次 activity 执行日志，序列化后写入 redis list，
@@ -146,16 +151,16 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	mqHandler := func(ctx context.Context, event *mq.Event) (any, error) {
 		start := time.Now()
 		// 执行前记一条 info 日志
-		w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), 0, event.Payload, nil, "", "", nil)
+		w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), 0, event.Payload, nil, "", nil)
 
 		resp, herr := handler(ctx, event.Payload)
 
 		durationMs := time.Since(start).Milliseconds()
 		if herr != nil {
 			// 执行失败记一条 error 日志
-			w.pushActivityLog(actNamespace, actName, event, "error", start.Unix(), durationMs, event.Payload, nil, herr.Error(), "", nil)
+			w.pushActivityLog(actNamespace, actName, event, "error", start.Unix(), durationMs, event.Payload, nil, herr.Error(), nil)
 		} else {
-			w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), durationMs, event.Payload, resp, "", "", nil)
+			w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), durationMs, event.Payload, resp, "", nil)
 		}
 		return resp, herr
 	}
@@ -226,21 +231,26 @@ func (w *MQWorker) reportHeartbeatOnce() {
 // pushActivityLog 向 redis list 推送一条 activity 执行日志（服务端消费后落库）。
 // rootChainID 为根链 ID（可为空）；attributes 为动态附加属性（任意可序列化对象，可为 nil）。
 // trace_id / span_id 优先从 event.Headers 中的 Trace-Id / Span-Id 提取（worker 发送时已注入）。
-func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event, level string, ts, durationMs int64, payload, result any, errMsg, rootChainID string, attributes any) {
+func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event, level string, ts, durationMs int64, payload, result any, errMsg string, attributes any) {
 	if w.redisCli == nil {
+		return
+	}
+	if event == nil {
 		return
 	}
 	traceID := ""
 	spanID := ""
-	if event != nil && event.Headers != nil {
-		traceID = event.Headers.Get("Trace-Id")
-		spanID = event.Headers.Get("Span-Id")
+	rootChainID := ""
+	if event.Headers != nil {
+		traceID = event.Headers.Get(HeaderTraceIdKey)
+		spanID = event.Headers.Get(HeaderSpanIdKey)
+		rootChainID = event.Headers.Get(HeaderRootChainIdKey)
 	}
-	// root_chain_id 兜底：外部未显式传入时，用触发本次执行的 event.Id 作为根链 ID，
-	// 保证单 activity 调用场景下也能按链路聚合查询（上游后续可经 Headers.Root-Chain-Id 注入真实值覆盖）。
-	if rootChainID == "" && event != nil && event.Id != "" {
-		rootChainID = event.Id
+
+	if spanID == "" {
+		spanID = event.Id
 	}
+
 	rec := activityLogRecord{
 		Project:      w.Project,
 		Env:          w.Env,
@@ -276,11 +286,13 @@ func eventIdOf(event *mq.Event) string {
 	}
 	return event.Id
 }
-func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName string, params any) (*httputil.CommResponse, error) {
+func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName string, params any, headers http.Header) (*httputil.CommResponse, error) {
 	methodTopic := getActivityTopic(actNamespace, actName)
 	resp, err := w.mqClient.Request(ctx, &mq.Event{
+		Id:      id.NewUUID(),
 		Topic:   methodTopic,
 		Payload: params,
+		Headers: headers,
 	})
 	if err != nil {
 		return nil, err
@@ -297,7 +309,7 @@ func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName
 }
 
 // RequestActivity 订阅指定 topic 并注册处理函数。
-func (w *MQWorker) RequestActivity(ctx context.Context, actNamespace, actName string, argTemplate, responses string, params any) (*httputil.CommResponse, error) {
+func (w *MQWorker) RequestActivity(ctx context.Context, actNamespace, actName string, argTemplate, responses string, params any, headers http.Header) (*httputil.CommResponse, error) {
 	if actNamespace == "" || actName == "" {
 		return nil, fmt.Errorf("act_namespace and act_name are required")
 	}
@@ -306,7 +318,7 @@ func (w *MQWorker) RequestActivity(ctx context.Context, actNamespace, actName st
 	if err != nil {
 		return nil, err
 	}
-	resp, err := w.requestOneActivity(ctx, actNamespace, actName, argAny)
+	resp, err := w.requestOneActivity(ctx, actNamespace, actName, argAny, headers)
 	if err != nil {
 		return nil, err
 	}

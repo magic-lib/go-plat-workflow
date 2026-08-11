@@ -7,6 +7,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
@@ -149,7 +150,16 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 		return nil, err
 	}
 	start := time.Now()
-	resp, err := wfWorker.RequestActivity(ctx, actDef, params)
+	var headers http.Header
+	if logInfo != nil {
+		headers = http.Header{
+			rulegox.HeaderRootChainIdKey: []string{logInfo.RootChainID},
+			rulegox.HeaderTraceIdKey:     []string{logInfo.TraceID},
+			rulegox.HeaderSpanIdKey:      []string{logInfo.SpanID},
+		}
+	}
+
+	resp, err := wfWorker.RequestActivity(ctx, actDef, params, headers)
 	durationMs := time.Since(start).Milliseconds()
 
 	// 执行后异步记录 activity 日志（入参 + 结果/错误），由服务端 ActivityCollector 从 redis list 消费落库。

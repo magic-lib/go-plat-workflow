@@ -7,6 +7,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/utils"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
+	"net/http"
 	"strings"
 )
 
@@ -35,7 +36,7 @@ func NewWfWorkerWithMQWorker(mqWorker *rulegox.MQWorker) (*WfWorker, error) {
 }
 
 // RequestActivity 订阅指定 topic 并注册处理函数。
-func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, params any) (*httputil.CommResponse, error) {
+func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, params any, headers http.Header) (*httputil.CommResponse, error) {
 	if w.MQWorker == nil {
 		return nil, fmt.Errorf("mq worker is nil")
 	}
@@ -46,7 +47,7 @@ func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 			retString = ""
 		}
 	}
-	return w.MQWorker.RequestActivity(ctx, actDef.ActNamespace, actDef.ActName, actDef.ArgTemplate, retString, params)
+	return w.MQWorker.RequestActivity(ctx, actDef.ActNamespace, actDef.ActName, actDef.ArgTemplate, retString, params, headers)
 }
 func (w *WfWorker) SubscribeActivity(actNamespace, actName string, handler utils.ContextAnyHandler) error {
 	if w.MQWorker == nil {
