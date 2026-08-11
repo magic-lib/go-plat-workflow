@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,9 +16,9 @@ import (
 
 const (
 	// collectorHeartbeatPrefix 心跳 hash key 前缀（与 mq_worker.go 保持一致的命名）
-	collectorHeartbeatPrefix = heartbeatKeyPrefix
+	collectorHeartbeatPrefix = rulegox.HeartbeatKeyPrefix
 	// collectorLogPrefix 执行日志 list key 前缀
-	collectorLogPrefix = activityLogKeyPrefix
+	collectorLogPrefix = rulegox.ActivityLogKeyPrefix
 
 	// heartbeatWindow 心跳统计窗口：最近 1 分钟
 	heartbeatWindow = 60 * time.Second

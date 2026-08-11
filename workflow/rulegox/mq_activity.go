@@ -28,12 +28,12 @@ const (
 	// 心跳上报间隔：每 10s 统一上报一次，多个 actName 只需一次 HSET 即可完成，减少请求量
 	heartbeatInterval = 10 * time.Second
 
-	// Redis key 约定（服务端按相同命名读取）：
+	// HeartbeatKeyPrefix ActivityLogKeyPrefix  Redis key 约定（服务端按相同命名读取）：
 	//   心跳：workflow:heartbeat:<namespace>   —— Hash，field=actName，value=最近心跳时间戳(秒)
 	//   日志：workflow:activity:log:<namespace> —— List，element 为 activityLogRecord 的 JSON
 	//   namespace 即 getMQNamespace 生成的项目+环境标识
-	heartbeatKeyPrefix   = "workflow:heartbeat:"
-	activityLogKeyPrefix = "workflow:activity:log:"
+	HeartbeatKeyPrefix   = "workflow:heartbeat:"
+	ActivityLogKeyPrefix = "workflow:activity:log:"
 )
 
 // activityLogRecord 单次 activity 执行日志，序列化后写入 redis list，
@@ -214,7 +214,7 @@ func (w *MQWorker) reportHeartbeatOnce() {
 	}
 	w.hbMu.Unlock()
 
-	key := heartbeatKeyPrefix + getMQNamespace(w.Project, w.Env)
+	key := HeartbeatKeyPrefix + getMQNamespace(w.Project, w.Env)
 	if err := w.redisCli.HSet(context.Background(), key, fields).Err(); err != nil {
 		log.Println("mq_worker: report heartbeat failed")
 		return
@@ -258,7 +258,7 @@ func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event
 		SpanID:       spanID,
 		Attributes:   attributes,
 	}
-	key := activityLogKeyPrefix + getMQNamespace(w.Project, w.Env)
+	key := ActivityLogKeyPrefix + getMQNamespace(w.Project, w.Env)
 	pipe := w.redisCli.Pipeline()
 	pipe.RPush(context.Background(), key, conv.String(rec))
 	// 只保留最新 10000 条，超出自动砍掉旧数据，数字按需调整
