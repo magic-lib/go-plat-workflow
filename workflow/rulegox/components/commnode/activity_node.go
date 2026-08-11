@@ -2,6 +2,7 @@ package commnode
 
 import (
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
@@ -281,6 +282,17 @@ func deepCopyParamCtx(src *paramx.ParamCtx) *paramx.ParamCtx {
 func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.ActivityMetaData, act *activity.Activity,
 	idx int, prefix string, stepParamCtx, allParam *paramx.ParamCtx) error {
 
+	if metaData == nil || metaData.RedisConfig == nil {
+		return fmt.Errorf("activityNode execOneActivity: RedisConfig is nil")
+	}
+
+	oneWorker, err := GetMQWorker(metaData.Project, metaData.Env, metaData.RedisConfig, func(project, env string, redisCfg *conn.Connect) (*rulegox.MQWorker, error) {
+		return rulegox.NewMQWorker(project, env, redisCfg)
+	})
+	if err != nil {
+		return err
+	}
+
 	newAct := act.Clone()
 	stepId := paramx.StepId(fmt.Sprintf("%s%d", prefix, idx))
 	if newAct.Id == "" {
@@ -290,17 +302,15 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 	dataMap := stepParamCtx.StepMapsByStepId(stepId)
 
 	// 优先走 MQ 远程执行（生产环境依赖远程 worker 的 Activity）。
-	if x.mqExecutor != nil && metaData != nil && metaData.Env != "" {
-		project := metaData.Project
-		resp, err := x.mqExecutor.ExecActivityViaMQ(ctx.GetContext(), &ActivityMQRequest{
-			Act:         newAct,
-			Project:     project,
-			Env:         metaData.Env,
+	if oneWorker != nil && metaData.Env != "" {
+		metaDataTemp := &rulegox.MetaDataHeader{
 			RootChainID: metaData.RootChainID,
 			TraceID:     metaData.TraceId,
-			StepID:      string(stepId),
-			Input:       dataMap,
-		})
+			SpanID:      newAct.Id,
+		}
+		responses := conv.String(newAct.Responses)
+		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct.ActNamespace,
+			newAct.ActName, newAct.ArgTemplate, responses, dataMap, metaDataTemp.ToHeader(nil))
 		if err != nil {
 			return err
 		}

@@ -902,7 +902,7 @@ func (s *WorkflowService) TestActivity(ctx context.Context, req *TestActivityReq
 	traceId := id.GetUUID(conv.String(time.Now()))
 	spanId := req.ActivityID
 	resp, err := s.mqExecutor.RequestActivity(ctx, worker, actDef, req.InputParams, &workflow.ActivityLogValue{
-		RootChainID: "",
+		RootChainID: "TestActivity",
 		TraceID:     traceId,
 		SpanID:      spanId,
 		Attributes: map[string]any{

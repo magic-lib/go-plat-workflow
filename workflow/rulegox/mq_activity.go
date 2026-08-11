@@ -41,6 +41,30 @@ const (
 	HeaderRootChainIdKey = "X-Root-Chain-Id"
 )
 
+type MetaDataHeader struct {
+	RootChainID string         `json:"root_chain_id"`
+	TraceID     string         `json:"trace_id"`
+	SpanID      string         `json:"span_id"`
+	Attributes  map[string]any `json:"attributes"`
+}
+
+func (m *MetaDataHeader) FromHeader(header http.Header) *MetaDataHeader {
+	m.RootChainID = header.Get(HeaderRootChainIdKey)
+	m.TraceID = header.Get(HeaderTraceIdKey)
+	m.SpanID = header.Get(HeaderSpanIdKey)
+	return m
+}
+
+func (m *MetaDataHeader) ToHeader(header http.Header) http.Header {
+	if header == nil {
+		header = http.Header{}
+	}
+	header.Set(HeaderRootChainIdKey, m.RootChainID)
+	header.Set(HeaderTraceIdKey, m.TraceID)
+	header.Set(HeaderSpanIdKey, m.SpanID)
+	return header
+}
+
 // activityLogRecord 单次 activity 执行日志，序列化后写入 redis list，
 // 由服务端消费并落库到对应 activity 的日志表。
 type activityLogRecord struct {
@@ -238,17 +262,9 @@ func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event
 	if event == nil {
 		return
 	}
-	traceID := ""
-	spanID := ""
-	rootChainID := ""
-	if event.Headers != nil {
-		traceID = event.Headers.Get(HeaderTraceIdKey)
-		spanID = event.Headers.Get(HeaderSpanIdKey)
-		rootChainID = event.Headers.Get(HeaderRootChainIdKey)
-	}
-
-	if spanID == "" {
-		spanID = event.Id
+	metaData := new(MetaDataHeader).FromHeader(event.Headers)
+	if metaData.SpanID == "" {
+		metaData.SpanID = event.Id
 	}
 
 	rec := activityLogRecord{
@@ -263,9 +279,9 @@ func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event
 		Payload:      payload,
 		Result:       result,
 		Error:        errMsg,
-		RootChainID:  rootChainID,
-		TraceID:      traceID,
-		SpanID:       spanID,
+		RootChainID:  metaData.RootChainID,
+		TraceID:      metaData.TraceID,
+		SpanID:       metaData.SpanID,
 		Attributes:   attributes,
 	}
 	key := ActivityLogKeyPrefix + getMQNamespace(w.Project, w.Env)

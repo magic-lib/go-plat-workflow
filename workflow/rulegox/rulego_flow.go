@@ -3,6 +3,7 @@ package rulegox
 import (
 	"context"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
@@ -33,11 +34,11 @@ type RedisConfig struct {
 }
 
 type ActivityMetaData struct {
-	RootChainID string       `json:"root_chain_id,omitempty"`
-	TraceId     string       `json:"trace_id,omitempty"`
-	Env         string       `json:"env,omitempty"`
-	Project     string       `json:"project,omitempty"`
-	RedisConfig *RedisConfig `json:"redis_config,omitempty"`
+	RootChainID string        `json:"root_chain_id,omitempty"`
+	TraceId     string        `json:"trace_id,omitempty"`
+	Env         string        `json:"env,omitempty"`
+	Project     string        `json:"project,omitempty"`
+	RedisConfig *conn.Connect `json:"redis_config,omitempty"`
 }
 
 func StartActivityFlow(actConfig *ActivityFlowConfig, metaData *ActivityMetaData) error {

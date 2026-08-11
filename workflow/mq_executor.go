@@ -17,7 +17,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
-	_ "github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 )
@@ -152,11 +152,12 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 	start := time.Now()
 	var headers http.Header
 	if logInfo != nil {
-		headers = http.Header{
-			rulegox.HeaderRootChainIdKey: []string{logInfo.RootChainID},
-			rulegox.HeaderTraceIdKey:     []string{logInfo.TraceID},
-			rulegox.HeaderSpanIdKey:      []string{logInfo.SpanID},
+		metaData := &rulegox.MetaDataHeader{
+			RootChainID: logInfo.RootChainID,
+			TraceID:     logInfo.TraceID,
+			SpanID:      logInfo.SpanID,
 		}
+		headers = metaData.ToHeader(headers)
 	}
 
 	resp, err := wfWorker.RequestActivity(ctx, actDef, params, headers)
@@ -240,11 +241,9 @@ func (e *MQExecutor) BuildWorker(env string, projectName string, redisCfg *Redis
 	if err != nil {
 		return nil, err
 	}
-	worker, err := rulegox.NewMQWorker(projectName, env, c)
-	if err != nil {
-		return nil, err
-	}
-	return worker, nil
+	return commnode.GetMQWorker(projectName, env, c, func(p, e string, rc *conn.Connect) (*rulegox.MQWorker, error) {
+		return rulegox.NewMQWorker(p, e, c)
+	})
 }
 
 // testNodeForCondSwitch 本地执行 condSwitch 类型节点。
