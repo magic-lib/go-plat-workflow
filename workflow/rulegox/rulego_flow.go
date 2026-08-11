@@ -19,11 +19,25 @@ type ActivityFlowConfig struct {
 	IsAsync      bool
 	EndFunc      func(ctx context.Context, param *paramx.ParamCtx, err error)
 }
+
+// RedisConfig 不同环境下的 Redis 连接配置。
+type RedisConfig struct {
+	// Addr Redis 地址，如 127.0.0.1:6379
+	Addr string `json:"addr"`
+	// Password 密码（可选）
+	Password string `json:"password,omitempty"`
+	// DB 数据库序号
+	DB int `json:"db"`
+	// Username 用户名（Redis 6+ ACL，可选）
+	Username string `json:"username,omitempty"`
+}
+
 type ActivityMetaData struct {
-	RootChainID string `json:"root_chain_id,omitempty"`
-	TraceId     string `json:"trace_id,omitempty"`
-	Env         string `json:"env,omitempty"`
-	Project     string `json:"project,omitempty"`
+	RootChainID string       `json:"root_chain_id,omitempty"`
+	TraceId     string       `json:"trace_id,omitempty"`
+	Env         string       `json:"env,omitempty"`
+	Project     string       `json:"project,omitempty"`
+	RedisConfig *RedisConfig `json:"redis_config,omitempty"`
 }
 
 func StartActivityFlow(actConfig *ActivityFlowConfig, metaData *ActivityMetaData) error {

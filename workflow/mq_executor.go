@@ -14,6 +14,8 @@ import (
 	mq "github.com/magic-lib/go-plat-mq/mq"
 	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/plugins/paramx"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	_ "github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
@@ -138,12 +140,16 @@ func (e *MQExecutor) TestNode(ctx context.Context, payload *TestNodePayload) (an
 //   - topic 为 activity/{actNamespace}/{actName}，与分布式 worker 端 SubscribeActivity 订阅的 topic 一致
 //
 // 流程：根据环境 Redis 配置构建连接 -> 创建 MQWorker -> 调用 RequestActivity 同步等待远程监听程序执行。
-func (e *MQExecutor) RequestActivity(ctx context.Context, worker *MQWorker, actDef *ActivityDef, params any, logInfo *ActivityLogValue) (*httputil.CommResponse, error) {
+func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWorker, actDef *ActivityDef, params any, logInfo *ActivityLogValue) (*httputil.CommResponse, error) {
 	if actDef.ActNamespace == "" || actDef.ActName == "" {
 		return nil, fmt.Errorf("act_namespace and act_name are required")
 	}
+	wfWorker, err := NewWfWorkerWithMQWorker(worker)
+	if err != nil {
+		return nil, err
+	}
 	start := time.Now()
-	resp, err := worker.RequestActivity(ctx, actDef, params)
+	resp, err := wfWorker.RequestActivity(ctx, actDef, params)
 	durationMs := time.Since(start).Milliseconds()
 
 	// 执行后异步记录 activity 日志（入参 + 结果/错误），由服务端 ActivityCollector 从 redis list 消费落库。
@@ -163,7 +169,7 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *MQWorker, actD
 		attributes = logInfo.Attributes
 	}
 
-	e.asyncPushLog(worker.project, worker.env, actDef.ActNamespace, actDef.ActName,
+	e.asyncPushLog(worker.Project, worker.Env, actDef.ActNamespace, actDef.ActName,
 		level, start.Unix(), durationMs, params, resp, errMsg, rootChainID, traceID, spanID, attributes)
 
 	if err != nil {
@@ -219,12 +225,12 @@ func toLogRawMessage(v any) json.RawMessage {
 	return b
 }
 
-func (e *MQExecutor) BuildWorker(env string, projectName string, redisCfg *RedisConfig) (*MQWorker, error) {
+func (e *MQExecutor) BuildWorker(env string, projectName string, redisCfg *RedisConfig) (*rulegox.MQWorker, error) {
 	c, err := buildConnect(redisCfg)
 	if err != nil {
 		return nil, err
 	}
-	worker, err := NewMQWorker(projectName, env, c)
+	worker, err := rulegox.NewMQWorker(projectName, env, c)
 	if err != nil {
 		return nil, err
 	}
@@ -322,8 +328,9 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 }
 
 // testNodeForActivity 本地利用被测节点的全部配置，构建一个「仅包含该 ActivityNode」的单节点规则链，
-// 通过 rulego 引擎在本进程内执行，将前端传入的 InputParams 作为流程入参（消息体），
-// 并将执行后的消息体（ActivityNode 写回的 ParamCtx 序列化结果）返回，便于在测试场景验证单节点配置。
+// 交由 rulegox.StartActivityFlow 在本进程内同步执行：
+// 前端传入的 InputParams 作为流程入参（Variables），
+// 执行结束后通过 EndFunc 回调拿到 ActivityNode 写回的 ParamCtx，作为测试结果返回。
 // 不再走 MQ 远程 worker。
 func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodePayload) (any, error) {
 	if payload.NodeDef.Type != common.ActivityNodeTypeName {
@@ -333,7 +340,7 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	// 解析节点配置（ActivityNode 从 configuration 读取 node_config.activities / arguments 等）
 	config := make(types.Configuration)
 	if len(payload.NodeDef.Configuration) > 0 {
-		if err := json.Unmarshal(payload.NodeDef.Configuration, &config); err != nil {
+		if err := conv.Unmarshal(payload.NodeDef.Configuration, config); err != nil {
 			return nil, fmt.Errorf("parse activity node configuration: %w", err)
 		}
 	}
@@ -361,11 +368,37 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 			"connections": []interface{}{},
 		},
 	}
-	dslBytes := conv.String(dsl)
 
-	fmt.Println(dslBytes)
+	var (
+		resultParam *paramx.ParamCtx
+		execErr     error
+	)
+	flowCfg := &rulegox.ActivityFlowConfig{
+		RootChainDSL: map[string][]byte{
+			chainKey: []byte(conv.String(dsl)),
+		},
+		Variables: payload.InputParams,
+		IsAsync:   false,
+		EndFunc: func(_ context.Context, param *paramx.ParamCtx, err error) {
+			resultParam = param
+			execErr = err
+		},
+	}
+	metaData := &rulegox.ActivityMetaData{
+		RootChainID: chainKey,
+		Env:         payload.Env,
+		Project:     payload.NodeDef.Project,
+	}
 
-	return nil, nil
+	//RedisConfig: payload.RedisConfig,
+
+	if err := rulegox.StartActivityFlow(flowCfg, metaData); err != nil {
+		return nil, err
+	}
+	if execErr != nil {
+		return nil, execErr
+	}
+	return resultParam, nil
 }
 
 // getRedisConfig 从环境配置中解析出执行所需的 Redis 配置。
