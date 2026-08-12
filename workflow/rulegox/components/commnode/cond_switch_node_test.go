@@ -3,6 +3,9 @@ package commnode_test
 import (
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/plugins/paramx"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
 	"testing"
 
 	"github.com/rulego/rulego"
@@ -140,4 +143,44 @@ func TestRuleGoCondNode(t *testing.T) {
 			fmt.Printf("键: %s, 值: %v\n", k, v)
 		}
 	}))
+}
+
+func TestRuleGoCondNode11(t *testing.T) {
+	dataStr := `{"arguments":{},"responses":{},"steps":{"N000004":{"arguments":{"audit_order_id":"555","mobile":"0978219056"},"responses":null}}}`
+	allParams := &paramx.FlowContext{}
+	err := conv.Unmarshal(dataStr, allParams)
+	if err != nil {
+		panic(err)
+	}
+	response := []*param.BindConfig{
+		{
+			Key:    "group_code",
+			Value:  nil,
+			Type:   "string",
+			Policy: "",
+		},
+	}
+	fmt.Println(response)
+
+	nodeOldParam := allParams.GetStepArguments("N000004")
+	newParam1 := &paramx.FlowContext{Arguments: nodeOldParam}
+
+	newParam, err := commnode.NodeParams(newParam1, "N000004", nil, []*param.BindConfig{
+		{
+			Key:    "audit_order_id",
+			Value:  "",
+			Type:   "",
+			Policy: "frontend",
+		},
+		{
+			Key:    "mobile",
+			Value:  "",
+			Type:   "",
+			Policy: "frontend+",
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(conv.String(newParam))
 }

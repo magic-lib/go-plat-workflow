@@ -233,6 +233,8 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .hb-heart.yellow { color: #eab308; }
 .hb-heart.orange { color: #f97316; }
 .hb-heart.red { color: #dc2626; }
+.hb-heart.gray { color: #9ca3af; animation: none; }
+.hb-offline { font-size: .62rem; line-height: 1; margin-left: 3px; padding: 1px 4px; border-radius: 4px; background: #9ca3af; color: #fff; vertical-align: middle; font-family: inherit; }
 @keyframes hb-beat { 0%,100% { transform: scale(1); } 15% { transform: scale(1.35); } 30% { transform: scale(1); } 45% { transform: scale(1.2); } }
 
 /* Activity 日志弹窗 */
@@ -2935,11 +2937,14 @@ function changeActivityPage(delta) {
   renderActivityTable(list);
 }
 
-// 根据心跳信息渲染心跳图标（♥）：≥90% 绿，≥60% 黄，≥30% 橙，<30% 红；无数据不显示。
-// 仅保留图标，不显示长条进度条。
+// 根据心跳信息渲染心跳图标（♥）：最近1分钟内无心跳（count==0）显示灰色（worker 未启动/已挂），
+// 否则按存活比例：≥90% 绿，≥60% 黄，≥30% 橙，<30% 红。
 function heartbeatIconHtml(hb) {
   if (!hb || typeof hb.ratio !== 'number') return '';
   const pct = Math.round(hb.ratio * 100);
+  if (!hb.count || hb.count <= 0) {
+    return `<span class="hb-heart gray" title="最近1分钟无心跳（worker 可能未启动）">&#10084;<span class="hb-offline">离线</span></span>`;
+  }
   let cls = 'red';
   if (hb.ratio >= 0.9) cls = 'green';
   else if (hb.ratio >= 0.6) cls = 'yellow';

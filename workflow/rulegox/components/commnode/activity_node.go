@@ -161,21 +161,23 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	// 解析消息中的全局参数
 	allParamStr := msg.GetData()
-	allParam := paramx.NewParamCtx()
+	allParam := new(paramx.FlowContext)
 	if err := conv.Unmarshal(allParamStr, allParam); err != nil {
 		ctx.TellFailure(msg, err)
 		return
 	}
+	//allParam = {"arguments":{"audit_order_id":"555","mobile":"0978219056"},"responses":{}}
 
 	// 合并 ArgMapping 和 BindArgs 到 allParam 中
-	nodeParams, err := NodeParams(allParam, x.Configuration)
+	nodeParams, err := NodeParams(allParam, "", x.Configuration.ArgTemplate, x.Configuration.Arguments)
 	if err != nil {
 		ctx.TellFailure(msg, err)
 		return
 	}
 
-	stepParamCtx := paramx.NewParamCtx()
-	stepParamCtx.SetVariables(nodeParams)
+	stepParamCtx := &paramx.Step{
+		Arguments: nodeParams,
+	}
 
 	metaDataAny := msg.GetMetadata()
 	metaDataMap := make(map[string]any)
@@ -221,14 +223,14 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		ctx.TellFailure(msg, fmt.Errorf("activityNode execStep is empty"))
 		return
 	}
-	allParam.SetStepStruct(execStep, stepParamCtx)
+	allParam.SetOneStep(execStep, stepParamCtx)
 	msg.SetData(conv.String(allParam))
 	ctx.TellSuccess(msg)
 }
 
 // execParallelStage 并发执行一个阶段内的所有 Activity，等待全部完成后合并结果到 allParam。
 func (x *ActivityNode) execParallelStage(ctx types.RuleContext, metaData *rulegox.ActivityMetaData, stageIdx int,
-	stage []*activity.Activity, stepParamCtx, allParam *paramx.ParamCtx) error {
+	stage []*activity.Activity, stepParamCtx *paramx.Step, allParam *paramx.FlowContext) error {
 
 	if len(stage) == 0 {
 		return nil
@@ -240,8 +242,8 @@ func (x *ActivityNode) execParallelStage(ctx types.RuleContext, metaData *rulego
 
 	_, _ = goroutines.AsyncExecuteDataList[*activity.Activity](30*time.Second, stage, func(value *activity.Activity, key int) (breakFlag bool, err error) {
 		mu.Lock()
-		snapAllParam := deepCopyParamCtx(allParam)
-		snapStepCtx := deepCopyParamCtx(stepParamCtx)
+		snapAllParam := deepCopyFlowCtx(allParam)
+		snapStepCtx := deepCopyStep(stepParamCtx)
 		mu.Unlock()
 
 		if err := x.execOneActivity(ctx, metaData, value, key, prefix, snapStepCtx, snapAllParam); err != nil {
@@ -267,10 +269,31 @@ func (x *ActivityNode) execParallelStage(ctx types.RuleContext, metaData *rulego
 }
 
 // deepCopyParamCtx 通过序列化再反序列化实现 ParamCtx 深拷贝。
-func deepCopyParamCtx(src *paramx.ParamCtx) *paramx.ParamCtx {
-	dst := paramx.NewParamCtx()
+func deepCopyFlowCtx(src *paramx.FlowContext) *paramx.FlowContext {
+	dst := &paramx.FlowContext{}
 	_ = conv.Unmarshal(conv.String(src), dst)
 	return dst
+}
+func deepCopyStep(src *paramx.Step) *paramx.Step {
+	dst := &paramx.Step{}
+	_ = conv.Unmarshal(conv.String(src), dst)
+	return dst
+}
+
+// toMapValue 将 Activity 返回的 arguments（可能为 map 或结构体）安全转为 map[string]any。
+// 非 map 类型（如标量）回退为空 map，避免 SetStepArguments 接收非法类型。
+func toMapValue(v any) map[string]any {
+	if v == nil {
+		return map[string]any{}
+	}
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	m := make(map[string]any)
+	if err := conv.Unmarshal(conv.String(v), &m); err == nil {
+		return m
+	}
+	return map[string]any{}
 }
 
 // execOneActivity 执行单个 Activity，结果回写 allParam。
@@ -280,7 +303,7 @@ func deepCopyParamCtx(src *paramx.ParamCtx) *paramx.ParamCtx {
 //     适用于生产环境依赖远程监听程序的 Activity。
 //   - 否则（未注入执行器或环境为空）回退到本地 newAct.Execute，保证单测/无 MQ 场景可用。
 func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.ActivityMetaData, act *activity.Activity,
-	idx int, prefix string, stepParamCtx, allParam *paramx.ParamCtx) error {
+	idx int, prefix string, stepParamCtx *paramx.Step, allParam *paramx.FlowContext) error {
 
 	if metaData == nil || metaData.RedisConfig == nil {
 		return fmt.Errorf("activityNode execOneActivity: RedisConfig is nil")
@@ -299,7 +322,7 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 		newAct.Id = string(stepId)
 	}
 
-	dataMap := stepParamCtx.StepMapsByStepId(stepId)
+	dataMap := stepParamCtx.Arguments
 
 	// 优先走 MQ 远程执行（生产环境依赖远程 worker 的 Activity）。
 	if oneWorker != nil && metaData.Env != "" {
@@ -322,10 +345,11 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 			},
 		}
 		if oneFuncData, ok := respData[string(stepId)]; ok {
-			oneFuncParam := new(paramx.ParamCtx)
-			_ = conv.Unmarshal(conv.String(oneFuncData), oneFuncParam)
-			allParam.SetStepArguments(stepId, oneFuncParam.Arguments)
-			allParam.SetStepResponse(stepId, oneFuncParam.Responses)
+			if m, ok := oneFuncData.(map[string]any); ok {
+				if resp, has := m["responses"]; has {
+					allParam.SetStepResponse(stepId, resp)
+				}
+			}
 		}
 		if stepResp, ok := allParam.GetStepResponse(stepId); ok {
 			allParam.SetVariable(string(stepId), stepResp)
@@ -340,10 +364,14 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 	}
 
 	if oneFuncData, ok := respData[newAct.Id]; ok {
-		oneFuncParam := new(paramx.ParamCtx)
-		_ = conv.Unmarshal(oneFuncData, oneFuncParam)
-		allParam.SetStepArguments(stepId, oneFuncParam.Arguments)
-		allParam.SetStepResponse(stepId, oneFuncParam.Responses)
+		if m, ok := oneFuncData.(map[string]any); ok {
+			if args, has := m["arguments"]; has {
+				allParam.SetStepArguments(stepId, toMapValue(args))
+			}
+			if resp, has := m["responses"]; has {
+				allParam.SetStepResponse(stepId, resp)
+			}
+		}
 	}
 
 	if stepResp, ok := allParam.GetStepResponse(stepId); ok {

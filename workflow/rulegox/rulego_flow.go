@@ -13,12 +13,12 @@ import (
 )
 
 type ActivityFlowConfig struct {
-	RootChainDSL map[string][]byte
-	SubChainDSL  map[string][]byte
-	Variables    map[string]any
+	RootChainDSL map[string][]byte   //根配置
+	SubChainDSL  map[string][]byte   //子配置
+	FlowCtx      *paramx.FlowContext //前端传入的参数
 	MsgType      string
 	IsAsync      bool
-	EndFunc      func(ctx context.Context, param *paramx.ParamCtx, err error)
+	EndFunc      func(ctx context.Context, param *paramx.FlowContext, err error)
 }
 
 // RedisConfig 不同环境下的 Redis 连接配置。
@@ -41,7 +41,7 @@ type ActivityMetaData struct {
 	RedisConfig *conn.Connect `json:"redis_config,omitempty"`
 }
 
-func StartActivityFlow(actConfig *ActivityFlowConfig, metaData *ActivityMetaData) error {
+func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData *ActivityMetaData) error {
 	if actConfig == nil {
 		return fmt.Errorf("参数不能为空")
 	}
@@ -54,7 +54,7 @@ func StartActivityFlow(actConfig *ActivityFlowConfig, metaData *ActivityMetaData
 	metaData.TraceId = id.GetUUID(metaData.TraceId)
 
 	if actConfig.EndFunc == nil {
-		actConfig.EndFunc = func(ctx context.Context, param *paramx.ParamCtx, err error) {
+		actConfig.EndFunc = func(ctx context.Context, param *paramx.FlowContext, err error) {
 			if err != nil {
 				log.Printf("工作流执行失败: %v", err)
 				return
@@ -69,6 +69,7 @@ func StartActivityFlow(actConfig *ActivityFlowConfig, metaData *ActivityMetaData
 
 	// 全局配置
 	config := rulego.NewConfig()
+
 	if len(actConfig.SubChainDSL) > 0 {
 		for sudChainId, subChainDSL := range actConfig.SubChainDSL {
 			_, err := rulego.New(sudChainId, subChainDSL, rulego.WithConfig(config))
@@ -90,8 +91,6 @@ func StartActivityFlow(actConfig *ActivityFlowConfig, metaData *ActivityMetaData
 		return fmt.Errorf("规则引擎不能为空")
 	}
 
-	paramInput := paramx.NewParamCtxWithVars(actConfig.Variables)
-
 	if actConfig.MsgType == "" {
 		actConfig.MsgType = "ACTIVITY_EVENT"
 	}
@@ -102,20 +101,20 @@ func StartActivityFlow(actConfig *ActivityFlowConfig, metaData *ActivityMetaData
 		newMetadata.PutValue(k, conv.String(v))
 	}
 
-	msg := types.NewMsg(0, actConfig.MsgType, types.JSON, newMetadata, conv.String(paramInput))
-	endOption := types.WithOnEnd(func(ctx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
-		var resultParam = new(paramx.ParamCtx)
+	msg := types.NewMsg(0, actConfig.MsgType, types.JSON, newMetadata, conv.String(actConfig.FlowCtx))
+	endOption := types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
+		var resultParam = new(paramx.FlowContext)
 		_ = conv.Unmarshal(msg.GetData(), resultParam)
 		if err != nil {
-			actConfig.EndFunc(ctx.GetContext(), resultParam, err)
+			actConfig.EndFunc(ruleCtx.GetContext(), resultParam, err)
 			return
 		}
-		actConfig.EndFunc(ctx.GetContext(), resultParam, nil)
+		actConfig.EndFunc(ruleCtx.GetContext(), resultParam, nil)
 	})
 	if actConfig.IsAsync {
-		engine.OnMsg(msg, endOption)
+		engine.OnMsg(msg, endOption, types.WithContext(ctx))
 	} else {
-		engine.OnMsgAndWait(msg, endOption)
+		engine.OnMsgAndWait(msg, endOption, types.WithContext(ctx))
 	}
 	return nil
 }

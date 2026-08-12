@@ -20,7 +20,7 @@ type ActivityLogModel struct {
 	Timestamp    int64     `gorm:"column:ts;not null;index" json:"timestamp"`
 	DurationMs   int64     `gorm:"column:duration_ms" json:"duration_ms"`
 	Payload      string    `gorm:"column:payload;type:json" json:"payload"`
-	Result       string    `gorm:"column:result;type:json" json:"result"`
+	Result       string    `gorm:"column:result;type:text" json:"result"`
 	ErrorMsg     string    `gorm:"column:error_msg;type:text" json:"error_msg"`
 	RootChainID  string    `gorm:"column:root_chain_id;type:varchar(128);index;Default:''" json:"root_chain_id"`
 	TraceID      string    `gorm:"column:trace_id;type:varchar(128);index;Default:''" json:"trace_id"`

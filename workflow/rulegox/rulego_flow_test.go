@@ -174,16 +174,20 @@ func TestRuleGoActivityNode(t *testing.T) {
 	]
   }
 }`
-	err := rulegox.StartActivityFlow(&rulegox.ActivityFlowConfig{
+	err := rulegox.StartActivityFlow(context.Background(), &rulegox.ActivityFlowConfig{
 		RootChainDSL: map[string][]byte{
 			"activity_flow_01": []byte(chainConfig),
 		},
-		Variables: map[string]any{
-			"age": 20,
-			"a":   4,
-			"b":   7,
+		FlowCtx: &paramx.FlowContext{
+			Arguments: map[string]any{
+				"age": 20,
+				"a":   4,
+				"b":   7,
+			},
+			Responses: nil,
+			Steps:     nil,
 		},
-		EndFunc: func(ctx context.Context, param *paramx.ParamCtx, err error) {
+		EndFunc: func(ctx context.Context, param *paramx.FlowContext, err error) {
 			if err != nil {
 				fmt.Printf("工作流执行失败: %v\n", err)
 				return
@@ -310,7 +314,7 @@ func TestRuleGoSubChain(t *testing.T) {
 		t.Fatalf("create main engine failed: %v", err)
 	}
 
-	paramInput := paramx.NewParamCtxWithVars(map[string]any{"age": 20})
+	paramInput := paramx.NewFlowContext("", "", map[string]any{"age": 20})
 	msg := types.NewMsg(0, "ACTIVITY_EVENT", types.JSON, types.NewMetadata(), conv.String(paramInput))
 
 	done := make(chan error, 1)

@@ -349,7 +349,7 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	// 解析节点配置（ActivityNode 从 configuration 读取 node_config.activities / arguments 等）
 	config := make(types.Configuration)
 	if len(payload.NodeDef.Configuration) > 0 {
-		if err := conv.Unmarshal(payload.NodeDef.Configuration, config); err != nil {
+		if err := conv.Unmarshal(payload.NodeDef.Configuration, &config); err != nil {
 			return nil, fmt.Errorf("parse activity node configuration: %w", err)
 		}
 	}
@@ -379,29 +379,42 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	}
 
 	var (
-		resultParam *paramx.ParamCtx
+		resultParam *paramx.FlowContext
 		execErr     error
 	)
+	flowCtx := paramx.NewFlowContext("", ruleNode.Id, payload.InputParams)
+
 	flowCfg := &rulegox.ActivityFlowConfig{
 		RootChainDSL: map[string][]byte{
 			chainKey: []byte(conv.String(dsl)),
 		},
-		Variables: payload.InputParams,
-		IsAsync:   false,
-		EndFunc: func(_ context.Context, param *paramx.ParamCtx, err error) {
+		FlowCtx: flowCtx,
+		IsAsync: false,
+		EndFunc: func(_ context.Context, param *paramx.FlowContext, err error) {
 			resultParam = param
 			execErr = err
 		},
 	}
+	// RedisConfig 通过 env 解析：按 project+env 从环境配置中查出 redis 配置，
+	// 再转换为 rulegox 所需的 *conn.Connect（与 MQ 执行路径共用同一套解析逻辑）。
+	redisDef, err := e.getRedisConfig(ctx, payload.NodeDef.Project, payload.Env)
+	if err != nil {
+		return nil, err
+	}
+	redisConn, err := buildConnect(redisDef)
+	if err != nil {
+		return nil, err
+	}
+
 	metaData := &rulegox.ActivityMetaData{
 		RootChainID: chainKey,
 		Env:         payload.Env,
 		Project:     payload.NodeDef.Project,
+		TraceId:     chainKey,
+		RedisConfig: redisConn,
 	}
 
-	//RedisConfig: payload.RedisConfig,
-
-	if err := rulegox.StartActivityFlow(flowCfg, metaData); err != nil {
+	if err = rulegox.StartActivityFlow(ctx, flowCfg, metaData); err != nil {
 		return nil, err
 	}
 	if execErr != nil {

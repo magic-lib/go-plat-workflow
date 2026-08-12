@@ -344,7 +344,7 @@ func TestRuleOneActivityNode(t *testing.T) {
 	fmt.Println("初始化引擎")
 
 	// 四、准备你的输入参数：map[string]any
-	inputMap := paramx.NewParamCtx()
+	inputMap := &paramx.FlowContext{}
 	inputMap.SetVariables(map[string]any{
 		"a": 4,
 		"b": 7,

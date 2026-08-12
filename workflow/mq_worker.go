@@ -55,3 +55,10 @@ func (w *WfWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	}
 	return w.MQWorker.SubscribeActivity(actNamespace, actName, handler)
 }
+func (w *WfWorker) Stop() {
+	if w.MQWorker == nil {
+		return
+	}
+	w.MQWorker.Stop()
+	w.MQWorker = nil
+}

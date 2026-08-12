@@ -11,7 +11,7 @@ import (
 func TestMQWorkerRequest(t *testing.T) {
 	projectName := "zamloan2_bot_credit"
 	env := "test"
-	w, err := workflow.NewMQWorker(projectName, env, &conn.Connect{
+	w, err := workflow.NewWfWorker(projectName, env, &conn.Connect{
 		Host:     "202.60.228.31",
 		Port:     "6379",
 		Password: "mjhttyryt565-jyjh5824t-p55w",
@@ -26,7 +26,7 @@ func TestMQWorkerRequest(t *testing.T) {
 		ActName:      "credit_order_status",
 	}, map[string]any{
 		"audit_order_id": 555,
-	})
+	}, nil)
 	if err != nil {
 		panic(err)
 	}

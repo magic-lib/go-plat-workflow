@@ -53,10 +53,8 @@ func (x *CondSwitchNode) getCondition() string {
 		return x.condition
 	}
 	newCond := new(condSwitchCfg)
-	err := conv.Unmarshal(x.Configuration.NodeConfig, newCond)
-	if err != nil {
+	if err := conv.Unmarshal(x.Configuration.NodeConfig, newCond); err != nil {
 		panic(fmt.Errorf("condRouter error parsing configuration: %s, %v", conv.String(x.Configuration), err))
-		return ""
 	}
 	x.condition = newCond.Condition
 	log.Println("condRouter init, condition: ", x.condition)
@@ -67,7 +65,7 @@ func (x *CondSwitchNode) getCondition() string {
 // OnMsg processes incoming messages by evaluating the compiled expression.
 func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	dataStr := msg.GetData()
-	allParams := paramx.NewParamCtx()
+	allParams := &paramx.FlowContext{}
 	err := conv.Unmarshal(dataStr, allParams)
 	if err != nil {
 		ctx.TellFailure(msg, err)
@@ -78,7 +76,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		ctx.TellNext(msg) //结束流程了
 		return
 	}
-	nodeParams, err := NodeParams(allParams, x.Configuration)
+	nodeParams, err := NodeParams(allParams, "", x.Configuration.ArgTemplate, x.Configuration.Arguments)
 	if err != nil {
 		ctx.TellFailure(msg, err)
 		return

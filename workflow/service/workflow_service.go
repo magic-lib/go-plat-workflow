@@ -65,6 +65,14 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		return nil, err
 	}
 
+	// AutoMigrate 不会修改已存在列的类型，显式将 result 调整为 text。
+	// MySQL 5.7 下 TEXT 列不能设默认值也不能直接 NOT NULL（已有 NULL 行会报错），故仅改类型。
+	if err := db.Exec(
+		"ALTER TABLE wf_activity_logs MODIFY COLUMN result text",
+	).Error; err != nil {
+		return nil, err
+	}
+
 	projectRepo := repo.NewProjectRepo(db)
 	nodeRepo := repo.NewNodeRepo(db)
 	subChainRepo := repo.NewSubChainRepo(db)

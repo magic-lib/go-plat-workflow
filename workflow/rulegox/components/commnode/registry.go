@@ -31,27 +31,19 @@ type CommConfiguration struct {
 }
 
 // NodeParams 根据传入的参数和节点配置，生成节点执行所需的参数映射
-func NodeParams(allParamCtx *paramx.ParamCtx, nodeConfig *CommConfiguration) (map[string]any, error) {
-	allParam := allParamCtx.AllMaps()
-
-	if nodeConfig == nil {
-		return allParam, nil
-	}
-	ret := make(map[string]any)
-	for k, v := range allParam {
-		ret[k] = v
-	}
-	if len(nodeConfig.ArgTemplate) > 0 {
-		for k, v := range nodeConfig.ArgTemplate {
+func NodeParams(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTemplate map[string]any, arguments []*param.BindConfig) (map[string]any, error) {
+	ret := allParamCtx.GetStepArguments(nodeId)
+	if len(argTemplate) > 0 {
+		for k, v := range argTemplate {
 			ret[k] = v
 		}
-		retAny, err := allParamCtx.TemplateArguments(nodeConfig.ArgTemplate)
+		retAny, err := allParamCtx.TemplateArguments(argTemplate)
 		if err != nil {
-			return allParam, err
+			return ret, err
 		}
 		ret = retAny
 	}
-	return param.MergeArgumentsByBinding(ret, nodeConfig.Arguments), nil
+	return param.MergeArgumentsByBinding(ret, arguments), nil
 }
 
 // NodeResponses 根据节点的返回值定义（Configuration.responses）生成该节点对外输出的返回值映射。
@@ -60,7 +52,7 @@ func NodeParams(allParamCtx *paramx.ParamCtx, nodeConfig *CommConfiguration) (ma
 //   - ref_act / ref_node：Ref 为 {{...}} 引用路径，统一交给 TemplateArguments 按当前上下文求值。
 //
 // 未配置 responses 时返回 nil，调用方应保持原有返回值不变。
-func NodeResponses(allParamCtx *paramx.ParamCtx, nodeConfig *CommConfiguration) (map[string]any, error) {
+func NodeResponses(allParamCtx *paramx.FlowContext, nodeConfig *CommConfiguration) (map[string]any, error) {
 	if nodeConfig == nil || len(nodeConfig.Responses) == 0 {
 		return nil, nil
 	}
