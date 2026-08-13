@@ -189,37 +189,42 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	log.Print("activityNode OnMsg:", conv.String(actMetaData))
 
 	err = x.execNode(ctx, actMetaData, stepFlowCtx)
+
+	currNodeId := x.getNodeId(ctx)
+
+	nodeStep := &paramx.Step{
+		Arguments:   stepFlowCtx.Arguments,
+		Responses:   nil,
+		Status:      "",
+		Error:       nil,
+		StartTimeMs: stepFlowCtx.Meta.StartTimeMs,
+		EndTimeMs:   time.Now().UnixMilli(),
+	}
+
 	if err != nil {
+		nodeStep.Status = paramx.StepStatusFail
+		nodeStep.Error = &paramx.ErrorInfo{
+			Code:    "500",
+			Message: err.Error(),
+			Stack:   err.Error(),
+		}
+		allParam.SetStep(currNodeId, nodeStep)
+		msg.SetData(conv.String(allParam))
 		ctx.TellFailure(msg, err)
 		return
 	}
 
 	allDataMap, err := stepFlowCtx.ToMaps()
 	if err == nil {
-		currNodeId := x.getNodeId(ctx)
-		if currNodeId == "" {
-			return
-		}
 		dataMap := x.getActivityParam(allDataMap, x.Configuration.Responses)
-		stepFlowCtx.SetStepResponse(currNodeId, dataMap)
-		respStep, ok := stepFlowCtx.GetStepResponse(currNodeId)
-		if ok {
-			allParam.SetStepResponse(currNodeId, respStep)
-		}
+		nodeStep.Responses = dataMap
+		nodeStep.Status = paramx.StepStatusSuccess
+		allParam.SetStep(currNodeId, nodeStep)
 		msg.SetData(conv.String(allParam))
 		ctx.TellSuccess(msg)
 		return
 	}
 
-	// 设置 Action 元数据
-	//if msg.Metadata == nil {
-	//	msg.Metadata = types.NewMetadata()
-	//}
-	//lo.ForEach(flattenStages(x.activities), func(item *activity.Activity, i int) {
-	//	x.setActionMeta(msg, item)
-	//})
-
-	//allParam.SetOneStep(currNodeId, stepFlowCtx.)
 	msg.SetData(conv.String(allParam))
 	ctx.TellSuccess(msg)
 }
@@ -239,6 +244,7 @@ func (x *ActivityNode) getNodeFlowContext(ctx types.RuleContext, allParam *param
 
 	stepFlowCtx := paramx.NewFlowContext(string(currNodeId), id.NewUUID(), nodeParams)
 	stepFlowCtx.SetTraceId(allParam.Meta.TraceId)
+	stepFlowCtx.Meta.StartTimeMs = time.Now().UnixMilli()
 
 	return stepFlowCtx, nil
 }

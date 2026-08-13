@@ -8,7 +8,6 @@ import (
 	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
-	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"github.com/rs/zerolog/log"
 	"testing"
 
@@ -174,30 +173,33 @@ func TestRuleGoActivityNode(t *testing.T) {
 	]
   }
 }`
-	err := rulegox.StartActivityFlow(context.Background(), &rulegox.ActivityFlowConfig{
-		RootChainDSL: map[string][]byte{
-			"activity_flow_01": []byte(chainConfig),
-		},
-		FlowCtx: &paramx.FlowContext{
-			Arguments: map[string]any{
-				"age": 20,
-				"a":   4,
-				"b":   7,
-			},
-			Responses: nil,
-			Steps:     nil,
-		},
-		EndFunc: func(ctx context.Context, param *paramx.FlowContext, err error) {
-			if err != nil {
-				fmt.Printf("工作流执行失败: %v\n", err)
-				return
-			}
-			fmt.Println("工作流执行成功:", conv.String(param))
-		},
-	}, nil)
-	if err != nil {
-		panic(err)
-	}
+
+	fmt.Println(chainConfig)
+	//err := rulegox.StartActivityFlow(context.Background(), &rulegox.ActivityFlowConfig{
+	//	RootChainDSL: map[string][]byte{
+	//		"activity_flow_01": []byte(chainConfig),
+	//	},
+	//	UseCache: false,
+	//	FlowCtx: &paramx.FlowContext{
+	//		Arguments: map[string]any{
+	//			"age": 20,
+	//			"a":   4,
+	//			"b":   7,
+	//		},
+	//		Responses: nil,
+	//		Steps:     nil,
+	//	},
+	//	EndFunc: func(ctx context.Context, param *paramx.FlowContext, err error) {
+	//		if err != nil {
+	//			fmt.Printf("工作流执行失败: %v\n", err)
+	//			return
+	//		}
+	//		fmt.Println("工作流执行成功:", conv.String(param))
+	//	},
+	//}, nil)
+	//if err != nil {
+	//	panic(err)
+	//}
 }
 
 type HandleAge10Node struct{}

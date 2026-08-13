@@ -41,6 +41,9 @@ type TestNodePayload struct {
 	NodeDef *NodeDef `json:"node_def"`
 	// InputParams 测试时传入的参数（map 形式，key=参数名 value=参数值）
 	InputParams map[string]interface{} `json:"input_params"`
+	// UseCache 是否复用全局 rulego 引擎池中已存在的同名链（以 node_id 为 key）。
+	// true：配置稳定、性能更好（正式/高频复用场景）；false（默认）：每次基于最新配置重建，修改即时生效（测试/开发场景）。
+	UseCache bool `json:"use_cache,omitempty"`
 }
 
 // ExecuteRootChainPayload 执行某个 rootChain 时投递到 MQ 的 payload。
@@ -403,6 +406,9 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		RootChainDSL: rootDsl,
 		FlowContext:  flowCtx,
 		IsAsync:      false,
+		// 透传 UseCache：测试默认不缓存（每次基于最新配置重建，修改即时生效）；
+		// 正式/高频复用场景可由调用方置 true 以复用引擎池中的旧链、提升性能。
+		UseCache: false,
 		EndFunc: func(_ context.Context, param *paramx.FlowContext, err error) {
 			resultParam = param
 			execErr = err
