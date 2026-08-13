@@ -9,28 +9,17 @@ import (
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
+	"github.com/samber/lo"
 	"log"
 )
 
 type ActivityFlowConfig struct {
-	RootChainDSL map[string][]byte   //根配置
-	SubChainDSL  map[string][]byte   //子配置
-	FlowCtx      *paramx.FlowContext //前端传入的参数
+	RootChainDSL *types.RuleChain           //根配置
+	SubChainDSL  []*types.RuleChainBaseInfo //子配置
+	FlowContext  *paramx.FlowContext        //前端传入的参数
 	MsgType      string
 	IsAsync      bool
 	EndFunc      func(ctx context.Context, param *paramx.FlowContext, err error)
-}
-
-// RedisConfig 不同环境下的 Redis 连接配置。
-type RedisConfig struct {
-	// Addr Redis 地址，如 127.0.0.1:6379
-	Addr string `json:"addr"`
-	// Password 密码（可选）
-	Password string `json:"password,omitempty"`
-	// DB 数据库序号
-	DB int `json:"db"`
-	// Username 用户名（Redis 6+ ACL，可选）
-	Username string `json:"username,omitempty"`
 }
 
 type ActivityMetaData struct {
@@ -45,6 +34,9 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 	if actConfig == nil {
 		return fmt.Errorf("参数不能为空")
 	}
+	if actConfig.RootChainDSL == nil || actConfig.FlowContext == nil {
+		return fmt.Errorf("根规则链DSL不能为空")
+	}
 	if metaData == nil {
 		return fmt.Errorf("元信息不能为空")
 	}
@@ -52,6 +44,9 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 		return fmt.Errorf("环境不能为空")
 	}
 	metaData.TraceId = id.GetUUID(metaData.TraceId)
+	metaData.RootChainID = actConfig.RootChainDSL.RuleChain.ID
+	actConfig.FlowContext.SetTraceId(metaData.TraceId)
+	actConfig.FlowContext.SetFlowId(metaData.RootChainID)
 
 	if actConfig.EndFunc == nil {
 		actConfig.EndFunc = func(ctx context.Context, param *paramx.FlowContext, err error) {
@@ -63,31 +58,42 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 		}
 	}
 
-	if len(actConfig.RootChainDSL) != 1 {
-		return fmt.Errorf("主规则链DSL目前只能为1个")
-	}
-
 	// 全局配置
 	config := rulego.NewConfig()
 
 	if len(actConfig.SubChainDSL) > 0 {
-		for sudChainId, subChainDSL := range actConfig.SubChainDSL {
-			_, err := rulego.New(sudChainId, subChainDSL, rulego.WithConfig(config))
+		var subErr error
+		lo.ForEachWhile(actConfig.SubChainDSL, func(subChainDSL *types.RuleChainBaseInfo, index int) bool {
+			subChainDSL.Root = false
+			_, err := rulego.New(subChainDSL.ID, []byte(conv.String(subChainDSL)), rulego.WithConfig(config))
 			if err != nil {
-				return err
+				subErr = err
+				return false
 			}
+			return true
+		})
+		if subErr != nil {
+			return subErr
 		}
 	}
 
-	var engine types.RuleEngine
-	for rootChainId, rootChainDSL := range actConfig.RootChainDSL {
+	var engineIns types.RuleEngine
+
+	if engineTemp, ok := rulego.Get(metaData.RootChainID); ok {
+		engineIns = engineTemp
+	}
+
+	if engineIns == nil {
+		actConfig.RootChainDSL.RuleChain.Root = true
 		var err error
-		engine, err = rulego.New(rootChainId, rootChainDSL, rulego.WithConfig(config))
+		rootChainDSL := []byte(conv.String(actConfig.RootChainDSL))
+		engineIns, err = rulego.New(metaData.RootChainID, rootChainDSL, rulego.WithConfig(config))
 		if err != nil {
 			return err
 		}
 	}
-	if engine == nil {
+
+	if engineIns == nil {
 		return fmt.Errorf("规则引擎不能为空")
 	}
 
@@ -101,7 +107,7 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 		newMetadata.PutValue(k, conv.String(v))
 	}
 
-	msg := types.NewMsg(0, actConfig.MsgType, types.JSON, newMetadata, conv.String(actConfig.FlowCtx))
+	msg := types.NewMsg(0, actConfig.MsgType, types.JSON, newMetadata, conv.String(actConfig.FlowContext))
 	endOption := types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
 		var resultParam = new(paramx.FlowContext)
 		_ = conv.Unmarshal(msg.GetData(), resultParam)
@@ -112,9 +118,9 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 		actConfig.EndFunc(ruleCtx.GetContext(), resultParam, nil)
 	})
 	if actConfig.IsAsync {
-		engine.OnMsg(msg, endOption, types.WithContext(ctx))
+		engineIns.OnMsg(msg, endOption, types.WithContext(ctx))
 	} else {
-		engine.OnMsgAndWait(msg, endOption, types.WithContext(ctx))
+		engineIns.OnMsgAndWait(msg, endOption, types.WithContext(ctx))
 	}
 	return nil
 }

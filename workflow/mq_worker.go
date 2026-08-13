@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/conn"
+	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/utils"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
@@ -40,14 +42,21 @@ func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 	if w.MQWorker == nil {
 		return nil, fmt.Errorf("mq worker is nil")
 	}
-	retString := ""
+	retMap := map[string]any{}
 	if len(actDef.Responses) > 0 {
-		retString = string(actDef.Responses)
+		retString := string(actDef.Responses)
 		if strings.ToLower(retString) == "null" {
 			retString = ""
 		}
+		_ = conv.Unmarshal(retString, &retMap)
 	}
-	return w.MQWorker.RequestActivity(ctx, actDef.ActNamespace, actDef.ActName, actDef.ArgTemplate, retString, params, headers)
+	return w.MQWorker.RequestActivity(ctx, &activity.Activity{
+		ActivityType: actDef.ActivityType,
+		ActNamespace: actDef.ActNamespace,
+		ActName:      actDef.ActName,
+		ArgTemplate:  actDef.ArgTemplate,
+		Responses:    retMap,
+	}, params, headers)
 }
 func (w *WfWorker) SubscribeActivity(actNamespace, actName string, handler utils.ContextAnyHandler) error {
 	if w.MQWorker == nil {

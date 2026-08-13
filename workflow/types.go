@@ -177,8 +177,10 @@ type SubChainDef struct {
 type RootChainDef struct {
 	// Project 所属项目，用于多项目隔离
 	Project string `json:"project"`
-	// ChainID 根链唯一标识（同一 project 内唯一）
+	// ChainID 根链唯一标识（系统生成，形如 R000001，基于自增主键）
 	ChainID string `json:"chain_id"`
+	// ChainKey 根链业务键（全局唯一），用户可自定义，与 ChainID 均可用于调用主链
+	ChainKey string `json:"chain_key,omitempty"`
 	// Name 根链名称
 	Name string `json:"name"`
 	// Description 根链描述
@@ -362,8 +364,10 @@ type ConnectionDef struct {
 type BuildRequest struct {
 	// Project 所属项目
 	Project string `json:"project"`
-	// ChainID 目标根链 ID（可选，不填则自动生成）
+	// ChainID 目标根链 ID（可选，不填则自动生成形如 R000001）
 	ChainID string `json:"chain_id,omitempty"`
+	// ChainKey 业务键（可选）：全局唯一，不填则自动生成；与 ChainID 均可用于调用主链
+	ChainKey string `json:"chain_key,omitempty"`
 	// ChainName 目标根链名称
 	ChainName string `json:"chain_name"`
 	// Description 根链描述
@@ -475,6 +479,10 @@ type RootChainStore interface {
 	Create(ctx context.Context, def *RootChainDef) error
 	// GetByID 按项目+根链 ID 查询
 	GetByID(ctx context.Context, project, chainID string) (*RootChainDef, error)
+	// GetByKey 按项目+ChainKey 查询（project 与 chain_key 联合唯一）
+	GetByKey(ctx context.Context, project, chainKey string) (*RootChainDef, error)
+	// NextRootChainID 生成下一个根链自动 ID（R000001 格式）
+	NextRootChainID(ctx context.Context) (string, error)
 	// List 列出指定项目下所有启用的根链
 	List(ctx context.Context, project string) ([]*RootChainDef, error)
 	// Update 更新根链
@@ -800,9 +808,9 @@ type ActivityLogDef struct {
 	TraceID string `json:"trace_id,omitempty"`
 	// SpanID 跨度 ID（分布式追踪），标识本次 activity 执行的跨度
 	SpanID string `json:"span_id,omitempty"`
-	// Attributes 动态附加属性（任意 JSON），用于存储与本次执行相关的自定义键值对，
+	// Attributes 动态附加属性（JSON 字符串），用于存储与本次执行相关的自定义键值对，
 	// 例如业务维度标记、扩展上下文等，便于后续按属性检索或展示。
-	Attributes json.RawMessage `json:"attributes,omitempty"`
+	Attributes string `json:"attributes,omitempty"`
 	// CreatedAt 落库时间
 	CreatedAt time.Time `json:"created_at"`
 }

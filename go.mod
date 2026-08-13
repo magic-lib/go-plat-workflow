@@ -4,8 +4,8 @@ go 1.24.3
 
 require (
 	github.com/magic-lib/go-plat-mq v0.0.0
-	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260714193243-fddc45b8ae03
-	github.com/redis/go-redis/v9 v9.14.1
+	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260813051351-26dbdd364bf3
+	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.35.1
 	github.com/rulego/rulego v0.36.0
 	github.com/samber/lo v1.52.0
@@ -39,13 +39,13 @@ require (
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/forgoer/openssl v1.6.0 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.11 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-dev-frame/sponge v1.16.1 // indirect
 	github.com/go-ego/gse v1.0.1 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.28.0 // indirect
+	github.com/go-playground/validator/v10 v10.30.1 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/gofrs/uuid/v5 v5.0.0 // indirect
@@ -100,6 +100,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/soniah/evaler v2.2.0+incompatible // indirect
@@ -117,9 +118,10 @@ require (
 	github.com/viant/toolbox v0.37.0 // indirect
 	github.com/viant/xreflect v0.0.0-20230303201326-f50afb0feb0d // indirect
 	github.com/viant/xunsafe v0.10.3 // indirect
-	github.com/zeromicro/go-zero v1.9.2 // indirect
+	github.com/zeromicro/go-zero v1.9.4 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1-0.20260209094634-d010e7850e68 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect

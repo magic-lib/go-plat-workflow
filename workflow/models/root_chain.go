@@ -11,8 +11,9 @@ import (
 // RootChainModel 根规则链持久化模型，对应 wf_root_chains 表。
 type RootChainModel struct {
 	ID                 uint           `gorm:"primaryKey;autoIncrement" json:"id"`
-	Project            string         `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_chain_id,priority:1;not null;index" json:"project"`
+	Project            string         `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_chain_id,priority:1,uniqueIndex:uk_project_chain_key,priority:1;not null;index" json:"project"`
 	ChainID            string         `gorm:"column:chain_id;type:varchar(128);uniqueIndex:uk_project_chain_id,priority:2;not null" json:"chain_id"`
+	ChainKey           string         `gorm:"column:chain_key;type:varchar(128);uniqueIndex:uk_project_chain_key,priority:2;not null;default:''" json:"chain_key"`
 	Name               string         `gorm:"type:varchar(255);not null" json:"name"`
 	Description        string         `gorm:"type:varchar(512)" json:"description"`
 	DSLJSON            string         `gorm:"type:json;not null" json:"dsl_json"`
@@ -36,6 +37,7 @@ func (m *RootChainModel) ToDef() *workflow.RootChainDef {
 	return &workflow.RootChainDef{
 		Project:            m.Project,
 		ChainID:            m.ChainID,
+		ChainKey:           m.ChainKey,
 		Name:               m.Name,
 		Description:        m.Description,
 		DSLJSON:            m.DSLJSON,
@@ -51,6 +53,7 @@ func (m *RootChainModel) ToDef() *workflow.RootChainDef {
 func (m *RootChainModel) FromDef(def *workflow.RootChainDef) {
 	m.Project = def.Project
 	m.ChainID = def.ChainID
+	m.ChainKey = def.ChainKey
 	m.Name = def.Name
 	m.Description = def.Description
 	m.DSLJSON = def.DSLJSON

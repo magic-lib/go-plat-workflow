@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/goroutines"
+	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/magic-lib/go-plat-utils/templates"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"go.uber.org/multierr"
 	"log"
-	"sync"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/conv"
@@ -18,7 +20,6 @@ import (
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 	"github.com/rulego/rulego/components/base"
-	"github.com/samber/lo"
 )
 
 // ActivityGroup 一组按序执行的阶段（Stage），每个阶段内的 Activity 并行执行，阶段之间串行执行。
@@ -34,6 +35,7 @@ type ActivityNode struct {
 	// 非空且执行环境（metaData.Env）非空时，单个 Activity 优先走 MQ 远程执行；
 	// 否则回退到本地 newAct.Execute。每个节点实例共享同一包级执行器。
 	mqExecutor ActivityMQExecutor
+	ruleObj    *templates.RuleExprEngine
 }
 
 type activityCfg struct {
@@ -147,6 +149,8 @@ func (x *ActivityNode) Init(_ types.Config, configuration types.Configuration) e
 			x.activities = append(x.activities, cloneActivityList(cfgStage))
 		}
 	}
+
+	x.ruleObj = templates.NewRuleExprEngine()
 	return nil
 }
 
@@ -166,17 +170,11 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		ctx.TellFailure(msg, err)
 		return
 	}
-	//allParam = {"arguments":{"audit_order_id":"555","mobile":"0978219056"},"responses":{}}
 
-	// 合并 ArgMapping 和 BindArgs 到 allParam 中
-	nodeParams, err := NodeParams(allParam, "", x.Configuration.ArgTemplate, x.Configuration.Arguments)
+	stepFlowCtx, err := x.getNodeFlowContext(ctx, allParam)
 	if err != nil {
 		ctx.TellFailure(msg, err)
 		return
-	}
-
-	stepParamCtx := &paramx.Step{
-		Arguments: nodeParams,
 	}
 
 	metaDataAny := msg.GetMetadata()
@@ -190,6 +188,63 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	log.Print("activityNode OnMsg:", conv.String(actMetaData))
 
+	err = x.execNode(ctx, actMetaData, stepFlowCtx)
+	if err != nil {
+		ctx.TellFailure(msg, err)
+		return
+	}
+
+	allDataMap, err := stepFlowCtx.ToMaps()
+	if err == nil {
+		currNodeId := x.getNodeId(ctx)
+		if currNodeId == "" {
+			return
+		}
+		dataMap := x.getActivityParam(allDataMap, x.Configuration.Responses)
+		stepFlowCtx.SetStepResponse(currNodeId, dataMap)
+		respStep, ok := stepFlowCtx.GetStepResponse(currNodeId)
+		if ok {
+			allParam.SetStepResponse(currNodeId, respStep)
+		}
+		msg.SetData(conv.String(allParam))
+		ctx.TellSuccess(msg)
+		return
+	}
+
+	// 设置 Action 元数据
+	//if msg.Metadata == nil {
+	//	msg.Metadata = types.NewMetadata()
+	//}
+	//lo.ForEach(flattenStages(x.activities), func(item *activity.Activity, i int) {
+	//	x.setActionMeta(msg, item)
+	//})
+
+	//allParam.SetOneStep(currNodeId, stepFlowCtx.)
+	msg.SetData(conv.String(allParam))
+	ctx.TellSuccess(msg)
+}
+
+func (x *ActivityNode) getNodeFlowContext(ctx types.RuleContext, allParam *paramx.FlowContext) (*paramx.FlowContext, error) {
+	currNodeId := x.getNodeId(ctx)
+	if currNodeId == "" {
+		return nil, fmt.Errorf("activityNode currNodeId is empty")
+	}
+
+	// 合并 ArgMapping 和 BindArgs 到 allParam 中
+	nodeParams, err := NodeParams(allParam, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
+	if err != nil {
+		return nil, err
+	}
+	allParam.SetStepArguments(currNodeId, nodeParams) // 设置当前节点参数
+
+	stepFlowCtx := paramx.NewFlowContext(string(currNodeId), id.NewUUID(), nodeParams)
+	stepFlowCtx.SetTraceId(allParam.Meta.TraceId)
+
+	return stepFlowCtx, nil
+}
+
+func (x *ActivityNode) execNode(ctx types.RuleContext, actMetaData *rulegox.ActivityMetaData, stepFlowCtx *paramx.FlowContext) error {
+
 	// ——— 按阶段依次执行 ———
 	for stageIdx, stage := range x.activities {
 		if len(stage) == 0 {
@@ -197,71 +252,36 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		}
 		if len(stage) == 1 {
 			// 单活动阶段：串行执行
-			if err := x.execOneActivity(ctx, actMetaData, stage[0], stageIdx, "S", stepParamCtx, allParam); err != nil {
-				ctx.TellFailure(msg, err)
-				return
+			if err := x.execOneActivity(ctx, actMetaData, stage[0], stepFlowCtx); err != nil {
+				return err
 			}
 		} else {
 			// 多活动阶段：并发执行，等待全部完成后进入下一阶段
-			if err := x.execParallelStage(ctx, actMetaData, stageIdx, stage, stepParamCtx, allParam); err != nil {
-				ctx.TellFailure(msg, err)
-				return
+			if err := x.execParallelStage(ctx, actMetaData, stageIdx, stage, stepFlowCtx); err != nil {
+				return err
 			}
 		}
 	}
 
-	// 设置 Action 元数据
-	if msg.Metadata == nil {
-		msg.Metadata = types.NewMetadata()
-	}
-	lo.ForEach(flattenStages(x.activities), func(item *activity.Activity, i int) {
-		x.setActionMeta(msg, item)
-	})
-
-	execStep := x.getNodeId(ctx)
-	if execStep == "" {
-		ctx.TellFailure(msg, fmt.Errorf("activityNode execStep is empty"))
-		return
-	}
-	allParam.SetOneStep(execStep, stepParamCtx)
-	msg.SetData(conv.String(allParam))
-	ctx.TellSuccess(msg)
+	return nil
 }
 
 // execParallelStage 并发执行一个阶段内的所有 Activity，等待全部完成后合并结果到 allParam。
 func (x *ActivityNode) execParallelStage(ctx types.RuleContext, metaData *rulegox.ActivityMetaData, stageIdx int,
-	stage []*activity.Activity, stepParamCtx *paramx.Step, allParam *paramx.FlowContext) error {
+	stage []*activity.Activity, stepFlowCtx *paramx.FlowContext) error {
 
 	if len(stage) == 0 {
 		return nil
 	}
-	var mu sync.Mutex
-	prefix := fmt.Sprintf("P%d", stageIdx) // 如 "P0", "P2"，与 idx 拼接后得到 "P00", "P01", "P20", "P21"
 
 	var retErr error
 
 	_, _ = goroutines.AsyncExecuteDataList[*activity.Activity](30*time.Second, stage, func(value *activity.Activity, key int) (breakFlag bool, err error) {
-		mu.Lock()
-		snapAllParam := deepCopyFlowCtx(allParam)
-		snapStepCtx := deepCopyStep(stepParamCtx)
-		mu.Unlock()
-
-		if err := x.execOneActivity(ctx, metaData, value, key, prefix, snapStepCtx, snapAllParam); err != nil {
+		if err := x.execOneActivity(ctx, metaData, value, stepFlowCtx); err != nil {
 			// 执行失败，别的并行的程序不能退出，继续执行完成
 			retErr = multierr.Append(retErr, err)
 			return false, err
 		}
-		// 结果合并回全局 allParam
-		mu.Lock()
-		for stepId, ps := range snapAllParam.Steps {
-			if ps.Arguments != nil {
-				allParam.SetStepArguments(stepId, ps.Arguments)
-			}
-			if ps.Responses != nil {
-				allParam.SetStepResponse(stepId, ps.Responses)
-			}
-		}
-		mu.Unlock()
 		return false, nil
 	})
 
@@ -302,8 +322,7 @@ func toMapValue(v any) map[string]any {
 //     worker 远程执行该 Activity（复用 workflow.MQExecutor.RequestActivity），
 //     适用于生产环境依赖远程监听程序的 Activity。
 //   - 否则（未注入执行器或环境为空）回退到本地 newAct.Execute，保证单测/无 MQ 场景可用。
-func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.ActivityMetaData, act *activity.Activity,
-	idx int, prefix string, stepParamCtx *paramx.Step, allParam *paramx.FlowContext) error {
+func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.ActivityMetaData, act *activity.Activity, stepParamCtx *paramx.FlowContext) error {
 
 	if metaData == nil || metaData.RedisConfig == nil {
 		return fmt.Errorf("activityNode execOneActivity: RedisConfig is nil")
@@ -317,12 +336,17 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 	}
 
 	newAct := act.Clone()
-	stepId := paramx.StepId(fmt.Sprintf("%s%d", prefix, idx))
 	if newAct.Id == "" {
-		newAct.Id = string(stepId)
+		return fmt.Errorf("activityNode execOneActivity: Activity Id is empty")
 	}
+	stepId := paramx.StepId(newAct.Id)
 
-	dataMap := stepParamCtx.Arguments
+	allDataMap, err := stepParamCtx.ToMaps()
+	if err != nil {
+		return err
+	}
+	dataMap := x.getActivityParam(allDataMap, newAct.Arguments)
+	stepParamCtx.SetStepArguments(stepId, dataMap)
 
 	// 优先走 MQ 远程执行（生产环境依赖远程 worker 的 Activity）。
 	if oneWorker != nil && metaData.Env != "" {
@@ -331,29 +355,11 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 			TraceID:     metaData.TraceId,
 			SpanID:      newAct.Id,
 		}
-		responses := conv.String(newAct.Responses)
-		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct.ActNamespace,
-			newAct.ActName, newAct.ArgTemplate, responses, dataMap, metaDataTemp.ToHeader(nil))
+		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil))
 		if err != nil {
 			return err
 		}
-		// 将 MQ 返回结果按本地执行一致的格式写回 allParam：
-		// 以 stepId 为 key、responses 存放远程返回值，后续逻辑与本地执行对齐。
-		respData := map[string]any{
-			string(stepId): map[string]any{
-				"responses": resp.Data,
-			},
-		}
-		if oneFuncData, ok := respData[string(stepId)]; ok {
-			if m, ok := oneFuncData.(map[string]any); ok {
-				if resp, has := m["responses"]; has {
-					allParam.SetStepResponse(stepId, resp)
-				}
-			}
-		}
-		if stepResp, ok := allParam.GetStepResponse(stepId); ok {
-			allParam.SetVariable(string(stepId), stepResp)
-		}
+		stepParamCtx.SetStepResponse(stepId, resp.Data)
 		return nil
 	}
 
@@ -362,22 +368,18 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 	if err != nil {
 		return err
 	}
-
-	if oneFuncData, ok := respData[newAct.Id]; ok {
-		if m, ok := oneFuncData.(map[string]any); ok {
-			if args, has := m["arguments"]; has {
-				allParam.SetStepArguments(stepId, toMapValue(args))
-			}
-			if resp, has := m["responses"]; has {
-				allParam.SetStepResponse(stepId, resp)
-			}
-		}
-	}
-
-	if stepResp, ok := allParam.GetStepResponse(stepId); ok {
-		allParam.SetVariable(string(stepId), stepResp)
-	}
+	stepParamCtx.SetStepResponse(stepId, respData)
 	return nil
+}
+
+func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
+	actParam := make(map[string]any)
+	for _, item := range bindConfig {
+		ruleObj := templates.NewTemplate(conv.String(item.Value), "{{", "}}")
+		tempVal := ruleObj.Replace(allParam)
+		actParam[item.Key] = tempVal
+	}
+	return actParam
 }
 
 // getNodeId 获取当前节点的 ID（优先用 ctx 中的 SelfId）

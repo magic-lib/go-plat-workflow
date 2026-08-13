@@ -2,13 +2,14 @@ package rulegox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -82,7 +83,7 @@ type activityLogRecord struct {
 	RootChainID  string `json:"root_chain_id,omitempty"`
 	TraceID      string `json:"trace_id,omitempty"`
 	SpanID       string `json:"span_id,omitempty"`
-	Attributes   any    `json:"attributes,omitempty"`
+	Attributes   string `json:"attributes,omitempty"`
 }
 
 // MQWorker 分布式任务执行端（worker）。
@@ -282,7 +283,7 @@ func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event
 		RootChainID:  metaData.RootChainID,
 		TraceID:      metaData.TraceID,
 		SpanID:       metaData.SpanID,
-		Attributes:   attributes,
+		Attributes:   attrToJSONString(attributes),
 	}
 	key := ActivityLogKeyPrefix + getMQNamespace(w.Project, w.Env)
 	pipe := w.redisCli.Pipeline()
@@ -301,6 +302,22 @@ func eventIdOf(event *mq.Event) string {
 		return ""
 	}
 	return event.Id
+}
+
+// attrToJSONString 将任意属性值序列化为 JSON 字符串，便于存入 ActivityLogDef.Attributes（string 类型）。
+// nil 时返回空串；其余按 JSON 序列化。
+func attrToJSONString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName string, params any, headers http.Header) (*httputil.CommResponse, error) {
 	methodTopic := getActivityTopic(actNamespace, actName)
@@ -325,7 +342,14 @@ func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName
 }
 
 // RequestActivity 订阅指定 topic 并注册处理函数。
-func (w *MQWorker) RequestActivity(ctx context.Context, actNamespace, actName string, argTemplate, responses string, params any, headers http.Header) (*httputil.CommResponse, error) {
+func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, params any, headers http.Header) (*httputil.CommResponse, error) {
+	if act == nil {
+		return nil, fmt.Errorf("activity is nil")
+	}
+	actNamespace := act.ActNamespace
+	actName := act.ActName
+	argTemplate := act.ArgTemplate
+
 	if actNamespace == "" || actName == "" {
 		return nil, fmt.Errorf("act_namespace and act_name are required")
 	}
@@ -338,8 +362,9 @@ func (w *MQWorker) RequestActivity(ctx context.Context, actNamespace, actName st
 	if err != nil {
 		return nil, err
 	}
-	if responses == "" || strings.ToLower(responses) == "null" {
-		responses = ""
+	responses := ""
+	if len(act.Responses) > 0 {
+		responses = conv.String(act.Responses)
 	}
 	data, err := ruleEngine.RenderObject(responses, resp.Data)
 	if err != nil {

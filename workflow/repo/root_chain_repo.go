@@ -3,8 +3,11 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"gorm.io/gorm"
+
+	"github.com/magic-lib/go-plat-utils/utils"
 
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/models"
@@ -21,10 +24,47 @@ func NewRootChainRepo(db *gorm.DB) *RootChainRepo {
 }
 
 // Create 创建根链。
+// ChainID 与 ChainKey 由调用方（service 层）保证已生成；此处仅做兜底填充：
+// 若 ChainID 为空则基于 max(id)+1 生成 R000001 格式；若 ChainKey 为空则默认等于 ChainID。
 func (r *RootChainRepo) Create(ctx context.Context, def *workflow.RootChainDef) error {
+	if def.ChainID == "" {
+		next, err := r.NextRootChainID(ctx)
+		if err != nil {
+			return err
+		}
+		def.ChainID = next
+	}
+	if def.ChainKey == "" {
+		def.ChainKey = def.ChainID
+	}
 	var m models.RootChainModel
 	m.FromDef(def)
 	return r.db.WithContext(ctx).Create(&m).Error
+}
+
+// NextRootChainID 生成下一个根链的自动 ID（如 R000001），基于 max(id)+1。
+func (r *RootChainRepo) NextRootChainID(ctx context.Context) (string, error) {
+	var next uint
+	err := r.db.WithContext(ctx).Raw("SELECT COALESCE(MAX(id), 0) + 1 FROM wf_root_chains").Scan(&next).Error
+	if err != nil {
+		return "", err
+	}
+	return "R" + utils.PadLeft(fmt.Sprintf("%d", next), 6, '0'), nil
+}
+
+// GetByKey 按项目+ChainKey 查询根链（project 与 chain_key 联合唯一，用于以业务键直接调用主链）。
+func (r *RootChainRepo) GetByKey(ctx context.Context, project, chainKey string) (*workflow.RootChainDef, error) {
+	var m models.RootChainModel
+	err := r.db.WithContext(ctx).
+		Where("project = ? AND chain_key = ? AND status = ?", project, chainKey, models.NodeStatusEnabled).
+		First(&m).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, workflow.ErrRootChainNotFound
+		}
+		return nil, err
+	}
+	return m.ToDef(), nil
 }
 
 // GetByID 按项目 + 根链 ID 查询。

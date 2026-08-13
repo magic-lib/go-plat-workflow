@@ -23,6 +23,8 @@ var (
 type RootChainStore interface {
 	// GetByID 按项目+根链 ID 查询
 	GetByID(ctx context.Context, project, chainID string) (*RootChainDef, error)
+	// GetByKey 按项目+ChainKey 查询（project 与 chain_key 联合唯一）
+	GetByKey(ctx context.Context, project, chainKey string) (*RootChainDef, error)
 }
 
 // SubChainStore 子规则链仓储接口（engine 包内定义，避免循环依赖）。
@@ -33,6 +35,8 @@ type SubChainStore interface {
 
 // RootChainDef 根链定义（engine 仅使用其字段，由仓储实现填充）。
 type RootChainDef struct {
+	// ChainID 根链 ID（形如 R000001），与 project 共同构成 pool key
+	ChainID string
 	// DSLJSON 完整的 rulego RootChain DSL JSON
 	DSLJSON string
 	// SubChainIDs 引用的子链 ID 列表（逗号分隔）
@@ -156,6 +160,27 @@ func (e *WorkflowEngine) LoadSubChain(ctx context.Context, project, chainID stri
 // 子链需先通过 LoadSubChain 加载到引擎池（或已被其父链加载）。
 func (e *WorkflowEngine) ExecuteSubChain(ctx context.Context, project, chainID string, jsonPayload string) (string, error) {
 	return e.Execute(ctx, project, chainID, jsonPayload)
+}
+
+// LoadChainByKey 按项目+ChainKey 查询根链并加载到 rulego 引擎池。
+func (e *WorkflowEngine) LoadChainByKey(ctx context.Context, project, chainKey string) error {
+	def, err := e.rootChainStore.GetByKey(ctx, project, chainKey)
+	if err != nil {
+		return err
+	}
+	return e.LoadChain(ctx, project, def.ChainID)
+}
+
+// ExecuteByKey 按项目+ChainKey 加载并执行根链。
+func (e *WorkflowEngine) ExecuteByKey(ctx context.Context, project, chainKey string, jsonPayload string) (string, error) {
+	def, err := e.rootChainStore.GetByKey(ctx, project, chainKey)
+	if err != nil {
+		return "", err
+	}
+	if err := e.LoadChain(ctx, project, def.ChainID); err != nil {
+		return "", err
+	}
+	return e.Execute(ctx, project, def.ChainID, jsonPayload)
 }
 
 // Execute 同步执行已加载的规则链并返回结果。

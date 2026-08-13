@@ -543,14 +543,11 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
 	}
-	if req.ChainID == "" {
-		writeError(w, http.StatusBadRequest, "chain_id is required")
-		return
-	}
 
 	buildReq := &workflow.BuildRequest{
 		Project:            req.Project,
 		ChainID:            req.ChainID,
+		ChainKey:           req.ChainKey,
 		ChainName:          req.ChainName,
 		NodeIDs:            req.NodeIDs,
 		SubChainIDs:        req.SubChainIDs,
@@ -790,6 +787,7 @@ func (ws *WebServer) handleDeleteRootChainRelease(w http.ResponseWriter, r *http
 type executeRequest struct {
 	Project            string                            `json:"project"`
 	ChainID            string                            `json:"chain_id"`
+	ChainKey           string                            `json:"chain_key"`
 	ChainName          string                            `json:"chain_name"`
 	NodeIDs            []string                          `json:"node_ids"`
 	SubChainIDs        []string                          `json:"sub_chain_ids"`
@@ -810,12 +808,22 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
 	}
-	if req.ChainID == "" {
-		writeError(w, http.StatusBadRequest, "chain_id is required")
+	if req.ChainID == "" && req.ChainKey == "" {
+		writeError(w, http.StatusBadRequest, "chain_id or chain_key is required")
 		return
 	}
 	if req.Payload == "" {
 		req.Payload = "{}"
+	}
+
+	// 若仅提供了 ChainKey，先解析出真实的 ChainID（ChainID 与 ChainKey 均可用于调用主链）
+	if req.ChainID == "" && req.ChainKey != "" {
+		def, err := ws.svc.GetRootChainByKey(r.Context(), req.Project, req.ChainKey)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "chain_key not found: "+err.Error())
+			return
+		}
+		req.ChainID = def.ChainID
 	}
 
 	// 生产模式：执行当前发布版本（忽略编排配置，使用发布快照）

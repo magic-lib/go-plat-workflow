@@ -73,6 +73,22 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		return nil, err
 	}
 
+	// 旧数据回填：将 chain_key 为空（'' 或 NULL）的根链按 id 生成唯一业务键，
+	// 避免后续建唯一索引时因重复空值失败。基于 id 保证全局唯一且幂等。
+	if err := db.Exec(
+		"UPDATE wf_root_chains SET chain_key = CONCAT('R', LPAD(id, 6, '0')) WHERE chain_key IS NULL OR chain_key = ''",
+	).Error; err != nil {
+		return nil, err
+	}
+
+	// AutoMigrate 已自动新增 chain_key 列，这里补建 project + chain_key 联合唯一索引
+	//（幂等：已存在则忽略报错）。
+	if err := db.Exec(
+		"ALTER TABLE wf_root_chains ADD UNIQUE INDEX uk_project_chain_key (project, chain_key)",
+	).Error; err != nil && !strings.Contains(err.Error(), "Duplicate") && !strings.Contains(err.Error(), "Duplicate key name") {
+		return nil, err
+	}
+
 	projectRepo := repo.NewProjectRepo(db)
 	nodeRepo := repo.NewNodeRepo(db)
 	subChainRepo := repo.NewSubChainRepo(db)
@@ -304,23 +320,57 @@ func (s *WorkflowService) UpdateSubChainBuild(ctx context.Context, req *workflow
 // RootChain 构建与管理
 // ============================================================
 
+// ensureRootChainIDs 保证 req 的 ChainID 与 ChainKey 已就绪：
+//   - ChainID 为空时基于自增主键生成 R000001 格式（若提供了 ChainKey 且已存在记录，则复用其 ChainID 保持幂等）
+//   - ChainKey 为用户自定义的业务键；不传时默认等于 ChainID（保证全局唯一、可读）
+func (s *WorkflowService) ensureRootChainIDs(ctx context.Context, req *workflow.BuildRequest) error {
+	if req.ChainID == "" && req.ChainKey != "" {
+		if exist, err := s.rootChainRepo.GetByKey(ctx, req.Project, req.ChainKey); err == nil && exist != nil {
+			req.ChainID = exist.ChainID
+		}
+	}
+	if req.ChainID == "" {
+		next, err := s.rootChainRepo.NextRootChainID(ctx)
+		if err != nil {
+			return err
+		}
+		req.ChainID = next
+	}
+	if req.ChainKey == "" {
+		req.ChainKey = req.ChainID
+	}
+	return nil
+}
+
 // BuildRootChain 根据 BuildRequest 组装 RootChainDSL 并存入数据库。
+// ChainID 为空时自动生成 R000001 格式；ChainKey 为空时自动生成全局唯一业务键。
 func (s *WorkflowService) BuildRootChain(ctx context.Context, req *workflow.BuildRequest) (*workflow.RootChainDef, error) {
+	if err := s.ensureRootChainIDs(ctx, req); err != nil {
+		return nil, err
+	}
 	return s.dslBuilder.Build(ctx, req)
 }
 
 // SaveRootChain 保存根链草稿（先物理删除旧记录再重建，幂等操作）。
 // 仅影响测试环境草稿，已发布的版本快照不受影响。
 func (s *WorkflowService) SaveRootChain(ctx context.Context, req *workflow.BuildRequest) (*workflow.RootChainDef, error) {
+	if err := s.ensureRootChainIDs(ctx, req); err != nil {
+		return nil, err
+	}
 	// 先删除旧记录（忽略不存在的情况）
 	_ = s.rootChainRepo.Delete(ctx, req.Project, req.ChainID)
 	// 重新构建并创建
 	return s.dslBuilder.Build(ctx, req)
 }
 
-// GetRootChain 获取指定项目下的单个根链。
+// GetRootChain 获取指定项目下的单个根链（按 ChainID）。
 func (s *WorkflowService) GetRootChain(ctx context.Context, project, chainID string) (*workflow.RootChainDef, error) {
 	return s.rootChainRepo.GetByID(ctx, project, chainID)
+}
+
+// GetRootChainByKey 按项目+ChainKey 获取根链（project 与 chain_key 联合唯一，方便用业务键直接调用主链）。
+func (s *WorkflowService) GetRootChainByKey(ctx context.Context, project, chainKey string) (*workflow.RootChainDef, error) {
+	return s.rootChainRepo.GetByKey(ctx, project, chainKey)
 }
 
 // ListRootChains 列出指定项目下所有可用根链。

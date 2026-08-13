@@ -86,6 +86,7 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	def := &workflow.RootChainDef{
 		Project:            req.Project,
 		ChainID:            req.ChainID,
+		ChainKey:           req.ChainKey,
 		Name:               req.ChainName,
 		Description:        req.Description,
 		DSLJSON:            string(dslJSON),

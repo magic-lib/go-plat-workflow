@@ -430,7 +430,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
         </div>
       </div>
       <div class="form-group">
-        <label>参数模板 (ArgTemplate，可选) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">支持 {{id.responses.field}} 语法</span></label>
+        <label>参数模板 (ArgTemplate，可选) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">支持 {{steps.id.responses.field}} 语法</span></label>
         <input id="act-arg-template" placeholder='{"name": "{{$.responses.name}}"}'>
       </div>
       <div class="form-group">
@@ -545,7 +545,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
     </div>
     <div class="table-wrap">
       <table id="root-table">
-        <thead><tr><th>Chain ID</th><th>名称</th><th>描述</th><th>状态</th><th>引用 Nodes</th><th>引用 Sub Chains</th><th>Connections</th><th>线上版本</th><th>操作</th></tr></thead>
+        <thead><tr><th>Chain ID</th><th>Chain Key</th><th>名称</th><th>描述</th><th>状态</th><th>引用 Nodes</th><th>引用 Sub Chains</th><th>Connections</th><th>线上版本</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -665,8 +665,12 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
           <h3>Chain Info</h3>
           <div class="orch-chain-info">
             <div class="form-group">
-              <label>Chain ID *</label>
-              <input id="orch-chain-id" placeholder="my-flow" oninput="onOrchChange()">
+              <label>Chain ID <span style="font-weight:400;color:var(--text-muted)">（系统生成，R000001 格式，不可编辑）</span></label>
+              <input id="orch-chain-id" placeholder="R000001" readonly oninput="onOrchChange()">
+            </div>
+            <div class="form-group">
+              <label>Chain Key <span style="font-weight:400;color:var(--text-muted)">（业务键，自定义名称，全局唯一，可与 Chain ID 互换调用）</span></label>
+              <input id="orch-chain-key" placeholder="如 order-flow-v1" oninput="onOrchChange()">
             </div>
             <div class="form-group">
               <label>名称</label>
@@ -722,7 +726,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
             <div id="orch-upstream-empty" style="text-align:center;padding:14px;color:var(--text-muted);font-size:.82rem">选中节点并配置连接后，这里会列出各节点可引用的上游返回值</div>
           </div>
           <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px;line-height:1.5">
-            提示：点击任一返回值可复制其引用路径（<code>{{nodeId.arguments.key}}</code>），便于在下游节点的 Configuration 或下方"节点参数配置"中引用。若当前聚焦在"节点参数配置"的来源为"上游返回值"的输入框，点击会直接填入。
+            提示：点击任一返回值可复制其引用路径（<code>{{steps.nodeId.arguments.key}}</code>），便于在下游节点的 Configuration 或下方"节点参数配置"中引用。若当前聚焦在"节点参数配置"的来源为"上游返回值"的输入框，点击会直接填入。
           </div>
         </div>
 
@@ -733,7 +737,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
             <span class="count" id="orch-param-count" style="font-weight:400;color:var(--text-muted);font-size:.78rem">0 个节点</span>
           </h3>
           <div class="orch-param-help" style="font-size:.76rem;color:var(--text-muted);margin-bottom:8px;line-height:1.6">
-            为每个节点的每个参数指定值来源：<b>固定值</b>（手工填写）、<b>入口参数</b>（运行时由根链输入传入，引用 <code>{{参数名}}</code>）、<b>上游返回值</b>（引用前面节点输出，形如 <code>{{N000004.arguments.name}}</code>）。点击上方"上游返回值提示"中的项可快速填入当前聚焦的参数框。
+            为每个节点的每个参数指定值来源：<b>固定值</b>（手工填写）、<b>入口参数</b>（运行时由根链输入传入，引用 <code>{{参数名}}</code>）、<b>上游返回值</b>（引用前面节点输出，形如 <code>{{steps.N000004.arguments.name}}</code>）。点击上方"上游返回值提示"中的项可快速填入当前聚焦的参数框。
           </div>
           <div id="orch-param-list" style="max-height:380px;overflow-y:auto">
             <div id="orch-param-empty" style="text-align:center;padding:14px;color:var(--text-muted);font-size:.82rem">选择节点并添加连接后，这里会列出各节点的参数供指定值来源</div>
@@ -2296,7 +2300,7 @@ function nodeParamDefs() {
 // 渲染某个 activity item 的参数明细 + 可编辑绑定输入
 // 绑定来源三选：
 //   1) value      手工配置（固定值）
-//   2) ref_act    引用前面某 Activity 的返回值（路径形如 {{id.responses}} 或 {{id.responses.field}}）
+//   2) ref_act    引用前面某 Activity 的返回值（路径形如 {{steps.id.responses}} 或 {{steps.id.responses.field}}，所有 Activity 都在 steps 下）
 //   3) ref_node   引用本节点的参数定义（路径形如 {{node_param_key}}）
 function renderActivityItemParams(row) {
   const box = row.querySelector('.act-params-box');
@@ -2352,9 +2356,9 @@ function renderActivityItemParams(row) {
   // 引用来源下拉选项
   const prevs = prevActivitiesBefore(row);
   const nodeParams = nodeParamDefs();
-  // 本节点参数下拉：直接列出参数定义中的 key，生成 {{key}}
+  // 本节点参数下拉：直接列出参数定义中的 key，生成 {{arguments.key}}
   const nodeRefOptions = nodeParams.map(p =>
-    '<option value="' + escAttr('{{' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
+    '<option value="' + escAttr('{{arguments.' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
   ).join('');
 
   // 前序 activity 的"参数值"key 列表（来自其 arguments 定义，前端有缓存），用于引用精确字段
@@ -2495,7 +2499,7 @@ function onArgSourceChange(sel) {
   const prevs = prevActivitiesBefore(actItem);
   const nodeParams = nodeParamDefs();
   const nodeRefOptions = nodeParams.map(p =>
-    '<option value="' + escAttr('{{' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
+    '<option value="' + escAttr('{{arguments.' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
   ).join('');
   const bind = liveBinds[key] || {};
   wrap.innerHTML = argRenderArgInput(key, bind, { prevs: prevs, nodeParams: nodeParams, nodeRefOptions: nodeRefOptions });
@@ -2547,9 +2551,9 @@ function onRefChange(sel) {
       const prevs = argGetPrevsForWrap(wrap);
       const nodeParams = nodeParamDefs();
       const nodeRefOptions = nodeParams.map(p =>
-        '<option value="' + escAttr('{{' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
+        '<option value="' + escAttr('{{arguments.' + p.key + '}}') + '">' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
       ).join('');
-      const bind = { source: 'ref_act', ref: '{{' + prevSel.value + '.responses}}' };
+      const bind = { source: 'ref_act', ref: '{{steps.' + prevSel.value + '.responses}}' };
       wrap.innerHTML = argRenderArgInput(key, bind, { prevs: prevs, nodeParams: nodeParams, nodeRefOptions: nodeRefOptions });
       const newPrevSel = wrap.querySelector('.arg-ref');
       if (newPrevSel && prevSel.value) newPrevSel.value = prevSel.value;
@@ -4105,7 +4109,7 @@ function syncParamsToConfigArguments(body) {
 // 将返回值定义（outputs）转换为 Configuration 第一层 responses 数组。
 // 保留 key/label/type/source，并按 source 保留对应的取值字段：
 //   value    -> value（按 type 转换后的字面量）
-//   ref_act  -> ref（{{actId.responses[.field]}} / {{actId.arguments[.key]}}）
+//   ref_act  -> ref（{{steps.actId.responses[.field]}} / {{steps.actId.arguments[.key]}}）
 //   ref_node -> ref（{{nodeParamKey}}）
 function outputsToResponses(outputs) {
   return (outputs || [])
@@ -4115,7 +4119,10 @@ function outputsToResponses(outputs) {
       if (item.source === 'value') {
         item.value = castParamValue(o.value, o.type);
       } else {
+        // ref_act / ref_node：ref 为引用路径，同时把 value 设为与 ref 一致，
+        // 便于执行引擎（param.BindConfig）统一从 value 字段读取取值来源。
         item.ref = o.ref || '';
+        item.value = o.value || o.ref || '';
       }
       return item;
     });
@@ -4225,7 +4232,9 @@ function outputAllActivities() {
 function outputParseRefPath(ref) {
   const m = /^\{\{([^}]+)\}\}$/.exec((ref || '').trim());
   if (!m) return { raw: ref || '' };
-  const inner = m[1];
+  let inner = m[1];
+  // 兼容 steps. 前缀（引用前序统一生成 {{steps.id...}}）
+  if (inner.startsWith('steps.')) inner = inner.slice('steps.'.length);
   const dot = inner.indexOf('.');
   if (dot < 0) return { refId: inner, refType: 'ref_node', refField: '' };
   const refId = inner.slice(0, dot);
@@ -4252,7 +4261,8 @@ function outputBuildRefPath(refId, refType, refField) {
   else if (refType === 'responses_field') inner = refId + '.responses.' + field;
   else if (refType === 'arguments') inner = refId + '.arguments' + (field ? '.' + field : '');
   else inner = refId;
-  return '{{' + inner + '}}';
+  // 所有 Activity 都在 steps 下，引用前序统一加 steps. 前缀
+  return '{{steps.' + inner + '}}';
 }
 
 // 取值类型下拉（带隐藏逻辑：无 ReturnValues 则隐藏「返回值.字段」，无 params 则隐藏「参数值.字段」）
@@ -4335,7 +4345,7 @@ function outputRenderInput(bind) {
     return html;
   }
   if (source === 'ref_node') {
-    // 引用节点参数定义：列出本节点已定义的参数 key，生成 {{key}}
+    // 引用节点参数定义：列出本节点已定义的参数 key，生成 {{arguments.key}}
     const nodeParams = nodeParamDefs();
     const nodeRef = bind.ref || '';
     const key = bind.key || '';
@@ -4346,7 +4356,7 @@ function outputRenderInput(bind) {
       refCtrl = '<span style="flex:1;color:var(--text-muted);font-size:.78rem">本节点未定义参数，无法引用</span>';
     } else {
       const opts = nodeParams.map(p =>
-        '<option value="' + escAttr('{{' + p.key + '}}') + '"' + ('{{' + p.key + '}}' === nodeRef ? ' selected' : '') + '>' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
+        '<option value="' + escAttr('{{arguments.' + p.key + '}}') + '"' + ('{{arguments.' + p.key + '}}' === nodeRef ? ' selected' : '') + '>' + escHtml((p.label || p.key) + ' (' + p.key + ')') + '</option>'
       ).join('');
       refCtrl = '<select class="output-ref-node" onchange="onOutputRefChange(this)" style="flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
         '<option value="">— 选择节点参数 —</option>' + opts + '</select>';
@@ -4429,7 +4439,7 @@ function onOutputRefChange(sel) {
   if (!wrap) return;
   let finalInput = wrap.querySelector('.output-ref-final');
   if (!finalInput) return;
-  // 引用节点参数：直接以下拉选中值（形如 {{key}}）作为最终引用路径
+  // 引用节点参数：直接以下拉选中值（形如 {{arguments.key}}）作为最终引用路径
   const nodeSel = wrap.querySelector('.output-ref-node');
   if (nodeSel && sel === nodeSel) {
     finalInput.value = nodeSel.value;
@@ -4507,8 +4517,9 @@ function collectOutputs() {
         }
       }
       out.ref = ref;
+      out.value = ref; // 与 value 来源保持一致，便于消费端统一读取 value
     } else if (source === 'ref_node') {
-      // 引用节点参数定义：最终路径为 {{key}}，与「手工配置」共用 value 字段语义不同，单独存 ref
+      // 引用节点参数定义：最终路径为 {{arguments.key}}，与「手工配置」共用 value 字段语义不同，单独存 ref
       const finalInput = row.querySelector('.output-ref-final');
       let ref = finalInput ? finalInput.value.trim() : '';
       // 兜底：隐藏域为空时用当前下拉实时取值，确保选择不丢
@@ -4517,6 +4528,7 @@ function collectOutputs() {
         if (nSel) ref = nSel.value;
       }
       out.ref = ref;
+      out.value = ref; // 与 value 来源保持一致，便于消费端统一读取 value
     }
     if (key) {
       outputs.push(out);
@@ -4842,7 +4854,7 @@ async function loadRootChains() {
     (currents || []).forEach(r => { curVerMap[r.chain_id] = r.version; });
     const tbody = document.querySelector('#root-table tbody');
     if (!chains.length) {
-      tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="icon">🌳</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无根链数据，通过 Execute 页面执行工作流后会自动生成</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><div class="icon">🌳</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无根链数据，通过 Execute 页面执行工作流后会自动生成</p></div></td></tr>';
       return;
     }
     window._rootChainsForEdit = chains; // 缓存供按钮索引使用
@@ -4853,6 +4865,7 @@ async function loadRootChains() {
       return `
       <tr>
         <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
+        <td class="code-cell" title="${esc(c.chain_key||'')}">${esc(c.chain_key||'')}</td>
         <td>${esc(c.name)}</td>
         <td title="${esc(c.description||'')}">${esc(trunc(c.description, 40))}</td>
         <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
@@ -5885,7 +5898,7 @@ function renderOrchUpstreamHints() {
     map[t].forEach(u => {
       html += `<div class="upstream-from" style="margin-left:10px;font-size:.78rem;color:#475569;margin-bottom:3px">来自 <span class="code-cell">${esc(u.fromId)}</span> <span style="color:var(--text-muted)">${esc(u.fromName)}</span>${u.sub?'（子链）':''}：</div>`;
       u.outputs.forEach(o => {
-        const ref = '{{' + u.fromId + '.arguments.' + o.key + '}}';
+        const ref = '{{steps.' + u.fromId + '.arguments.' + o.key + '}}';
         html += `<div class="upstream-item" style="margin-left:20px;display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer" onclick="copyUpstreamRef('${esc(ref)}')" title="点击复制/填入引用路径：${esc(ref)}">
           <code style="background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:4px;font-size:.76rem">${esc(o.key)}</code>
           <span style="color:#334155">${esc(o.label||'')}</span>
@@ -5978,7 +5991,7 @@ function renderOrchParamOverrides() {
     upstreamMap[t].forEach(u => {
       u.outputs.forEach(o => {
         upstreamOptions.push({
-          ref: '{{' + u.fromId + '.arguments.' + o.key + '}}',
+          ref: '{{steps.' + u.fromId + '.arguments.' + o.key + '}}',
           label: u.fromName + ' › ' + (o.label || o.key),
         });
       });
@@ -6052,7 +6065,7 @@ function onParamSrcChange(sel) {
     const upstreamOptions = [];
     Object.keys(upstreamMap).forEach(t => {
       upstreamMap[t].forEach(u => u.outputs.forEach(o => {
-        upstreamOptions.push({ ref: '{{' + u.fromId + '.arguments.' + o.key + '}}', label: u.fromName + ' › ' + (o.label || o.key) });
+        upstreamOptions.push({ ref: '{{steps.' + u.fromId + '.arguments.' + o.key + '}}', label: u.fromName + ' › ' + (o.label || o.key) });
       }));
     });
     preset.src = src;
@@ -6078,7 +6091,7 @@ function initParamValueControl(field, preset) {
     const upstreamOptions = [];
     Object.keys(upstreamMap).forEach(t => {
       upstreamMap[t].forEach(u => u.outputs.forEach(o => {
-        upstreamOptions.push({ ref: '{{' + u.fromId + '.arguments.' + o.key + '}}', label: u.fromName + ' › ' + (o.label || o.key) });
+        upstreamOptions.push({ ref: '{{steps.' + u.fromId + '.arguments.' + o.key + '}}', label: u.fromName + ' › ' + (o.label || o.key) });
       }));
     });
     renderUpstreamSelect(slot, upstreamOptions, preset.value);
@@ -6253,6 +6266,7 @@ function newSubChainViaOrch() {
 
   // 清空表单
   document.getElementById('orch-chain-id').value = '';
+  document.getElementById('orch-chain-key').value = '';
   document.getElementById('orch-chain-name').value = '';
   document.getElementById('orch-chain-desc').value = '';
   document.getElementById('orch-debug-mode').checked = false;
@@ -6286,6 +6300,7 @@ function orchSubChainByIndex(i) {
   document.getElementById('tab-orchestrate').classList.add('active');
 
   document.getElementById('orch-chain-id').value = c.chain_id || '';
+  document.getElementById('orch-chain-key').value = c.chain_key || '';
   document.getElementById('orch-chain-name').value = c.name || '';
   document.getElementById('orch-chain-desc').value = c.description || '';
 
@@ -6334,8 +6349,9 @@ async function generateOrchRootChain() {
   if (isSub && chainId) {
     // 子链编辑模式下 chain_id 必填，但创建时可空（后端自动生成）
   }
-  if (!chainId && !isSub) { showToast('Chain ID 不能为空', 'error'); return; }
-  if (chainId && !isSub) { /* root 要求 id */ }
+  if (!chainId && !isSub) {
+    // root 的 Chain ID 由系统自动生成（R000001 格式），允许为空，放行
+  }
   if (!chainId && isSub) {
     // 创建子链允许空 ID（自动生成），放行
   }
@@ -6350,6 +6366,7 @@ async function generateOrchRootChain() {
   const body = {
     project: getProject(),
     chain_id: chainId,
+    chain_key: document.getElementById('orch-chain-key').value.trim(),
     chain_name: document.getElementById('orch-chain-name').value.trim(),
     description: document.getElementById('orch-chain-desc').value.trim(),
     node_ids: nodeIds,
@@ -6397,6 +6414,7 @@ function loadRootChainToOrch(c) {
   document.getElementById('tab-orchestrate').classList.add('active');
 
   document.getElementById('orch-chain-id').value = c.chain_id || '';
+  document.getElementById('orch-chain-key').value = c.chain_key || '';
   document.getElementById('orch-chain-name').value = c.name || '';
   document.getElementById('orch-chain-desc').value = c.description || '';
 
@@ -6544,7 +6562,9 @@ try {
 function argParseRefPath(ref) {
   const m = /^\{\{([^}]+)\}\}$/.exec((ref || '').trim());
   if (!m) return { raw: ref || '' };
-  const inner = m[1];
+  let inner = m[1];
+  // 兼容 steps. 前缀（引用前序统一生成 {{steps.id...}}）
+  if (inner.startsWith('steps.')) inner = inner.slice('steps.'.length);
   const dot = inner.indexOf('.');
   if (dot < 0) return { refId: inner, refType: 'responses', refField: '' };
   const refId = inner.slice(0, dot);
@@ -6565,7 +6585,8 @@ function argBuildRefPath(refId, refType, refField) {
   else if (refType === 'responses_field') inner = refId + '.responses' + (field ? '.' + field : '');
   else if (refType === 'arguments') inner = refId + '.arguments.' + (field || 'key');
   else inner = refId;
-  return '{{' + inner + '}}';
+  // 所有 Activity 都在 steps 下，引用前序统一加 steps. 前缀
+  return '{{steps.' + inner + '}}';
 }
 // 生成「引用前序」第三级字段选择下拉
 function argRenderRefFieldSlot(prevs, prevId, type, selectedField) {

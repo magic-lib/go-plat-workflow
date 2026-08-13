@@ -13,12 +13,26 @@ type engineRootChainAdapter struct {
 	repo RootChainStore
 }
 
+// GetByKey 按项目+ChainKey 查询根链。
+func (a *engineRootChainAdapter) GetByKey(ctx context.Context, project, chainKey string) (*engine.RootChainDef, error) {
+	def, err := a.repo.GetByKey(ctx, project, chainKey)
+	if err != nil {
+		return nil, err
+	}
+	return &engine.RootChainDef{
+		ChainID:     def.ChainID,
+		DSLJSON:     def.DSLJSON,
+		SubChainIDs: def.SubChainIDs,
+	}, nil
+}
+
 func (a *engineRootChainAdapter) GetByID(ctx context.Context, project, chainID string) (*engine.RootChainDef, error) {
 	def, err := a.repo.GetByID(ctx, project, chainID)
 	if err != nil {
 		return nil, err
 	}
 	return &engine.RootChainDef{
+		ChainID:     def.ChainID,
 		DSLJSON:     def.DSLJSON,
 		SubChainIDs: def.SubChainIDs,
 	}, nil

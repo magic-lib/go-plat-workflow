@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/goroutines"
+	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"log"
 	"net/http"
@@ -212,7 +213,7 @@ func (e *MQExecutor) asyncPushLog(project, env, actNamespace, actName, level str
 			RootChainID:  rootChainID,
 			TraceID:      traceID,
 			SpanID:       spanID,
-			Attributes:   toLogRawMessage(attributes),
+			Attributes:   toLogString(attributes),
 		}
 		if err := store.Create(context.Background(), def); err != nil {
 			log.Printf("mq_executor: save activity log failed, err: %v", err)
@@ -220,7 +221,7 @@ func (e *MQExecutor) asyncPushLog(project, env, actNamespace, actName, level str
 	})
 }
 
-// toLogRawMessage 将任意值转为 json.RawMessage，便于直接存入 ActivityLogDef 的 Payload/Result/Attributes。
+// toLogRawMessage 将任意值转为 json.RawMessage，便于直接存入 ActivityLogDef 的 Payload/Result。
 // nil 时返回 nil；已是 json.RawMessage 则原样返回；其余按 JSON 序列化。
 func toLogRawMessage(v any) json.RawMessage {
 	if v == nil {
@@ -234,6 +235,22 @@ func toLogRawMessage(v any) json.RawMessage {
 		return nil
 	}
 	return b
+}
+
+// toLogString 将任意值转为 JSON 字符串，便于直接存入 ActivityLogDef.Attributes（string 类型）。
+// nil 时返回空串；其余按 JSON 序列化。
+func toLogString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func (e *MQExecutor) BuildWorker(env string, projectName string, redisCfg *RedisConfig) (*rulegox.MQWorker, error) {
@@ -364,17 +381,15 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		Configuration: config,
 	}
 
-	chainKey := payload.NodeDef.NodeID
-
-	dsl := map[string]interface{}{
-		"ruleChain": map[string]interface{}{
-			"id":   chainKey,
-			"name": "activity " + payload.NodeDef.NodeID,
-			"root": true,
+	rootDsl := &types.RuleChain{
+		RuleChain: types.RuleChainBaseInfo{
+			ID:   ruleNode.Id,
+			Name: "activity " + ruleNode.Id,
+			Root: true,
 		},
-		"metadata": map[string]interface{}{
-			"nodes":       []interface{}{ruleNode},
-			"connections": []interface{}{},
+		Metadata: types.RuleMetadata{
+			Nodes:       []*types.RuleNode{ruleNode},
+			Connections: []types.NodeConnection{},
 		},
 	}
 
@@ -382,14 +397,12 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		resultParam *paramx.FlowContext
 		execErr     error
 	)
-	flowCtx := paramx.NewFlowContext("", ruleNode.Id, payload.InputParams)
+	flowCtx := paramx.NewFlowContext(ruleNode.Id, id.NewUUID(), payload.InputParams)
 
 	flowCfg := &rulegox.ActivityFlowConfig{
-		RootChainDSL: map[string][]byte{
-			chainKey: []byte(conv.String(dsl)),
-		},
-		FlowCtx: flowCtx,
-		IsAsync: false,
+		RootChainDSL: rootDsl,
+		FlowContext:  flowCtx,
+		IsAsync:      false,
 		EndFunc: func(_ context.Context, param *paramx.FlowContext, err error) {
 			resultParam = param
 			execErr = err
@@ -407,10 +420,10 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	}
 
 	metaData := &rulegox.ActivityMetaData{
-		RootChainID: chainKey,
+		RootChainID: ruleNode.Id,
 		Env:         payload.Env,
 		Project:     payload.NodeDef.Project,
-		TraceId:     chainKey,
+		TraceId:     ruleNode.Id,
 		RedisConfig: redisConn,
 	}
 
