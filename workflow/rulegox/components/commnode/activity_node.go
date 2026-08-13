@@ -351,6 +351,8 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 	if err != nil {
 		return err
 	}
+	// 按类型对 activity 参数绑定做运行时计算（float64 类型转换 / formula 公式求值）。
+	// string/int64 交由下游 param.MergeArgumentsByBinding 按类型处理，此处保持不变。
 	dataMap := x.getActivityParam(allDataMap, newAct.Arguments)
 	stepParamCtx.SetStepArguments(stepId, dataMap)
 
@@ -381,7 +383,16 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, metaData *rulegox.
 func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
 	actParam := make(map[string]any)
 	for _, item := range bindConfig {
-		ruleObj := templates.NewTemplate(conv.String(item.Value), "{{", "}}")
+		exp := conv.String(item.Value)
+		if item.Type == "formula" {
+			expAny, err := x.ruleObj.RunString(exp, allParam)
+			if err == nil {
+				log.Printf("activityNode getActivityParam: RunString err: %v", err)
+				actParam[item.Key] = expAny
+				continue
+			}
+		}
+		ruleObj := templates.NewTemplate(exp, "{{", "}}")
 		tempVal := ruleObj.Replace(allParam)
 		actParam[item.Key] = tempVal
 	}

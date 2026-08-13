@@ -2237,8 +2237,11 @@ function collectActivityArgBinds(row) {
     const source = r.querySelector('.arg-src') ? r.querySelector('.arg-src').value : 'value';
     let value = '';
     let ref = '';
+    let typ = '';
     if (source === 'value') {
       value = r.querySelector('.arg-val') ? r.querySelector('.arg-val').value : '';
+      const typEl = r.querySelector('.arg-type');
+      typ = typEl ? typEl.value : 'string';
     } else {
       const finalEl = r.querySelector('.arg-ref-final');
       if (finalEl) {
@@ -2248,7 +2251,7 @@ function collectActivityArgBinds(row) {
       }
       value = ref; // 引用模式最终值即引用路径字符串
     }
-    binds[key] = { source: source, value: value, ref: ref };
+    binds[key] = { source: source, value: value, ref: ref, type: typ };
   });
   return binds;
 }
@@ -2609,7 +2612,13 @@ function syncActivityConfig() {
       const args = it.args || {};
         const argumentsArr = Object.keys(args).map(k => {
           const b = args[k] || {};
-          return { key: k, source: b.source || 'value', value: b.value !== undefined ? b.value : (b.ref || ''), ref: b.ref || '' };
+          return {
+            key: k,
+            source: b.source || 'value',
+            value: b.value !== undefined ? b.value : (b.ref || ''),
+            ref: b.ref || '',
+            type: b.type || 'string'
+          };
         });
       return {
         act_namespace: it.act_namespace,
@@ -2672,7 +2681,13 @@ async function saveNode() {
         const args = it.args || {};
         const argumentsArr = Object.keys(args).map(k => {
           const b = args[k] || {};
-          return { key: k, source: b.source || 'value', value: b.value !== undefined ? b.value : (b.ref || ''), ref: b.ref || '' };
+          return {
+            key: k,
+            source: b.source || 'value',
+            value: b.value !== undefined ? b.value : (b.ref || ''),
+            ref: b.ref || '',
+            type: b.type || 'string'
+          };
         });
         return {
           act_namespace: it.act_namespace,
@@ -4013,8 +4028,10 @@ function addParamRow(key, label, type, required, defaultValue, description, poli
     <input class="param-label" placeholder="显示名" value="${esc(label||'')}">
     <select class="param-type">
       <option value="string" ${type==='string'?'selected':''}>string</option>
-      <option value="number" ${type==='number'?'selected':''}>number</option>
-      <option value="boolean" ${type==='boolean'?'selected':''}>boolean</option>
+      <option value="int64" ${type==='int64'?'selected':''}>int64</option>
+      <option value="float64" ${type==='float64'?'selected':''}>float64</option>
+      <option value="bool" ${type==='bool'?'selected':''}>bool</option>
+      <option value="formula" ${type==='formula'?'selected':''}>formula</option>
       <option value="json" ${type==='json'?'selected':''}>json</option>
     </select>
     <label class="param-required"><input type="checkbox" ${reqChecked}>必填</label>
@@ -4115,6 +4132,7 @@ function outputsToResponses(outputs) {
   return (outputs || [])
     .filter(o => o && o.key)
     .map(o => {
+      // type 写入 BindConfig.Type，供后端按类型计算（float64/formula）。
       const item = { key: o.key, label: o.label || '', type: o.type || '', source: o.source || 'value' };
       if (item.source === 'value') {
         item.value = castParamValue(o.value, o.type);
@@ -4141,8 +4159,8 @@ function clearParamRows() {
 let outputSeq = 0;
 
 // 返回值类型下拉（与 Activity 返回值设置一致：含"不转换"）
-const OUTPUT_TYPE_OPTIONS = ['', 'string', 'number', 'boolean', 'array', 'object', 'json'];
-const OUTPUT_TYPE_LABELS = { '': '不转换', 'string': 'string', 'number': 'number', 'boolean': 'boolean', 'array': 'array', 'object': 'object', 'json': 'json' };
+const OUTPUT_TYPE_OPTIONS = ['', 'string', 'number', 'boolean', 'array', 'object', 'json', 'float64', 'formula'];
+const OUTPUT_TYPE_LABELS = { '': '不转换', 'string': 'string', 'number': 'number', 'boolean': 'boolean', 'array': 'array', 'object': 'object', 'json': 'json', 'float64': 'float64', 'formula': 'formula' };
 function outputTypeHTML(type) {
   return OUTPUT_TYPE_OPTIONS.map(t =>
     '<option value="' + t + '"' + ((type||'') === t ? ' selected' : '') + '>' + OUTPUT_TYPE_LABELS[t] + '</option>'
@@ -4156,6 +4174,7 @@ function addOutputRow(opts) {
   const type = opts.type || '';
   const source = opts.source || 'value'; // value=手工配置, ref_act=activity选择
   const ref = opts.ref || '';
+  const value = opts.value || '';
   outputSeq++;
   const container = document.getElementById('node-outputs-container');
   const emptyEl = document.getElementById('output-rows-empty');
@@ -4170,7 +4189,7 @@ function addOutputRow(opts) {
   `;
   container.appendChild(row);
   const wrap = row.querySelector('.output-input-wrap');
-  wrap.innerHTML = outputRenderInput({ key: key, label: label, type: type, source: source, ref: ref });
+  wrap.innerHTML = outputRenderInput({ key: key, label: label, type: type, source: source, ref: ref, value: value });
   // 回显引用联动初值
   if (source === 'ref_act' && ref) {
     const parsed = outputParseRefPath(ref);
@@ -4369,14 +4388,14 @@ function outputRenderInput(bind) {
     html += '<input type="hidden" class="output-ref-final" value="' + escAttr(bind.ref || '') + '">';
     return html;
   }
-  // 手工配置：key / label / 类型 / 配置值(表达式)
+  // 手工配置：key / label / 类型(含 float64/formula 计算) / 来源 / 配置值
   const key = bind.key || '';
   const label = bind.label || '';
   const type = bind.type || '';
   const value = bind.value || '';
   return '<input class="output-key" placeholder="键 (key)" value="' + esc(key) + '" style="flex:1 1 90px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
     '<input class="output-label" placeholder="显示名 (label)" value="' + esc(label) + '" style="flex:1 1 90px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' +
-    '<select class="output-type" style="flex:0 0 70px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + outputTypeHTML(type) + '</select>' +
+    '<select class="output-type" title="返回值类型/计算类型" style="flex:0 0 78px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + outputTypeHTML(type) + '</select>' +
     outputSourceSelectHTML(bind.source) +
     '<input class="output-value" placeholder="配置值/表达式" value="' + esc(value) + '" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">';
 }
@@ -4574,8 +4593,10 @@ function addActParamRow(key, label, type, required, value, description, policy) 
     <input class="param-label" placeholder="显示名" value="${esc(label||'')}">
     <select class="param-type">
       <option value="string" ${type==='string'?'selected':''}>string</option>
-      <option value="number" ${type==='number'?'selected':''}>number</option>
-      <option value="boolean" ${type==='boolean'?'selected':''}>boolean</option>
+      <option value="int64" ${type==='int64'?'selected':''}>int64</option>
+      <option value="float64" ${type==='float64'?'selected':''}>float64</option>
+      <option value="bool" ${type==='bool'?'selected':''}>bool</option>
+      <option value="formula" ${type==='formula'?'selected':''}>formula</option>
       <option value="json" ${type==='json'?'selected':''}>json</option>
     </select>
     <label class="param-required"><input type="checkbox" ${reqChecked}>必填</label>
@@ -4677,8 +4698,8 @@ function addReturnValueRow(name, key, type) {
   const emptyEl = document.getElementById('act-return-values-empty');
   if (emptyEl) emptyEl.style.display = 'none';
 
-  const typeOptions = ['', 'string', 'number', 'boolean', 'array', 'object', 'json'];
-  const typeLabels = { '': '不转换', 'string': 'string', 'number': 'number', 'boolean': 'boolean', 'array': 'array', 'object': 'object', 'json': 'json' };
+  const typeOptions = ['', 'string', 'int64', 'float64', 'bool', 'formula', 'json'];
+  const typeLabels = { '': '不转换', 'string': 'string', 'int64': 'int64', 'float64': 'float64', 'bool': 'bool', 'formula': 'formula', 'json': 'json' };
   const typeHTML = typeOptions.map(t =>
     '<option value="' + t + '"' + ((type||'') === t ? ' selected' : '') + '>' + typeLabels[t] + '</option>'
   ).join('');
@@ -6652,7 +6673,17 @@ function argRenderArgInput(key, bind, argCtx) {
   const valVal = src === 'value' ? (bind.value !== undefined ? bind.value : defVal) : (bind.ref || '');
 
   if (src === 'value') {
-    return '<input class="arg-val" value="' + escAttr(valVal) + '" placeholder="手工配置（留空则用活动默认值）" oninput="syncActivityConfig()" style="flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">';
+    // 手工配置：在输入框后追加「类型」选择框（string/int64/float64/formula）。
+    // type 会写入绑定结构，后端按类型决定是否做类型计算/公式求值。
+    const typ = bind.type || 'string';
+    const ph = typ === 'formula'
+      ? '公式，如 {{arguments.a}} + {{arguments.b}}'
+      : '手工配置（留空则用活动默认值）';
+    const typeSel = '<select class="arg-type" onchange="syncActivityConfig()" title="值类型" style="flex:0 0 70px;width:70px;padding:3px 4px;border:1px solid var(--border);border-radius:6px;font-size:.72rem">' +
+      ['string', 'int64', 'float64', 'formula'].map(t =>
+        '<option value="' + t + '"' + (t === typ ? ' selected' : '') + '>' + t + '</option>'
+      ).join('') + '</select>';
+    return '<input class="arg-val" value="' + escAttr(valVal) + '" placeholder="' + escAttr(ph) + '" oninput="syncActivityConfig()" style="flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + typeSel;
   } else if (src === 'ref_node') {
     const parsed = argParseRefPath(bind.ref);
     if (nodeParams.length === 0) {
