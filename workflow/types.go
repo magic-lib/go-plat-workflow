@@ -143,6 +143,22 @@ type NodeDef struct {
 	Status int8 `json:"status"`
 	// Version 版本号
 	Version string `json:"version,omitempty"`
+	// NodeHeartbeats node 内各 activity 的心跳存活信息（管理端收集器实时计算，不入库）。
+	// 仅当列表接口传入 env 参数时填充，用于前端在 node 名称后显示聚合心跳图标，
+	// 以及悬停 pop 层展示每个 activity 的心跳状态。
+	NodeHeartbeats []*NodeActivityHeartbeat `json:"node_heartbeats,omitempty"`
+}
+
+// NodeActivityHeartbeat node 内单个 activity 的心跳存活信息（带 activity 标识）。
+type NodeActivityHeartbeat struct {
+	// ActNamespace 活动命名空间
+	ActNamespace string `json:"act_namespace"`
+	// ActName 活动名称
+	ActName string `json:"act_name"`
+	// Ratio 最近 1 分钟心跳存活比例 [0,1]
+	Ratio float64 `json:"ratio"`
+	// Count 最近 1 分钟实际心跳次数
+	Count int `json:"count"`
 }
 
 // SubChainDef 子规则链定义。

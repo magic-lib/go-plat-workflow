@@ -275,7 +275,98 @@ func (ws *WebServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	if nodes == nil {
 		nodes = []*workflow.NodeDef{}
 	}
+	// 注入每个 node 内各 activity 的心跳存活信息（按所选环境隔离），供前端聚合显示。
+	// 未选择具体环境时不注入：跨环境聚合会产生误导性结果，前端也不展示。
+	env := r.URL.Query().Get("env")
+	if ws.collector != nil && env != "" {
+		for _, n := range nodes {
+			acts := extractNodeActivities(n.Configuration)
+			if len(acts) == 0 {
+				continue
+			}
+			hbs := make([]*workflow.NodeActivityHeartbeat, 0, len(acts))
+			for _, a := range acts {
+				ratio, count := ws.collector.HeartbeatRatio(project, env, a.ActNamespace, a.ActName)
+				hbs = append(hbs, &workflow.NodeActivityHeartbeat{
+					ActNamespace: a.ActNamespace,
+					ActName:      a.ActName,
+					Ratio:        ratio,
+					Count:        count,
+				})
+			}
+			n.NodeHeartbeats = hbs
+		}
+	}
 	writeJSON(w, http.StatusOK, nodes)
+}
+
+// nodeActivityRef 描述 node 配置中引用的一个 activity（命名空间 + 名称）。
+type nodeActivityRef struct {
+	ActNamespace string
+	ActName      string
+}
+
+// extractNodeActivities 从节点配置中解析出该节点编排引用的所有 activity。
+// 兼容多种历史/现结构：node_config.activities（二维数组）、node_config.stages（二维数组）、
+// 扁平 activities 数组（mode 忽略，全部当作串行）、node_config.act_namespace+act_name（单 activity 回退）。
+func extractNodeActivities(cfgJSON json.RawMessage) []nodeActivityRef {
+	if len(cfgJSON) == 0 {
+		return nil
+	}
+	var cfg struct {
+		NodeConfig struct {
+			Activities [][]struct {
+				ActNamespace string `json:"act_namespace"`
+				ActName      string `json:"act_name"`
+			} `json:"activities"`
+			Stages [][]struct {
+				ActNamespace string `json:"act_namespace"`
+				ActName      string `json:"act_name"`
+			} `json:"stages"`
+			ActNamespace string `json:"act_namespace"`
+			ActName      string `json:"act_name"`
+		} `json:"node_config"`
+		Activities []struct {
+			ActNamespace string `json:"act_namespace"`
+			ActName      string `json:"act_name"`
+		} `json:"activities"`
+	}
+	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []nodeActivityRef
+	add := func(ns, nm string) {
+		if ns == "" || nm == "" {
+			return
+		}
+		key := ns + "|" + nm
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, nodeActivityRef{ActNamespace: ns, ActName: nm})
+	}
+	if len(cfg.NodeConfig.Activities) > 0 {
+		for _, stage := range cfg.NodeConfig.Activities {
+			for _, a := range stage {
+				add(a.ActNamespace, a.ActName)
+			}
+		}
+	} else if len(cfg.NodeConfig.Stages) > 0 {
+		for _, stage := range cfg.NodeConfig.Stages {
+			for _, a := range stage {
+				add(a.ActNamespace, a.ActName)
+			}
+		}
+	} else if len(cfg.Activities) > 0 {
+		for _, a := range cfg.Activities {
+			add(a.ActNamespace, a.ActName)
+		}
+	} else if cfg.NodeConfig.ActNamespace != "" && cfg.NodeConfig.ActName != "" {
+		add(cfg.NodeConfig.ActNamespace, cfg.NodeConfig.ActName)
+	}
+	return out
 }
 
 func (ws *WebServer) handleCreateNode(w http.ResponseWriter, r *http.Request) {
@@ -1240,7 +1331,7 @@ func (ws *WebServer) handleListActivities(w http.ResponseWriter, r *http.Request
 	// 未选择具体环境时不注入：跨环境聚合会产生误导性结果，前端也不展示。
 	if ws.collector != nil && env != "" {
 		for _, a := range activities {
-			ratio, count := ws.collector.HeartbeatRatio(project, env, a.ActName)
+			ratio, count := ws.collector.HeartbeatRatio(project, env, a.ActNamespace, a.ActName)
 			a.Heartbeat = &workflow.ActivityHeartbeatInfo{Ratio: ratio, Count: count}
 		}
 	}

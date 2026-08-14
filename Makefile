@@ -9,8 +9,8 @@ gen-update-package:
 	go mod tidy
 
 build:
-	go build -o ./workflow/web/cmd/workflow ./workflow/web/cmd/
-	./workflow/web/cmd/workflow -dsn="root:mjhttyryt565-jyjh5824t-p55w@tcp(202.60.228.31:20366)/rule-workflow?charset=utf8mb4&parseTime=True&loc=Local"
+	go build -o /Volumes/MacintoshData/workspace/goland-framework/code/magic-lib/web/workflow ./workflow/web/cmd/
+	/Volumes/MacintoshData/workspace/goland-framework/code/magic-lib/web/workflow -dsn="root:mjhttyryt565-jyjh5824t-p55w@tcp(202.60.228.31:20366)/rule-workflow?charset=utf8mb4&parseTime=True&loc=Local"
 
 run:
 	go run ./workflow/web/cmd/

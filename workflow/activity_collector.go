@@ -291,7 +291,12 @@ func (c *ActivityCollector) scanHeartbeats(t *redisTask) {
 		if err != nil {
 			continue
 		}
-		for actName, tsStr := range fields {
+		for field, tsStr := range fields {
+			// field = actNamespace|actName（见 mq_activity.go getActivityKey），拆开以区分 namespace
+			actNamespace, actName := splitActivityField(field)
+			if actName == "" {
+				continue
+			}
 			ts, e := strconv.ParseInt(tsStr, 10, 64)
 			if e != nil {
 				continue
@@ -299,7 +304,7 @@ func (c *ActivityCollector) scanHeartbeats(t *redisTask) {
 			if now-ts > int64(heartbeatCacheTTL.Seconds()) {
 				continue
 			}
-			ck := cacheKey(project, t.env, actName)
+			ck := cacheKey(project, t.env, actNamespace, actName)
 			fresh[ck] = append(fresh[ck], ts)
 		}
 	}
@@ -315,11 +320,11 @@ func (c *ActivityCollector) scanHeartbeats(t *redisTask) {
 	c.hbMu.Unlock()
 }
 
-// HeartbeatRatio 返回指定环境（env）下 activity 最近 1 分钟的心跳存活比例与心跳次数。
+// HeartbeatRatio 返回指定环境（env）与 actNamespace 下 activity 最近 1 分钟的心跳存活比例与心跳次数。
 // 比例 = min(实际心跳次数, 期望次数) / 期望次数，范围 [0,1]。
 // env 为空时回退为跨环境聚合（使用旧全局缓存键 project|actName）。
-func (c *ActivityCollector) HeartbeatRatio(project, env, actName string) (float64, int) {
-	ck := cacheKey(project, env, actName)
+func (c *ActivityCollector) HeartbeatRatio(project, env, actNamespace, actName string) (float64, int) {
+	ck := cacheKey(project, env, actNamespace, actName)
 	if env == "" {
 		ck = project + "|" + actName // 兼容未选环境时的全局聚合
 	}
@@ -360,8 +365,17 @@ func taskKey(project, env string) string {
 	return project + "|" + env
 }
 
-func cacheKey(project, env, actName string) string {
-	return project + "|" + env + "|" + actName
+func cacheKey(project, env, actNamespace, actName string) string {
+	return project + "|" + env + "|" + actNamespace + "|" + actName
+}
+
+// splitActivityField 拆分 worker 上报的 field（actNamespace|actName），返回 namespace 与 actName。
+func splitActivityField(field string) (actNamespace, actName string) {
+	parts := strings.SplitN(field, "|", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", field
 }
 
 // redisConfigKey 生成用于判断配置是否变化的指纹（不含密码）。

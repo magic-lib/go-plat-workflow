@@ -248,6 +248,14 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .hb-heart.gray { color: #9ca3af; animation: none; }
 .hb-offline { font-size: .62rem; line-height: 1; margin-left: 3px; padding: 1px 4px; border-radius: 4px; background: #9ca3af; color: #fff; vertical-align: middle; font-family: inherit; }
 @keyframes hb-beat { 0%,100% { transform: scale(1); } 15% { transform: scale(1.35); } 30% { transform: scale(1); } 45% { transform: scale(1.2); } }
+/* node 列表聚合心跳图标 + 悬停 pop 层（全局固定浮层，避免被表格 overflow 裁剪） */
+.node-hb { position: relative; display: inline-block; cursor: default; }
+.hb-pop { display: none; position: fixed; z-index: 2000; min-width: 230px; max-width: 360px; padding: 8px 10px; background: var(--card-bg, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.18); }
+.hb-pop-title { font-size: .7rem; color: var(--text-muted, #6b7280); margin-bottom: 6px; font-weight: 600; }
+.hb-pop-item { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: .78rem; border-top: 1px solid var(--border, #f1f5f9); }
+.hb-pop-item:first-of-type { border-top: none; }
+.hb-pop-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb-pop-status { color: var(--text-muted, #6b7280); font-variant-numeric: tabular-nums; }
 
 /* Activity 日志弹窗 */
 .log-search-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
@@ -1784,7 +1792,9 @@ function escAttr(s) {
 // ============================================================
 async function loadNodes() {
   try {
-    const nodes = await api('/api/nodes');
+    const env = getActivityListEnv();
+    const envQ = env ? ('?env=' + encodeURIComponent(env)) : '';
+    const nodes = await api('/api/nodes' + envQ);
     const tbody = document.querySelector('#nodes-table tbody');
     if (!nodes.length) {
       tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
@@ -1794,7 +1804,7 @@ async function loadNodes() {
     tbody.innerHTML = nodes.map((n, i) => `
       <tr>
         <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
-        <td>${esc(n.name)}</td>
+        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span></td>
         <td><span class="code-cell">${esc(n.type)}</span></td>
         <td><span class="badge ${n.kind==='condition'?'badge-warning':'badge-info'}">${n.kind==='condition'?'查询获取':'策略执行'}</span></td>
         <td>${esc(n.category || '-')}</td>
@@ -3030,6 +3040,76 @@ function heartbeatIconHtml(hb) {
   return `<span class="hb-heart ${cls}" title="最近1分钟心跳存活比例 ${pct}%（${hb.count} 次）">&#10084;</span>`;
 }
 
+// 根据 node 内各 activity 的心跳信息渲染聚合心跳图标（♥）：
+// 只要有一个 activity 离线（最近1分钟无心跳）则整个 node 显示离线（灰色）；
+// 否则按最差的存活比例着色。悬停（pop 层）展示每个 activity 的心跳状态。
+// 未选择具体环境（node_heartbeats 为空）时不展示图标。
+function nodeHeartbeatIconHtml(heartbeats) {
+  if (!heartbeats || !heartbeats.length) return '';
+  const total = heartbeats.length;
+  let anyOffline = false;
+  let worst = 1.0;
+  heartbeats.forEach(h => {
+    if (!h.count || h.count <= 0) anyOffline = true;
+    if (typeof h.ratio === 'number' && h.ratio < worst) worst = h.ratio;
+  });
+  let cls, title;
+  if (anyOffline) {
+    cls = 'gray';
+    title = '节点内存在离线 activity（共 ' + total + ' 个）';
+  } else {
+    if (worst >= 0.9) cls = 'green';
+    else if (worst >= 0.6) cls = 'yellow';
+    else if (worst >= 0.3) cls = 'orange';
+    else cls = 'red';
+    title = '节点内 ' + total + ' 个 activity 心跳正常（最差存活比例 ' + Math.round(worst * 100) + '%）';
+  }
+  const items = heartbeats.map(h => {
+    const status = (!h.count || h.count <= 0) ? '离线' : (Math.round(h.ratio * 100) + '%');
+    const name = (h.act_namespace ? h.act_namespace + '/' : '') + h.act_name;
+    return '<div class="hb-pop-item">' + heartbeatIconHtml(h) +
+      '<span class="hb-pop-name">' + esc(name) + '</span>' +
+      '<span class="hb-pop-status">' + status + '</span></div>';
+  }).join('');
+  const popHtml = '<div class="hb-pop-title">节点内 activity 心跳（共 ' + total + ' 个）</div>' + items;
+  return `<span class="node-hb"><span class="hb-heart ${cls}" title="${esc(title)}" ` +
+    `onmouseenter="showHbPop(event,this)" onmousemove="moveHbPop(event)" onmouseleave="hideHbPop()">&#10084;</span>` +
+    `<span style="display:none" data-pop="${encodeURIComponent(popHtml)}"></span></span>`;
+}
+
+// node 心跳 pop 层用固定在视口的全局浮层，避免被表格 .table-wrap 的 overflow 裁剪。
+let _hbPopEl = null;
+let _hbPopHideTimer = null;
+function showHbPop(e, el) {
+  if (_hbPopHideTimer) { clearTimeout(_hbPopHideTimer); _hbPopHideTimer = null; }
+  if (!_hbPopEl) {
+    _hbPopEl = document.createElement('div');
+    _hbPopEl.id = 'hb-popover';
+    _hbPopEl.className = 'hb-pop';
+    document.body.appendChild(_hbPopEl);
+  }
+  const holder = el.parentElement.querySelector('span[data-pop]');
+  _hbPopEl.innerHTML = holder ? decodeURIComponent(holder.getAttribute('data-pop')) : '';
+  _hbPopEl.style.display = 'block';
+  moveHbPop(e);
+}
+function moveHbPop(e) {
+  if (!_hbPopEl) return;
+  const pad = 12;
+  const w = _hbPopEl.offsetWidth, h = _hbPopEl.offsetHeight;
+  let left = e.clientX + pad;
+  let top = e.clientY + pad;
+  if (left + w > window.innerWidth) left = e.clientX - w - pad;
+  if (top + h > window.innerHeight) top = window.innerHeight - h - pad;
+  if (top < 0) top = pad;
+  _hbPopEl.style.left = left + 'px';
+  _hbPopEl.style.top = top + 'px';
+}
+function hideHbPop() {
+  if (!_hbPopEl) return;
+  _hbPopHideTimer = setTimeout(() => { if (_hbPopEl) _hbPopEl.style.display = 'none'; }, 120);
+}
+
 // 打开 activity 编辑弹窗
 function openActivityModal(act) {
   const isEdit = !!act;
@@ -3579,10 +3659,10 @@ function renderTestParams() {
     container.innerHTML = '<div id="test-node-params-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">该节点无参数定义</div>';
     return;
   }
-  container.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">已列出该节点定义的所有参数（<span style="color:#dc2626">*</span> 为必传：覆盖类型 frontend / frontend+）</div>' +
+  container.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">已列出该节点定义的所有参数（<span style="color:#dc2626">*</span> 为必传：在节点参数定义中勾选了「必填」的参数）</div>' +
     keys.map(key => {
     const bc = map[key];
-    const required = (bc.policy === 'frontend' || bc.policy === 'frontend+');
+    const required = (bc.required === true || bc.required === 'true');
     const reqMark = required ? ' <span style="color:#dc2626">*</span>' : '';
     const policyTag = bc.policy ? ' <span style="font-weight:400;color:#6b7280;font-size:.7rem">[' + esc(bc.policy) + ']</span>' : '';
     const ph = bc.value !== undefined && bc.value !== null ? String(bc.value) : '';
