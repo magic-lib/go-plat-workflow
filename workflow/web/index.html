@@ -3940,7 +3940,9 @@ async function toggleNodeActivities(btn) {
     if (!box.dataset.loaded) {
       box.dataset.loaded = '1';
       box.innerHTML = '<div class="log-empty">加载中…</div>';
-      const trace = document.getElementById('trace-log-trace-id').value.trim();
+      // trace_id 优先取按钮自带 data-trace-id（普通 node 日志列表场景），回退到 trace 弹窗输入框
+      const trace = (btn.getAttribute('data-trace-id') || '').trim()
+        || (document.getElementById('trace-log-trace-id') ? document.getElementById('trace-log-trace-id').value.trim() : '');
       const params = new URLSearchParams();
       params.set('trace_id', trace);
       if (nodeSpanId) params.set('node_span_id', nodeSpanId);
@@ -4055,7 +4057,7 @@ async function loadNodeLogs() {
       renderNodeLogPager(total);
       return;
     }
-    box.innerHTML = data.map(renderNodeLogItem).join('');
+    box.innerHTML = data.map(renderNodeLogItemWithActs).join('');
     renderNodeLogPager(total);
   } catch (e) {
     box.innerHTML = '<div class="log-empty">加载日志失败: ' + esc(e.message) + '</div>';
@@ -4128,6 +4130,16 @@ function renderNodeLogItem(r) {
     body += '<div class="log-error-msg">错误: ' + esc(r.error_msg) + '</div>';
   }
   return '<div class="log-item ' + level + '"><div class="log-head">' + head + '</div>' + body + '</div>';
+}
+
+// 普通 node 运行日志列表项：在 renderNodeLogItem 基础上附加"查看该 node 下 Activities"下钻按钮。
+// 点击后用本项自身的 trace_id + node_span_id（即 node 日志的 span_id）查询该 node 关联的 activity 日志并内联展开。
+function renderNodeLogItemWithActs(r) {
+  const base = renderNodeLogItem(r);
+  const uid = 'nl-' + (r.trace_id || '') + '-' + (r.node_id || '') + '-' + (r.event_id || '') + '-' + (r.timestamp || '');
+  const btn = '<button class="mini-btn" data-node-acts-toggle="1" data-uid="' + esc(uid) + '" data-node-id="' + esc(r.node_id || '') + '" data-node-span-id="' + esc(r.span_id || '') + '" data-trace-id="' + esc(r.trace_id || '') + '">查看该 node 下 Activities ▾</button>';
+  const actsBox = '<div class="trace-node-acts" id="' + esc(uid) + '" style="display:none"></div>';
+  return base.replace('</div>', btn + actsBox + '</div>');
 }
 
 async function loadActivityLogs() {
@@ -4537,7 +4549,7 @@ function castParamValue(raw, type) {
     if (s === 'false') return false;
     return s;
   }
-  if (type === 'json') {
+  if (type === 'json' || type === 'array' || type === 'map') {
     try { return JSON.parse(s); } catch (e) { return s; }
   }
   return s;
@@ -4599,8 +4611,8 @@ function clearParamRows() {
 let outputSeq = 0;
 
 // 返回值类型下拉（与 Activity 返回值设置一致：含"不转换"）
-const OUTPUT_TYPE_OPTIONS = ['', 'string', 'int64', 'float64', 'bool', 'formula', 'json'];
-const OUTPUT_TYPE_LABELS = { '': '不转换', 'string': 'string', 'int64': 'int64', 'float64': 'float64', 'bool': 'bool', 'formula': 'formula', 'json': 'json' };
+const OUTPUT_TYPE_OPTIONS = ['', 'string', 'int64', 'float64', 'bool', 'formula', 'json', 'array', 'map'];
+const OUTPUT_TYPE_LABELS = { '': '不转换', 'string': 'string', 'int64': 'int64', 'float64': 'float64', 'bool': 'bool', 'formula': 'formula', 'json': 'json', 'array': 'array', 'map': 'map' };
 function outputTypeHTML(type) {
   return OUTPUT_TYPE_OPTIONS.map(t =>
     '<option value="' + t + '"' + ((type||'') === t ? ' selected' : '') + '>' + OUTPUT_TYPE_LABELS[t] + '</option>'

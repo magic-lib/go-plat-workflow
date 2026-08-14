@@ -473,6 +473,24 @@ func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*p
 		ruleObj := templates.NewTemplate(exp, "{{", "}}")
 		tempVal := ruleObj.Replace(allParam)
 		actParam[item.Key] = tempVal
+
+		if item.Type == "array" {
+			var expAny = make([]any, 0)
+			err := conv.Unmarshal(tempVal, &expAny)
+			if err == nil {
+				log.Printf("activityNode getActivityParam: Unmarshal err: %v", err)
+				actParam[item.Key] = expAny
+				continue
+			}
+		} else if item.Type == "map" {
+			var expMap = make(map[string]any)
+			err := conv.Unmarshal(tempVal, &expMap)
+			if err == nil {
+				log.Printf("activityNode getActivityParam: Unmarshal err: %v", err)
+				actParam[item.Key] = expMap
+				continue
+			}
+		}
 	}
 	return actParam
 }
