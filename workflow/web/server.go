@@ -1640,7 +1640,14 @@ func (ws *WebServer) handleListNodeLogs(w http.ResponseWriter, r *http.Request) 
 	if pageSize <= 0 || pageSize > 200 {
 		pageSize = 50
 	}
-	logs, total, err := ws.svc.ListNodeLogs(r.Context(), project, nodeID, pageSize, (page-1)*pageSize)
+	// 支持传入 trace_id 进行查询（按 node_id + trace_id 精确关联该 node 在某链路下的运行日志）
+	filter := &workflow.NodeLogFilter{
+		NodeID:  nodeID,
+		TraceID: strings.TrimSpace(r.URL.Query().Get("trace_id")),
+		Limit:   pageSize,
+		Offset:  (page - 1) * pageSize,
+	}
+	logs, total, err := ws.svc.ListNodeLogsGlobal(r.Context(), project, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
