@@ -956,13 +956,12 @@ func (s *WorkflowService) TestActivity(ctx context.Context, req *TestActivityReq
 	if err != nil {
 		return nil, err
 	}
-	defer worker.Stop()
 
 	// 5. 通过 MQ 同步调用远程监听程序执行该 activity：
 	//    - 命名空间/活动名（act_namespace/act_name）从 activity 配置获取
 	//    - 测试参数（InputParams）来自前端传入
 	//    - topic 为 activity/{actNamespace}/{actName}，与远程 worker 端 SubscribeActivity 订阅一致
-	traceId := id.GetUUID(conv.String(time.Now()))
+	traceId := id.NewUUID()
 	spanId := req.ActivityID
 	resp, err := s.mqExecutor.RequestActivity(ctx, worker, actDef, req.InputParams, &workflow.ActivityLogValue{
 		RootChainID: "TestActivity",

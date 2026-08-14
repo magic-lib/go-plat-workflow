@@ -429,7 +429,7 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		RootChainID: ruleNode.Id,
 		Env:         payload.Env,
 		Project:     payload.NodeDef.Project,
-		TraceId:     ruleNode.Id,
+		TraceId:     id.NewUUID(),
 		RedisConfig: redisConn,
 	}
 

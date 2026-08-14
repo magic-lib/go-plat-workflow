@@ -140,6 +140,8 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("DELETE /api/activity-test-records/{record_id}", ws.handleDeleteActivityTestRecord)
 	// Activity 执行日志（收集器落库，支持按字段搜索）
 	ws.mux.HandleFunc("GET /api/activities/{activity_id}/logs", ws.handleListActivityLogs)
+	// 跨 Activity 日志查询（不限定单个 activity，按 trace_id 等字段查询全项目执行日志）
+	ws.mux.HandleFunc("GET /api/activity-logs", ws.handleListActivityLogsGlobal)
 }
 
 // projectParam 从 URL query 中提取 project 参数，未传则返回空字符串。
@@ -1302,6 +1304,70 @@ func (ws *WebServer) handleListActivityLogs(w http.ResponseWriter, r *http.Reque
 		actName = act.ActName
 	}
 	logs, total, err := ws.svc.ListActivityLogs(r.Context(), project, actName, filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if logs == nil {
+		logs = []*workflow.ActivityLogDef{}
+	}
+	writeJSON(w, http.StatusOK, workflow.ActivityLogPage{
+		List:     logs,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}
+
+// handleListActivityLogsGlobal 跨 Activity 查询执行日志（不限定单个 activity），
+// 常用于按 trace_id 查看某次执行链路涉及的所有 activity 记录。
+func (ws *WebServer) handleListActivityLogsGlobal(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	q := r.URL.Query()
+	traceID := strings.TrimSpace(q.Get("trace_id"))
+	if traceID == "" {
+		writeError(w, http.StatusBadRequest, "trace_id query parameter is required")
+		return
+	}
+	page, _ := strconv.Atoi(q.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	filter := &workflow.ActivityLogFilter{
+		Level:       q.Get("level"),
+		ActName:     q.Get("act_name"),
+		EventID:     q.Get("event_id"),
+		Env:         q.Get("env"),
+		Keyword:     q.Get("keyword"),
+		RootChainID: q.Get("root_chain_id"),
+		TraceID:     traceID,
+		SpanID:      q.Get("span_id"),
+	}
+	if v := q.Get("start"); v != "" {
+		if n, e := strconv.ParseInt(v, 10, 64); e == nil {
+			filter.Start = n
+		}
+	}
+	if v := q.Get("end"); v != "" {
+		if n, e := strconv.ParseInt(v, 10, 64); e == nil {
+			filter.End = n
+		}
+	}
+	filter.Limit = pageSize
+	filter.Offset = (page - 1) * pageSize
+	// actName 留空 → 查询该 project 下所有 activity 的日志（跨 activity）
+	logs, total, err := ws.svc.ListActivityLogs(r.Context(), project, "", filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

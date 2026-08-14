@@ -74,6 +74,18 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .badge-off { background: #fee2e2; color: #991b1b; }
 .badge-warning { background: #fef3c7; color: #92400e; }
 .badge-info { background: #dbeafe; color: #1e40af; }
+.tag-c0 { background: #d1fae5; color: #065f46; }
+.tag-c1 { background: #dbeafe; color: #1e40af; }
+.tag-c2 { background: #fef3c7; color: #92400e; }
+.tag-c3 { background: #fee2e2; color: #991b1b; }
+.tag-c4 { background: #ede9fe; color: #5b21b6; }
+.tag-c5 { background: #cffafe; color: #155e75; }
+.tag-c6 { background: #fce7f3; color: #9d174d; }
+.tag-c7 { background: #fae8ff; color: #86198f; }
+.tag-c8 { background: #ffedd5; color: #9a3412; }
+.tag-c9 { background: #ecfccb; color: #3f6212; }
+.tag-cond { background: #dcfce7; color: #166534; font-weight:600; } /* 条件查询=绿 */
+.tag-act { background: #fee2e2; color: #991b1b; font-weight:600; } /* 策略执行=红 */
 
 /* Modal */
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; justify-content: center; align-items: flex-start; padding-top: 60px; }
@@ -512,6 +524,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
         <option value="action">策略执行</option>
       </select>
       <button class="btn btn-primary" onclick="openNodeModal()">+ 新增 Node</button>
+      <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
     </div>
     <div class="table-wrap">
       <table id="nodes-table">
@@ -1014,6 +1027,24 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
       <button class="btn btn-sm btn-outline" id="log-prev" onclick="changeLogPage(-1)">上一页</button>
       <span id="log-page-info" class="log-page-info"></span>
       <button class="btn btn-sm btn-outline" id="log-next" onclick="changeLogPage(1)">下一页</button>
+    </div>
+  </div>
+</div>
+
+<!-- Trace 日志查看弹窗（按 trace_id 查询跨 Activity 执行记录） -->
+<div class="modal-overlay" id="trace-logs-modal-overlay">
+  <div class="modal" id="trace-logs-modal" style="width:960px;max-width:96vw">
+    <h2 id="trace-logs-modal-title">执行日志查询（按 trace_id）<span style="float:right;font-size:.8rem;font-weight:normal"><button class="btn btn-sm btn-outline" id="trace-log-copy" onclick="copyTraceLogs()" style="display:none">复制全部</button></span><button class="modal-close" onclick="closeTraceLogsModal()" title="关闭">&times;</button></h2>
+    <div class="log-search-row">
+      <input id="trace-log-trace-id" class="log-keyword" placeholder="输入 trace_id 查询该链路所有 activity 记录" style="min-width:280px" onkeydown="if(event.key==='Enter')loadTraceLogs()">
+      <input id="trace-log-env" placeholder="环境（可选）" style="width:150px" onkeydown="if(event.key==='Enter')loadTraceLogs()">
+      <button class="btn btn-sm btn-primary" onclick="loadTraceLogs()">查询</button>
+    </div>
+    <div id="trace-log-list" class="log-list"><div class="log-empty">请输入 trace_id 后点击查询</div></div>
+    <div class="log-pager" id="trace-log-pager" style="display:none">
+      <button class="btn btn-sm btn-outline" id="trace-log-prev" onclick="changeTraceLogPage(-1)">上一页</button>
+      <span id="trace-log-page-info" class="log-page-info"></span>
+      <button class="btn btn-sm btn-outline" id="trace-log-next" onclick="changeTraceLogPage(1)">下一页</button>
     </div>
   </div>
 </div>
@@ -2757,6 +2788,19 @@ async function deleteNode(id) {
 // 当前 project 的 activity 缓存，供 Node 编辑器下拉使用
 window._activityCache = [];
 
+// 根据标签名称生成稳定的颜色 class，使不同标签在列表中显示为不同颜色
+function tagColorClass(tag) {
+  const s = String(tag || '');
+  // 两个特殊标签固定颜色：条件查询=绿，策略执行=红
+  if (s === '条件查询') return 'tag-cond';
+  if (s === '策略执行') return 'tag-act';
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return 'tag-c' + (h % 10);
+}
+
 // 加载 activity 列表（拉取全部，前端按标签筛选，保证筛选项稳定）
 async function loadActivities() {
   const p = getProject();
@@ -2911,7 +2955,7 @@ function renderActivityTable(list) {
       }
     } catch(e) {}
     const argJson = escAttr(JSON.stringify(argData));
-    const tagsHtml = (a.tags || []).map(t => '<span class="badge badge-on" style="margin-right:4px">' + escHtml(t) + '</span>').join('') || '<span style="color:var(--text-muted)">-</span>';
+    const tagsHtml = (a.tags || []).map(t => '<span class="badge ' + tagColorClass(t) + '" style="margin-right:4px">' + escHtml(t) + '</span>').join('') || '<span style="color:var(--text-muted)">-</span>';
     // 测试状态图标：success=绿色勾，failed=红色叉，none/无=灰色图标。
     // 未选择具体环境时不展示（避免多环境聚合导致的误判）。
     let testIcon = '';
@@ -3719,6 +3763,124 @@ function closeActivityLogsModal() {
   document.getElementById('activity-logs-modal-overlay').classList.remove('show');
 }
 
+let _traceLogPage = 1;
+const _traceLogPageSize = 20;
+
+function openTraceLogsModal() {
+  document.getElementById('trace-logs-modal-overlay').classList.add('show');
+  document.getElementById('trace-log-list').innerHTML = '<div class="log-empty">请输入 trace_id 后点击查询</div>';
+  document.getElementById('trace-log-pager').style.display = 'none';
+  const input = document.getElementById('trace-log-trace-id');
+  if (input) setTimeout(() => input.focus(), 50);
+}
+
+function closeTraceLogsModal() {
+  document.getElementById('trace-logs-modal-overlay').classList.remove('show');
+}
+
+async function loadTraceLogs() {
+  const box = document.getElementById('trace-log-list');
+  const p = getProject();
+  if (!p) { showToast('请先选择项目', 'error'); return; }
+  const trace = document.getElementById('trace-log-trace-id').value.trim();
+  if (!trace) { showToast('请输入 trace_id', 'error'); return; }
+  const env = document.getElementById('trace-log-env').value.trim();
+  _traceLogLastQuery = { trace: trace, env: env };
+  const params = new URLSearchParams();
+  params.set('trace_id', trace);
+  if (env) params.set('env', env);
+  params.set('page', String(_traceLogPage));
+  params.set('page_size', String(_traceLogPageSize));
+  box.innerHTML = '<div class="log-empty">加载中…</div>';
+  try {
+    const resp = await api('/api/activity-logs?' + params.toString());
+    const data = Array.isArray(resp) ? resp : (resp && resp.list) || [];
+    const total = (resp && typeof resp.total === 'number') ? resp.total : data.length;
+    if (data.length === 0) {
+      box.innerHTML = '<div class="log-empty">该 trace_id 暂无执行日志</div>';
+      document.getElementById('trace-log-pager').style.display = 'none';
+      return;
+    }
+    box.innerHTML = data.map(renderLogItem).join('');
+    document.getElementById('trace-log-copy').style.display = 'inline-block';
+    renderTraceLogPager(total);
+  } catch (e) {
+    box.innerHTML = '<div class="log-empty">加载日志失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderTraceLogPager(total) {
+  const pager = document.getElementById('trace-log-pager');
+  const info = document.getElementById('trace-log-page-info');
+  const prev = document.getElementById('trace-log-prev');
+  const next = document.getElementById('trace-log-next');
+  const totalPages = Math.max(1, Math.ceil(total / _traceLogPageSize));
+  if (total <= 0) { pager.style.display = 'none'; return; }
+  pager.style.display = 'flex';
+  info.textContent = '第 ' + _traceLogPage + ' / ' + totalPages + ' 页（共 ' + total + ' 条）';
+  prev.disabled = _traceLogPage <= 1;
+  next.disabled = _traceLogPage >= totalPages;
+}
+
+function changeTraceLogPage(delta) {
+  const newPage = _traceLogPage + delta;
+  if (newPage < 1) return;
+  _traceLogPage = newPage;
+  loadTraceLogs();
+}
+
+let _traceLogLastQuery = { trace: '', env: '' };
+
+async function copyTraceLogs() {
+  const p = getProject();
+  const trace = _traceLogLastQuery.trace;
+  if (!trace) { showToast('请先查询 trace_id 日志', 'error'); return; }
+  try {
+    const params = new URLSearchParams();
+    params.set('trace_id', trace);
+    if (_traceLogLastQuery.env) params.set('env', _traceLogLastQuery.env);
+    params.set('page', '1');
+    params.set('page_size', '1000'); // 拉取该 trace 全部日志
+    const resp = await api('/api/activity-logs?' + params.toString());
+    const data = Array.isArray(resp) ? resp : (resp && resp.list) || [];
+    if (!data.length) { showToast('没有可复制的日志', 'error'); return; }
+    const pretty = (val) => {
+      if (val === undefined || val === null || val === '') return '';
+      if (typeof val === 'string') {
+        try { return JSON.stringify(JSON.parse(val), null, 2); } catch (e) { return val; }
+      }
+      try { return JSON.stringify(val, null, 2); } catch (e) { return String(val); }
+    };
+    const text = data.map((r, i) => {
+      const lines = [];
+      lines.push('===== 第 ' + (i + 1) + ' 条 / 共 ' + data.length + ' 条 =====');
+      if (r.act_name) lines.push('activity: ' + r.act_name);
+      if (r.trace_id) lines.push('trace_id: ' + r.trace_id);
+      if (r.span_id) lines.push('span_id: ' + r.span_id);
+      if (r.event_id) lines.push('event_id: ' + r.event_id);
+      if (r.level) lines.push('level: ' + r.level);
+      if (r.env) lines.push('env: ' + r.env);
+      if (r.node_id) lines.push('node_id: ' + r.node_id);
+      if (r.root_chain_id) lines.push('root_chain_id: ' + r.root_chain_id);
+      if (r.created_at) lines.push('time: ' + r.created_at);
+      if (r.error_msg) lines.push('error: ' + r.error_msg);
+      const payload = pretty(r.payload);
+      if (payload) lines.push('payload:\n' + payload);
+      const result = pretty(r.result);
+      if (result) lines.push('result:\n' + result);
+      return lines.join('\n');
+    }).join('\n\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    showToast('已复制 ' + data.length + ' 条日志', 'success');
+  } catch (e) { showToast('复制失败: ' + e.message, 'error'); }
+}
+
 async function loadLogEnvOptions() {
   const sel = document.getElementById('log-env');
   if (!sel) return;
@@ -3818,10 +3980,12 @@ function renderLogItem(r) {
   left.push('<span class="log-level ' + level + '">' + esc(r.level || 'info') + '</span>');
   left.push('<span class="log-meta">' + esc(t) + '</span>');
   if (r.env) left.push('<span class="log-meta">env=' + esc(r.env) + '</span>');
-  if (r.event_id) left.push('<span class="log-meta">trace=' + esc(r.event_id) + '</span>');
+  if (r.act_namespace) left.push('<span class="log-meta">ns=' + esc(r.act_namespace) + '</span>');
+  if (r.act_name) left.push('<span class="log-meta">act=' + esc(r.act_name) + '</span>');
+  if (r.event_id) left.push('<span class="log-meta">event_id=' + esc(r.event_id) + '</span>');
+  if (r.trace_id) left.push('<span class="log-meta">trace_id=' + esc(r.trace_id) + '</span>');
+  if (r.span_id) left.push('<span class="log-meta">span_id=' + esc(r.span_id) + '</span>');
   if (r.root_chain_id) left.push('<span class="log-meta">rc=' + esc(r.root_chain_id) + '</span>');
-  if (r.trace_id) left.push('<span class="log-meta">tid=' + esc(r.trace_id) + '</span>');
-  if (r.span_id) left.push('<span class="log-meta">sid=' + esc(r.span_id) + '</span>');
   if (typeof r.duration_ms === 'number') left.push('<span class="log-meta">' + r.duration_ms + 'ms</span>');
   const segs = [];
   segs.push('<div class="log-item-head">' + left.join('') + '</div>');
@@ -3925,10 +4089,10 @@ function renderTestActivityParams() {
     container.innerHTML = '<div id="test-activity-params-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">该活动无参数定义</div>';
     return;
   }
-  container.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">已列出该活动定义的所有参数（<span style="color:#dc2626">*</span> 为必传：覆盖类型 frontend / frontend+）</div>' +
+  container.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">已列出该活动定义的所有参数（<span style="color:#dc2626">*</span> 为必传：在活动定义中勾选了「必传」的参数）</div>' +
     keys.map(key => {
     const bc = map[key];
-    const required = (bc.policy === 'frontend' || bc.policy === 'frontend+');
+    const required = (bc.required === true || bc.required === 'true');
     const reqMark = required ? ' <span style="color:#dc2626">*</span>' : '';
     const policyTag = bc.policy ? ' <span style="font-weight:400;color:#6b7280;font-size:.7rem">[' + esc(bc.policy) + ']</span>' : '';
     const ph = bc.value !== undefined && bc.value !== null ? String(bc.value) : '';

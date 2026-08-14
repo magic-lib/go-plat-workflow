@@ -176,7 +176,7 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	mqHandler := func(ctx context.Context, event *mq.Event) (any, error) {
 		start := time.Now()
 		// 执行前记一条 info 日志
-		w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), 0, event.Payload, nil, "", nil)
+		//w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), 0, event.Payload, nil, "", nil)
 
 		resp, herr := handler(ctx, event.Payload)
 
@@ -201,7 +201,10 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 // registerHeartbeat 将 activity 加入心跳注册表，首次注册时启动后台上报协程
 func (w *MQWorker) registerHeartbeat(actNamespace, actName string) {
 	w.hbMu.Lock()
-	key := actNamespace + "|" + actName
+	key := w.getActivityKey(&activityHeartbeat{
+		ActNamespace: actNamespace,
+		ActName:      actName,
+	})
 	if _, ok := w.heartbeats[key]; !ok {
 		w.heartbeats[key] = &activityHeartbeat{ActNamespace: actNamespace, ActName: actName}
 	}
@@ -227,6 +230,10 @@ func (w *MQWorker) heartbeatLoop() {
 	}
 }
 
+func (w *MQWorker) getActivityKey(hb *activityHeartbeat) string {
+	return hb.ActNamespace + "|" + hb.ActName
+}
+
 // reportHeartbeatOnce 单次上报：将所有已注册 actName 的时间戳批量写入同一个 hash key
 func (w *MQWorker) reportHeartbeatOnce() {
 	if w.redisCli == nil {
@@ -240,7 +247,8 @@ func (w *MQWorker) reportHeartbeatOnce() {
 	fields := make(map[string]any, len(w.heartbeats))
 	now := time.Now().Unix()
 	for _, hb := range w.heartbeats {
-		fields[hb.ActName] = now
+		key := w.getActivityKey(hb)
+		fields[key] = now
 	}
 	w.hbMu.Unlock()
 
