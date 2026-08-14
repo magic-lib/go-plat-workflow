@@ -84,6 +84,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("POST /api/nodes/{node_id}/test", ws.handleTestNode)
 	ws.mux.HandleFunc("GET /api/nodes/{node_id}/test-records", ws.handleListNodeTestRecords)
 	ws.mux.HandleFunc("DELETE /api/node-test-records/{record_id}", ws.handleDeleteNodeTestRecord)
+	ws.mux.HandleFunc("DELETE /api/nodes/{node_id}/test-records", ws.handleClearNodeTestRecords)
 
 	// RootChain MQ 分布式执行
 	ws.mux.HandleFunc("POST /api/workflow/execute-mq", ws.handleExecuteWorkflowByMQ)
@@ -1155,6 +1156,21 @@ func (ws *WebServer) handleDeleteNodeTestRecord(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
+}
+
+func (ws *WebServer) handleClearNodeTestRecords(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	nodeID := r.PathValue("node_id")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	deleted, err := ws.svc.ClearNodeTestRecords(r.Context(), project, nodeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message": "cleared", "deleted": deleted})
 }
 
 // ============================================================

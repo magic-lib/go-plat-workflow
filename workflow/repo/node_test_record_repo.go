@@ -83,3 +83,14 @@ func (r *NodeTestRecordRepo) Delete(ctx context.Context, project, recordID strin
 	}
 	return nil
 }
+
+// DeleteByNode 删除指定节点下的所有测试记录（按 project + node_id 批量清除）。
+func (r *NodeTestRecordRepo) DeleteByNode(ctx context.Context, project, nodeID string) (int64, error) {
+	result := r.db.WithContext(ctx).
+		Where("project = ? AND node_id = ?", project, nodeID).
+		Delete(&models.NodeTestRecordModel{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}

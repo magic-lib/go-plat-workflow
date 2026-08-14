@@ -923,7 +923,10 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
     </div>
 
     <div class="form-group">
-      <label>历史测试记录</label>
+      <label style="display:flex;justify-content:space-between;align-items:center">
+        <span>历史测试记录</span>
+        <button class="btn btn-sm btn-outline" type="button" onclick="clearNodeTestRecords()">全部清除</button>
+      </label>
       <div id="test-node-records" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc"></div>
     </div>
 
@@ -2250,6 +2253,17 @@ function collectActivityArgBinds(row) {
         ref = r.querySelector('.arg-ref') ? r.querySelector('.arg-ref').value : '';
       }
       value = ref; // 引用模式最终值即引用路径字符串
+      // 引用模式：type 取「当前这个 Activity 里该参数所定义的 type」（不是被引用对象的类型）。
+      // 即：用绑定 key 去当前 Activity 的参数定义里查 type；找不到定义或未配置则留空，最终回退 string。
+      const curNs = row.getAttribute('data-ns') || '';
+      const curName = row.getAttribute('data-name') || '';
+      const curAct = (window._activityCache || []).find(a => a.act_namespace === curNs && a.act_name === curName);
+      let curParams = [];
+      if (curAct && curAct.arguments) {
+        try { curParams = (typeof curAct.arguments === 'string') ? JSON.parse(curAct.arguments || '[]') : (curAct.arguments || []); } catch(e) { curParams = []; }
+      }
+      const curParam = Array.isArray(curParams) ? curParams.find(x => (x.key || '') === key) : null;
+      typ = curParam && (curParam.type || curParam.value_type) ? (curParam.type || curParam.value_type) : '';
     }
     binds[key] = { source: source, value: value, ref: ref, type: typ };
   });
@@ -2295,7 +2309,8 @@ function nodeParamDefs() {
   document.querySelectorAll('#node-params-container .param-row').forEach(r => {
     const key = r.querySelector('.param-key') ? r.querySelector('.param-key').value.trim() : '';
     const label = r.querySelector('.param-label') ? r.querySelector('.param-label').value.trim() : '';
-    if (key) defs.push({ key: key, label: label });
+    const type = r.querySelector('.param-type') ? r.querySelector('.param-type').value : '';
+    if (key) defs.push({ key: key, label: label, type: type });
   });
   return defs;
 }
@@ -3605,11 +3620,14 @@ async function testNode() {
   }
 }
 
+let _nodeTestRecords = [];
+
 async function loadNodeTestRecords(nodeId) {
   const p = getProject();
   const box = document.getElementById('test-node-records');
   try {
     const records = await api('/api/nodes/' + encodeURIComponent(nodeId) + '/test-records?project=' + encodeURIComponent(p));
+    _nodeTestRecords = records || [];
     if (!records.length) {
       box.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-muted);font-size:.82rem">暂无测试记录</div>';
       return;
@@ -3618,7 +3636,10 @@ async function loadNodeTestRecords(nodeId) {
       <div style="border:1px solid var(--border);border-radius:var(--radius);padding:8px;margin-bottom:6px;font-size:.78rem">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span><b>${esc(r.record_id)}</b> <span class="badge ${r.status==='success'?'badge-on':'badge-off'}">${r.status==='success'?'成功':'失败'}</span> ${r.env_name?('· 环境 '+esc(r.env_name)):''}</span>
-          <button class="btn btn-sm btn-danger" onclick="deleteNodeTestRecord('${esc(r.record_id)}','${esc(nodeId)}')">删除</button>
+          <span>
+            <button class="btn btn-sm btn-outline" onclick="copyNodeTestRecord('${esc(r.record_id)}')">复制</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteNodeTestRecord('${esc(r.record_id)}','${esc(nodeId)}')">删除</button>
+          </span>
         </div>
         <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}</div>
         <div><b>入参:</b> <code style="font-size:.72rem">${esc(trunc(r.input_params||'',200))}</code></div>
@@ -3629,6 +3650,31 @@ async function loadNodeTestRecords(nodeId) {
   }
 }
 
+async function copyNodeTestRecord(recordId) {
+  const rec = (_nodeTestRecords || []).find(x => x.record_id === recordId);
+  if (!rec) { showToast('未找到该记录', 'error'); return; }
+  const pretty = (val) => {
+    if (val === undefined || val === null || val === '') return '';
+    if (typeof val === 'string') {
+      try { return JSON.stringify(JSON.parse(val), null, 2); } catch (e) { return val; }
+    }
+    try { return JSON.stringify(val, null, 2); } catch (e) { return String(val); }
+  };
+  const text =
+    '参数:\n' + pretty(rec.input_params) +
+    '\n\n返回值:\n' + pretty(rec.result !== undefined && rec.result !== '' ? rec.result : rec.error_msg);
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    showToast('已复制参数和返回值', 'success');
+  } catch (e) { showToast('复制失败: ' + e.message, 'error'); }
+}
+
 async function deleteNodeTestRecord(recordId, nodeId) {
   if (!confirm('确定删除测试记录 ' + recordId + ' 吗？')) return;
   try {
@@ -3636,6 +3682,17 @@ async function deleteNodeTestRecord(recordId, nodeId) {
     showToast('记录已删除', 'success');
     loadNodeTestRecords(nodeId);
   } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+}
+
+async function clearNodeTestRecords() {
+  const nodeId = document.getElementById('test-node-id').value;
+  if (!nodeId) { showToast('未找到当前节点', 'error'); return; }
+  if (!confirm('确定清除该节点的全部测试记录吗？此操作不可恢复。')) return;
+  try {
+    const resp = await api('/api/nodes/' + encodeURIComponent(nodeId) + '/test-records?project=' + encodeURIComponent(getProject()), { method: 'DELETE' });
+    showToast('已清除全部测试记录' + (resp && resp.deleted ? ('（' + resp.deleted + ' 条）') : ''), 'success');
+    loadNodeTestRecords(nodeId);
+  } catch (e) { showToast('清除失败: ' + e.message, 'error'); }
 }
 
 // ============================================================
@@ -4159,8 +4216,8 @@ function clearParamRows() {
 let outputSeq = 0;
 
 // 返回值类型下拉（与 Activity 返回值设置一致：含"不转换"）
-const OUTPUT_TYPE_OPTIONS = ['', 'string', 'number', 'boolean', 'array', 'object', 'json', 'float64', 'formula'];
-const OUTPUT_TYPE_LABELS = { '': '不转换', 'string': 'string', 'number': 'number', 'boolean': 'boolean', 'array': 'array', 'object': 'object', 'json': 'json', 'float64': 'float64', 'formula': 'formula' };
+const OUTPUT_TYPE_OPTIONS = ['', 'string', 'int64', 'float64', 'bool', 'formula', 'json'];
+const OUTPUT_TYPE_LABELS = { '': '不转换', 'string': 'string', 'int64': 'int64', 'float64': 'float64', 'bool': 'bool', 'formula': 'formula', 'json': 'json' };
 function outputTypeHTML(type) {
   return OUTPUT_TYPE_OPTIONS.map(t =>
     '<option value="' + t + '"' + ((type||'') === t ? ' selected' : '') + '>' + OUTPUT_TYPE_LABELS[t] + '</option>'

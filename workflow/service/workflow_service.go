@@ -879,6 +879,11 @@ func (s *WorkflowService) DeleteNodeTestRecord(ctx context.Context, project, rec
 	return s.nodeTestRecordRepo.Delete(ctx, project, recordID)
 }
 
+// ClearNodeTestRecords 删除指定节点下的全部测试记录，返回删除条数。
+func (s *WorkflowService) ClearNodeTestRecords(ctx context.Context, project, nodeID string) (int64, error) {
+	return s.nodeTestRecordRepo.DeleteByNode(ctx, project, nodeID)
+}
+
 // ============================================================
 // Activity 测试（MQ 分布式执行）
 // ============================================================
