@@ -62,6 +62,9 @@ func (r *ActivityLogRepo) ListByActivity(ctx context.Context, project, actName s
 		if filter.SpanID != "" {
 			query = query.Where("span_id = ?", filter.SpanID)
 		}
+		if filter.NodeSpanID != "" {
+			query = query.Where("node_span_id = ?", filter.NodeSpanID)
+		}
 		if filter.Keyword != "" {
 			kw := "%" + filter.Keyword + "%"
 			query = query.Where("payload LIKE ? OR result LIKE ? OR error_msg LIKE ?", kw, kw, kw)

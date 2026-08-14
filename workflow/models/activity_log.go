@@ -25,6 +25,7 @@ type ActivityLogModel struct {
 	RootChainID  string    `gorm:"column:root_chain_id;type:varchar(128);index;Default:''" json:"root_chain_id"`
 	TraceID      string    `gorm:"column:trace_id;type:varchar(128);index;Default:''" json:"trace_id"`
 	SpanID       string    `gorm:"column:span_id;type:varchar(128);index;Default:''" json:"span_id"`
+	NodeSpanID   string    `gorm:"column:node_span_id;type:varchar(128);index:idx_proj_node_span;Default:''" json:"node_span_id"`
 	Attributes   string    `gorm:"column:attributes;type:text" json:"attributes"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -52,6 +53,7 @@ func (m *ActivityLogModel) ToDef() *workflow.ActivityLogDef {
 		RootChainID:  m.RootChainID,
 		TraceID:      m.TraceID,
 		SpanID:       m.SpanID,
+		NodeSpanID:   m.NodeSpanID,
 		Attributes:   m.Attributes,
 		CreatedAt:    m.CreatedAt,
 	}
@@ -73,5 +75,6 @@ func (m *ActivityLogModel) FromDef(def *workflow.ActivityLogDef) {
 	m.RootChainID = def.RootChainID
 	m.TraceID = def.TraceID
 	m.SpanID = def.SpanID
+	m.NodeSpanID = def.NodeSpanID
 	m.Attributes = def.Attributes
 }

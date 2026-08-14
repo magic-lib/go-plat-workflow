@@ -824,6 +824,9 @@ type ActivityLogDef struct {
 	TraceID string `json:"trace_id,omitempty"`
 	// SpanID 跨度 ID（分布式追踪），标识本次 activity 执行的跨度
 	SpanID string `json:"span_id,omitempty"`
+	// NodeSpanID 所属 node 的 span ID（由 ActivityNode 在执行时注入），
+	// 用于关联 wf_node_logs（node 侧使用相同语义的 span_id），实现 node -> activity 的层级关联。
+	NodeSpanID string `json:"node_span_id,omitempty"`
 	// Attributes 动态附加属性（JSON 字符串），用于存储与本次执行相关的自定义键值对，
 	// 例如业务维度标记、扩展上下文等，便于后续按属性检索或展示。
 	Attributes string `json:"attributes,omitempty"`
@@ -849,6 +852,8 @@ type ActivityLogFilter struct {
 	TraceID string `json:"trace_id,omitempty"`
 	// SpanID 跨度 ID 精确匹配
 	SpanID string `json:"span_id,omitempty"`
+	// NodeSpanID 所属 node 的 span ID 精确匹配，用于按 node 关联查询其下所有 activity
+	NodeSpanID string `json:"node_span_id,omitempty"`
 	// Keyword 关键词模糊匹配 payload/result/error_msg
 	Keyword string `json:"keyword,omitempty"`
 	// Start 时间范围起点（unix 秒，包含）
@@ -878,6 +883,63 @@ type ActivityLogStore interface {
 	ListByActivity(ctx context.Context, project, actName string, filter *ActivityLogFilter) ([]*ActivityLogDef, int64, error)
 	// DeleteByActivity 删除指定 activity 的全部日志
 	DeleteByActivity(ctx context.Context, project, actName string) error
+}
+
+// NodeLogDef node 运行日志：记录单个 node 执行时的入参与返回值，便于在前端查看每个 node 的运行情况。
+// 由管理端 collector 从 redis（workflow:node:log:<namespace>）消费后落库 wf_node_logs。
+type NodeLogDef struct {
+	ID         uint   `json:"id"`
+	Project    string `json:"project"`
+	Env        string `json:"env"`
+	NodeID     string `json:"node_id"`
+	NodeName   string `json:"node_name"`
+	EventID    string `json:"event_id"`
+	Level      string `json:"level"`
+	Timestamp  int64  `json:"timestamp"`
+	DurationMs int64  `json:"duration_ms"`
+	// Payload node 执行的全部入参（全局参数 + 本节点参数），JSON 字符串
+	Payload json.RawMessage `json:"payload"`
+	// Result node 执行后的返回值（按本节点 responses 配置提取），JSON 字符串
+	Result json.RawMessage `json:"result"`
+	// ErrorMsg 执行错误信息（成功为空）
+	ErrorMsg string `json:"error_msg"`
+	// Error 兼容 worker/组件上报时使用的 "error" 字段名
+	Error string `json:"error"`
+	// TraceID 本次执行的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
+	TraceID     string    `json:"trace_id"`
+	RootChainID string    `json:"root_chain_id"`
+	SpanID      string    `json:"span_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// NodeLogFilter node 运行日志查询过滤条件。
+type NodeLogFilter struct {
+	// Level 级别精确匹配（info/error）
+	Level string `json:"level,omitempty"`
+	// NodeID node 精确匹配
+	NodeID string `json:"node_id,omitempty"`
+	// NodeName node 名称模糊匹配
+	NodeName string `json:"node_name,omitempty"`
+	// Env 环境名精确匹配
+	Env string `json:"env,omitempty"`
+	// TraceID 链路 ID 精确匹配（用于跨 node/activity 回查）
+	TraceID string `json:"trace_id,omitempty"`
+	// Keyword 关键词模糊匹配 payload/result/error_msg
+	Keyword string `json:"keyword,omitempty"`
+	// Limit 每页条数
+	Limit int `json:"limit,omitempty"`
+	// Offset 偏移量
+	Offset int `json:"offset,omitempty"`
+}
+
+// NodeLogStore node 运行日志仓储接口。
+type NodeLogStore interface {
+	// Create 创建一条 node 运行日志
+	Create(ctx context.Context, def *NodeLogDef) error
+	// ListByNode 列出指定 node 的运行日志，按时间倒序，支持分页
+	ListByNode(ctx context.Context, project, nodeID string, limit, offset int) ([]*NodeLogDef, int64, error)
+	// ListByFilter 按条件全局查询 node 运行日志（按时间倒序），支持分页
+	ListByFilter(ctx context.Context, project string, f *NodeLogFilter) ([]*NodeLogDef, int64, error)
 }
 
 // ============================================================

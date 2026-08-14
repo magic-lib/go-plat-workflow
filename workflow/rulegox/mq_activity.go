@@ -37,15 +37,20 @@ const (
 	//   namespace 即 getMQNamespace 生成的项目+环境标识
 	HeartbeatKeyPrefix   = "workflow:heartbeat:"
 	ActivityLogKeyPrefix = "workflow:activity:log:"
+	// NodeLogKeyPrefix node 运行日志的 Redis list key 前缀，element 为 nodeLogRecord 的 JSON。
+	// 与活动日志同源：管理端 collector 消费后落库 wf_node_logs。
+	NodeLogKeyPrefix     = "workflow:node:log:"
 	HeaderTraceIdKey     = "X-Trace-Id"
 	HeaderSpanIdKey      = "X-Span-Id"
 	HeaderRootChainIdKey = "X-Root-Chain-Id"
+	HeaderNodeSpanIdKey  = "X-Node-Span-Id"
 )
 
 type MetaDataHeader struct {
 	RootChainID string         `json:"root_chain_id"`
 	TraceID     string         `json:"trace_id"`
 	SpanID      string         `json:"span_id"`
+	NodeSpanID  string         `json:"node_span_id"`
 	Attributes  map[string]any `json:"attributes"`
 }
 
@@ -53,6 +58,7 @@ func (m *MetaDataHeader) FromHeader(header http.Header) *MetaDataHeader {
 	m.RootChainID = header.Get(HeaderRootChainIdKey)
 	m.TraceID = header.Get(HeaderTraceIdKey)
 	m.SpanID = header.Get(HeaderSpanIdKey)
+	m.NodeSpanID = header.Get(HeaderNodeSpanIdKey)
 	return m
 }
 
@@ -63,6 +69,7 @@ func (m *MetaDataHeader) ToHeader(header http.Header) http.Header {
 	header.Set(HeaderRootChainIdKey, m.RootChainID)
 	header.Set(HeaderTraceIdKey, m.TraceID)
 	header.Set(HeaderSpanIdKey, m.SpanID)
+	header.Set(HeaderNodeSpanIdKey, m.NodeSpanID)
 	return header
 }
 
@@ -83,6 +90,7 @@ type activityLogRecord struct {
 	RootChainID  string `json:"root_chain_id,omitempty"`
 	TraceID      string `json:"trace_id,omitempty"`
 	SpanID       string `json:"span_id,omitempty"`
+	NodeSpanID   string `json:"node_span_id,omitempty"`
 	Attributes   string `json:"attributes,omitempty"`
 }
 
@@ -119,7 +127,7 @@ type activityHeartbeat struct {
 // NewMQWorker 创建 MQ worker，内部构建 asynq 消费端
 func NewMQWorker(projectName, env string, redisCfg *conn.Connect) (*MQWorker, error) {
 	cfg := &mq.AsynqMessageQueue{
-		Namespace: getMQNamespace(projectName, env), //项目+环境命名空间
+		Namespace: GetMQNamespace(projectName, env), //项目+环境命名空间
 		Timeout:   workflowTimeout,
 	}
 	client, err := mq.NewAsynqMessageQueue(redisCfg, cfg)
@@ -134,7 +142,7 @@ func NewMQWorker(projectName, env string, redisCfg *conn.Connect) (*MQWorker, er
 		hbCancel:   make(chan struct{}),
 	}
 	// 自建 redis 客户端（心跳与日志共用）；失败不阻断主流程，仅降级
-	if rc, rErr := newRedisClient(redisCfg); rErr != nil {
+	if rc, rErr := NewRedisClient(redisCfg); rErr != nil {
 		log.Println("mq_worker: init redis client failed, heartbeat/log disabled")
 	} else {
 		w.redisCli = rc
@@ -142,8 +150,8 @@ func NewMQWorker(projectName, env string, redisCfg *conn.Connect) (*MQWorker, er
 	return w, nil
 }
 
-// newRedisClient 基于 conn.Connect 构建 go-redis 客户端
-func newRedisClient(redisCfg *conn.Connect) (*redis.Client, error) {
+// NewRedisClient 基于 conn.Connect 构建 go-redis 客户端（导出供 commnode 等组件复用，上报 node 运行日志到 redis）。
+func NewRedisClient(redisCfg *conn.Connect) (*redis.Client, error) {
 	if redisCfg == nil || redisCfg.Host == "" || redisCfg.Port == "" {
 		return nil, fmt.Errorf("redis config error")
 	}
@@ -252,7 +260,7 @@ func (w *MQWorker) reportHeartbeatOnce() {
 	}
 	w.hbMu.Unlock()
 
-	key := HeartbeatKeyPrefix + getMQNamespace(w.Project, w.Env)
+	key := HeartbeatKeyPrefix + GetMQNamespace(w.Project, w.Env)
 	if err := w.redisCli.HSet(context.Background(), key, fields).Err(); err != nil {
 		log.Println("mq_worker: report heartbeat failed")
 		return
@@ -291,9 +299,10 @@ func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event
 		RootChainID:  metaData.RootChainID,
 		TraceID:      metaData.TraceID,
 		SpanID:       metaData.SpanID,
+		NodeSpanID:   metaData.NodeSpanID,
 		Attributes:   attrToJSONString(attributes),
 	}
-	key := ActivityLogKeyPrefix + getMQNamespace(w.Project, w.Env)
+	key := ActivityLogKeyPrefix + GetMQNamespace(w.Project, w.Env)
 	pipe := w.redisCli.Pipeline()
 	pipe.RPush(context.Background(), key, conv.String(rec))
 	// 只保留最新 10000 条，超出自动砍掉旧数据，数字按需调整
@@ -401,7 +410,8 @@ func (w *MQWorker) Stop() {
 	w.mqClient.Close()
 }
 
-func getMQNamespace(projectName, env string) string {
+// GetMQNamespace 返回 project+env 的 MQ 命名空间，格式为 workflow/<project>/<env>（导出供 commnode 组件上报 node 日志复用）。
+func GetMQNamespace(projectName, env string) string {
 	return fmt.Sprintf("%s/%s/%s", workflowTopic, projectName, env)
 }
 func getActivityTopic(actNamespace, actName string) string {

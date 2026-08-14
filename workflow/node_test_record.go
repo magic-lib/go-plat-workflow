@@ -18,6 +18,8 @@ type NodeTestRecordDef struct {
 	NodeName string `json:"node_name"`
 	// EnvName 测试使用的环境名（决定 Redis 等依赖配置）
 	EnvName string `json:"env_name,omitempty"`
+	// TraceID 本次测试的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
+	TraceID string `json:"trace_id,omitempty"`
 	// InputParams 测试时传入的参数（JSON 字符串）
 	InputParams string `json:"input_params"`
 	// EnvVars 测试时使用的环境变量（JSON 字符串，可选，配合 env_name 使用）

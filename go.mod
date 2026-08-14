@@ -4,7 +4,7 @@ go 1.24.3
 
 require (
 	github.com/magic-lib/go-plat-mq v0.0.0
-	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260813051351-26dbdd364bf3
+	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260813063204-b45e4277a265
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.35.1
 	github.com/rulego/rulego v0.36.0

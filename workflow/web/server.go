@@ -39,7 +39,7 @@ func NewWebServer(db *gorm.DB) (*WebServer, error) {
 	ws := &WebServer{svc: svc, mux: http.NewServeMux()}
 
 	// 启动活动日志/心跳收集器（自动发现各环境 Redis 配置）
-	ws.collector = workflow.NewActivityCollector(svc.ActivityLogRepo(), svc)
+	ws.collector = workflow.NewActivityCollector(svc.ActivityLogRepo(), svc.NodeLogRepo(), svc)
 	ws.collector.Start()
 
 	ws.registerRoutes()
@@ -83,6 +83,8 @@ func (ws *WebServer) registerRoutes() {
 	// 单节点测试（MQ 分布式执行）
 	ws.mux.HandleFunc("POST /api/nodes/{node_id}/test", ws.handleTestNode)
 	ws.mux.HandleFunc("GET /api/nodes/{node_id}/test-records", ws.handleListNodeTestRecords)
+	// node 运行日志（收集器落库 wf_node_logs，记录每个 node 执行时的入参与返回值）
+	ws.mux.HandleFunc("GET /api/nodes/{node_id}/logs", ws.handleListNodeLogs)
 	ws.mux.HandleFunc("DELETE /api/node-test-records/{record_id}", ws.handleDeleteNodeTestRecord)
 	ws.mux.HandleFunc("DELETE /api/nodes/{node_id}/test-records", ws.handleClearNodeTestRecords)
 
@@ -142,6 +144,8 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("GET /api/activities/{activity_id}/logs", ws.handleListActivityLogs)
 	// 跨 Activity 日志查询（不限定单个 activity，按 trace_id 等字段查询全项目执行日志）
 	ws.mux.HandleFunc("GET /api/activity-logs", ws.handleListActivityLogsGlobal)
+	// 跨 Node 日志查询（按 trace_id 等字段全局查询 node 运行日志）
+	ws.mux.HandleFunc("GET /api/node-logs", ws.handleListNodeLogsGlobal)
 }
 
 // projectParam 从 URL query 中提取 project 参数，未传则返回空字符串。
@@ -1444,6 +1448,7 @@ func (ws *WebServer) handleListActivityLogsGlobal(w http.ResponseWriter, r *http
 		RootChainID: q.Get("root_chain_id"),
 		TraceID:     traceID,
 		SpanID:      q.Get("span_id"),
+		NodeSpanID:  q.Get("node_span_id"),
 	}
 	if v := q.Get("start"); v != "" {
 		if n, e := strconv.ParseInt(v, 10, 64); e == nil {
@@ -1613,6 +1618,87 @@ func (ws *WebServer) handleDeleteActivityTestRecord(w http.ResponseWriter, r *ht
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
+}
+
+// handleListNodeLogs 查询指定 node 的运行日志（收集器落库 wf_node_logs），按时间倒序分页返回。
+func (ws *WebServer) handleListNodeLogs(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	nodeID := r.PathValue("node_id")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	if nodeID == "" {
+		writeError(w, http.StatusBadRequest, "node_id path parameter is required")
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if pageSize <= 0 || pageSize > 200 {
+		pageSize = 50
+	}
+	logs, total, err := ws.svc.ListNodeLogs(r.Context(), project, nodeID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if logs == nil {
+		logs = []*workflow.NodeLogDef{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"list":      logs,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+// handleListNodeLogsGlobal 按条件全局查询 node 运行日志（支持 trace_id 回查），分页返回。
+func (ws *WebServer) handleListNodeLogsGlobal(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	if pageSize < 1 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	filter := &workflow.NodeLogFilter{
+		Level:    q.Get("level"),
+		NodeID:   q.Get("node_id"),
+		NodeName: q.Get("node_name"),
+		Env:      q.Get("env"),
+		TraceID:  strings.TrimSpace(q.Get("trace_id")),
+		Keyword:  q.Get("keyword"),
+		Limit:    pageSize,
+		Offset:   (page - 1) * pageSize,
+	}
+	logs, total, err := ws.svc.ListNodeLogsGlobal(r.Context(), project, filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if logs == nil {
+		logs = []*workflow.NodeLogDef{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"list":      logs,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 // ============================================================

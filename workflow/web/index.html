@@ -270,12 +270,19 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .log-level.info { background: #dbeafe; color: #1d4ed8; }
 .log-level.error { background: #fee2e2; color: #b91c1c; }
 .log-meta { color: var(--text-muted); font-size: .72rem; }
+.log-duration { color: #b45309; font-weight: 600; }
+.log-node-name { color: #1d4ed8; font-weight: 600; }
 .log-json { background: #0f172a; color: #e2e8f0; border-radius: 6px; padding: 8px; margin-top: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: .72rem; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
 .log-json .k { color: #93c5fd; }
 .log-empty { text-align: center; padding: 32px; color: var(--text-muted); font-size: .85rem; }
 .log-pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px; border-top: 1px solid var(--border); background: var(--card-bg); }
 .log-pager .btn:disabled { opacity: .45; cursor: not-allowed; }
 .log-page-info { font-size: .82rem; color: var(--text-muted); font-weight: 600; }
+.log-section-title { font-size: .8rem; font-weight: 700; color: var(--text-muted); margin: 14px 2px 6px; padding-bottom: 4px; border-bottom: 2px solid var(--border); }
+.mini-btn { font-size: .7rem; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--primary); cursor: pointer; margin-left: 8px; }
+.mini-btn:hover { background: var(--primary); color: #fff; }
+.trace-node-acts { margin: 8px 0 4px 12px; padding: 8px 10px; border-left: 3px solid var(--primary); background: #f8fafc; border-radius: 0 6px 6px 0; }
+.trace-node-acts-title { font-size: .74rem; font-weight: 700; color: var(--text-muted); margin-bottom: 6px; }
 
 /* Activity 参数数泡泡浮层 */
 .arg-count { cursor: pointer; position: relative; color: var(--primary); font-weight: 600; }
@@ -1039,21 +1046,43 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
   </div>
 </div>
 
+<!-- Node 运行日志查看弹窗（记录每个 node 执行时的入参与返回值） -->
+<div class="modal-overlay" id="node-logs-modal-overlay" onclick="if(event.target===this)closeNodeLogsModal()">
+  <div class="modal" id="node-logs-modal" style="width:960px;max-width:96vw">
+    <h2 id="node-logs-modal-title">Node 运行日志<button class="modal-close" onclick="closeNodeLogsModal()" title="关闭">&times;</button></h2>
+    <div id="node-logs-name" style="margin:-4px 0 12px;color:var(--primary);font-size:.92rem;font-weight:600"></div>
+    <div class="log-search-row">
+      <select id="node-log-env" style="min-width:140px">
+        <option value="">环境：全部</option>
+      </select>
+      <select id="node-log-level">
+        <option value="">级别：全部</option>
+        <option value="info">info</option>
+        <option value="error">error</option>
+      </select>
+      <input id="node-log-trace-id" placeholder="trace_id" style="width:180px" onkeydown="if(event.key==='Enter')loadNodeLogs()">
+      <button class="btn btn-sm btn-primary" onclick="loadNodeLogs()">搜索</button>
+      <button class="btn btn-sm btn-outline" onclick="clearNodeLogFilters()">重置</button>
+    </div>
+    <div id="node-log-list" class="log-list"><div class="log-empty">加载中…</div></div>
+    <div class="log-pager" id="node-log-pager" style="display:none">
+      <button class="btn btn-sm btn-outline" id="node-log-prev" onclick="changeNodeLogPage(-1)">上一页</button>
+      <span id="node-log-page-info" class="log-page-info"></span>
+      <button class="btn btn-sm btn-outline" id="node-log-next" onclick="changeNodeLogPage(1)">下一页</button>
+    </div>
+  </div>
+</div>
+
 <!-- Trace 日志查看弹窗（按 trace_id 查询跨 Activity 执行记录） -->
 <div class="modal-overlay" id="trace-logs-modal-overlay">
   <div class="modal" id="trace-logs-modal" style="width:960px;max-width:96vw">
-    <h2 id="trace-logs-modal-title">执行日志查询（按 trace_id）<span style="float:right;font-size:.8rem;font-weight:normal"><button class="btn btn-sm btn-outline" id="trace-log-copy" onclick="copyTraceLogs()" style="display:none">复制全部</button></span><button class="modal-close" onclick="closeTraceLogsModal()" title="关闭">&times;</button></h2>
+    <h2 id="trace-logs-modal-title">执行日志查询（按 trace_id）<button class="modal-close" onclick="closeTraceLogsModal()" title="关闭">&times;</button></h2>
     <div class="log-search-row">
       <input id="trace-log-trace-id" class="log-keyword" placeholder="输入 trace_id 查询该链路所有 activity 记录" style="min-width:280px" onkeydown="if(event.key==='Enter')loadTraceLogs()">
-      <input id="trace-log-env" placeholder="环境（可选）" style="width:150px" onkeydown="if(event.key==='Enter')loadTraceLogs()">
       <button class="btn btn-sm btn-primary" onclick="loadTraceLogs()">查询</button>
     </div>
-    <div id="trace-log-list" class="log-list"><div class="log-empty">请输入 trace_id 后点击查询</div></div>
-    <div class="log-pager" id="trace-log-pager" style="display:none">
-      <button class="btn btn-sm btn-outline" id="trace-log-prev" onclick="changeTraceLogPage(-1)">上一页</button>
-      <span id="trace-log-page-info" class="log-page-info"></span>
-      <button class="btn btn-sm btn-outline" id="trace-log-next" onclick="changeTraceLogPage(1)">下一页</button>
-    </div>
+    <div class="log-section-title">Node 运行日志（按 trace_id 关联的 node 记录，点开查看该 trace 下 Activities）</div>
+    <div id="trace-node-log-list" class="log-list"><div class="log-empty">请输入 trace_id 后点击查询</div></div>
   </div>
 </div>
 
@@ -1814,6 +1843,7 @@ async function loadNodes() {
         <td class="actions">
           <button class="btn btn-sm btn-outline" onclick="editNodeByIndex(${i})">编辑</button>
           <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
+          <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
           <button class="btn btn-sm btn-danger" onclick="deleteNode('${esc(n.node_id)}')">删除</button>
         </td>
       </tr>`).join('');
@@ -3765,7 +3795,7 @@ async function loadNodeTestRecords(nodeId) {
             <button class="btn btn-sm btn-danger" onclick="deleteNodeTestRecord('${esc(r.record_id)}','${esc(nodeId)}')">删除</button>
           </span>
         </div>
-        <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}</div>
+        <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}${r.trace_id?(' · trace_id: <code style="font-size:.72rem">'+esc(r.trace_id)+'</code>'):''}</div>
         <div><b>入参:</b> <code style="font-size:.72rem">${esc(trunc(r.input_params||'',200))}</code></div>
         <div><b>结果:</b> <code style="font-size:.72rem">${esc(trunc(r.result||r.error_msg||'',200))}</code></div>
       </div>`).join('');
@@ -3843,13 +3873,9 @@ function closeActivityLogsModal() {
   document.getElementById('activity-logs-modal-overlay').classList.remove('show');
 }
 
-let _traceLogPage = 1;
-const _traceLogPageSize = 20;
-
 function openTraceLogsModal() {
   document.getElementById('trace-logs-modal-overlay').classList.add('show');
-  document.getElementById('trace-log-list').innerHTML = '<div class="log-empty">请输入 trace_id 后点击查询</div>';
-  document.getElementById('trace-log-pager').style.display = 'none';
+  document.getElementById('trace-node-log-list').innerHTML = '<div class="log-empty">请输入 trace_id 后点击查询</div>';
   const input = document.getElementById('trace-log-trace-id');
   if (input) setTimeout(() => input.focus(), 50);
 }
@@ -3858,107 +3884,84 @@ function closeTraceLogsModal() {
   document.getElementById('trace-logs-modal-overlay').classList.remove('show');
 }
 
+// 事件委托：trace 弹窗内 node 日志项的"查看该 node 下 activities"按钮
+document.addEventListener('click', function (e) {
+  const t = e.target;
+  if (t && t.getAttribute && t.getAttribute('data-node-acts-toggle') === '1') {
+    toggleNodeActivities(t);
+  }
+});
+
 async function loadTraceLogs() {
-  const box = document.getElementById('trace-log-list');
+  const nodeBox = document.getElementById('trace-node-log-list');
   const p = getProject();
   if (!p) { showToast('请先选择项目', 'error'); return; }
   const trace = document.getElementById('trace-log-trace-id').value.trim();
   if (!trace) { showToast('请输入 trace_id', 'error'); return; }
-  const env = document.getElementById('trace-log-env').value.trim();
-  _traceLogLastQuery = { trace: trace, env: env };
-  const params = new URLSearchParams();
-  params.set('trace_id', trace);
-  if (env) params.set('env', env);
-  params.set('page', String(_traceLogPage));
-  params.set('page_size', String(_traceLogPageSize));
-  box.innerHTML = '<div class="log-empty">加载中…</div>';
+  _traceLogLastQuery = { trace: trace };
+  nodeBox.innerHTML = '<div class="log-empty">加载中…</div>';
   try {
-    const resp = await api('/api/activity-logs?' + params.toString());
-    const data = Array.isArray(resp) ? resp : (resp && resp.list) || [];
-    const total = (resp && typeof resp.total === 'number') ? resp.total : data.length;
-    if (data.length === 0) {
-      box.innerHTML = '<div class="log-empty">该 trace_id 暂无执行日志</div>';
-      document.getElementById('trace-log-pager').style.display = 'none';
-      return;
+    // 查询该 trace 关联的 node 运行日志（来自 wf_node_logs），点开可查看该 trace 下 activities
+    const nodeParams = new URLSearchParams();
+    nodeParams.set('trace_id', trace);
+    nodeParams.set('page', '1');
+    nodeParams.set('page_size', '200');
+    const nodeResp = await api('/api/node-logs?' + nodeParams.toString());
+    const nodeData = Array.isArray(nodeResp) ? nodeResp : (nodeResp && nodeResp.list) || [];
+    if (nodeData.length === 0) {
+      nodeBox.innerHTML = '<div class="log-empty">该 trace_id 暂无 Node 运行日志</div>';
+    } else {
+      nodeBox.innerHTML = nodeData.map(r => renderTraceNodeLogItem(r, trace)).join('');
     }
-    box.innerHTML = data.map(renderLogItem).join('');
-    document.getElementById('trace-log-copy').style.display = 'inline-block';
-    renderTraceLogPager(total);
   } catch (e) {
-    box.innerHTML = '<div class="log-empty">加载日志失败: ' + esc(e.message) + '</div>';
+    nodeBox.innerHTML = '<div class="log-empty">加载 Node 日志失败: ' + esc(e.message) + '</div>';
   }
 }
 
-function renderTraceLogPager(total) {
-  const pager = document.getElementById('trace-log-pager');
-  const info = document.getElementById('trace-log-page-info');
-  const prev = document.getElementById('trace-log-prev');
-  const next = document.getElementById('trace-log-next');
-  const totalPages = Math.max(1, Math.ceil(total / _traceLogPageSize));
-  if (total <= 0) { pager.style.display = 'none'; return; }
-  pager.style.display = 'flex';
-  info.textContent = '第 ' + _traceLogPage + ' / ' + totalPages + ' 页（共 ' + total + ' 条）';
-  prev.disabled = _traceLogPage <= 1;
-  next.disabled = _traceLogPage >= totalPages;
+// 渲染 trace 弹窗中的 node 运行日志项：在 node 日志基础上附加"查看该 node 下 activities"下钻按钮。
+// 点击后用 trace_id + node_span_id（即 node 日志的 span_id）查询该 node 关联的 activity 日志并内联展开。
+function renderTraceNodeLogItem(r, traceId) {
+  const base = renderNodeLogItem(r);
+  const uid = 'tn-' + (r.trace_id || '') + '-' + (r.node_id || '') + '-' + (r.event_id || '') + '-' + (r.timestamp || '');
+  const btn = '<button class="mini-btn" data-node-acts-toggle="1" data-uid="' + esc(uid) + '" data-node-id="' + esc(r.node_id || '') + '" data-node-span-id="' + esc(r.span_id || '') + '">查看该 node 下 Activities ▾</button>';
+  const actsBox = '<div class="trace-node-acts" id="' + esc(uid) + '" style="display:none"></div>';
+  return base.replace('</div>', btn + actsBox + '</div>');
 }
 
-function changeTraceLogPage(delta) {
-  const newPage = _traceLogPage + delta;
-  if (newPage < 1) return;
-  _traceLogPage = newPage;
-  loadTraceLogs();
-}
-
-let _traceLogLastQuery = { trace: '', env: '' };
-
-async function copyTraceLogs() {
-  const p = getProject();
-  const trace = _traceLogLastQuery.trace;
-  if (!trace) { showToast('请先查询 trace_id 日志', 'error'); return; }
-  try {
-    const params = new URLSearchParams();
-    params.set('trace_id', trace);
-    if (_traceLogLastQuery.env) params.set('env', _traceLogLastQuery.env);
-    params.set('page', '1');
-    params.set('page_size', '1000'); // 拉取该 trace 全部日志
-    const resp = await api('/api/activity-logs?' + params.toString());
-    const data = Array.isArray(resp) ? resp : (resp && resp.list) || [];
-    if (!data.length) { showToast('没有可复制的日志', 'error'); return; }
-    const pretty = (val) => {
-      if (val === undefined || val === null || val === '') return '';
-      if (typeof val === 'string') {
-        try { return JSON.stringify(JSON.parse(val), null, 2); } catch (e) { return val; }
+// 通过 trace_id + node_span_id 查询该 node 关联的所有 activities 的执行记录并内联展开
+async function toggleNodeActivities(btn) {
+  const uid = btn.getAttribute('data-uid');
+  const nodeSpanId = btn.getAttribute('data-node-span-id');
+  const box = document.getElementById(uid);
+  if (!box) return;
+  if (box.style.display === 'none') {
+    box.style.display = 'block';
+    btn.textContent = '收起该 node 下 Activities ▴';
+    if (!box.dataset.loaded) {
+      box.dataset.loaded = '1';
+      box.innerHTML = '<div class="log-empty">加载中…</div>';
+      const trace = document.getElementById('trace-log-trace-id').value.trim();
+      const params = new URLSearchParams();
+      params.set('trace_id', trace);
+      if (nodeSpanId) params.set('node_span_id', nodeSpanId);
+      params.set('page', '1');
+      params.set('page_size', '200');
+      try {
+        const resp = await api('/api/activity-logs?' + params.toString());
+        const data = Array.isArray(resp) ? resp : (resp && resp.list) || [];
+        if (data.length === 0) {
+          box.innerHTML = '<div class="log-empty">该 node 下未查询到 Activity 执行记录</div>';
+        } else {
+          box.innerHTML = '<div class="trace-node-acts-title">该 node 下 Activities 执行记录（' + data.length + ' 条）</div>' + data.map(renderLogItem).join('');
+        }
+      } catch (e) {
+        box.innerHTML = '<div class="log-empty">加载失败: ' + esc(e.message) + '</div>';
       }
-      try { return JSON.stringify(val, null, 2); } catch (e) { return String(val); }
-    };
-    const text = data.map((r, i) => {
-      const lines = [];
-      lines.push('===== 第 ' + (i + 1) + ' 条 / 共 ' + data.length + ' 条 =====');
-      if (r.act_name) lines.push('activity: ' + r.act_name);
-      if (r.trace_id) lines.push('trace_id: ' + r.trace_id);
-      if (r.span_id) lines.push('span_id: ' + r.span_id);
-      if (r.event_id) lines.push('event_id: ' + r.event_id);
-      if (r.level) lines.push('level: ' + r.level);
-      if (r.env) lines.push('env: ' + r.env);
-      if (r.node_id) lines.push('node_id: ' + r.node_id);
-      if (r.root_chain_id) lines.push('root_chain_id: ' + r.root_chain_id);
-      if (r.created_at) lines.push('time: ' + r.created_at);
-      if (r.error_msg) lines.push('error: ' + r.error_msg);
-      const payload = pretty(r.payload);
-      if (payload) lines.push('payload:\n' + payload);
-      const result = pretty(r.result);
-      if (result) lines.push('result:\n' + result);
-      return lines.join('\n');
-    }).join('\n\n');
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text; document.body.appendChild(ta); ta.select();
-      document.execCommand('copy'); document.body.removeChild(ta);
     }
-    showToast('已复制 ' + data.length + ' 条日志', 'success');
-  } catch (e) { showToast('复制失败: ' + e.message, 'error'); }
+  } else {
+    box.style.display = 'none';
+    btn.textContent = '查看该 node 下 Activities ▾';
+  }
 }
 
 async function loadLogEnvOptions() {
@@ -3989,6 +3992,142 @@ function clearLogFilters() {
   // 重置为 Activities 列表当前所选环境，而非固定"全部"
   if (envSel) envSel.value = getActivityListEnv();
   _logPage = 1;
+}
+
+// ---------------- Node 运行日志弹窗 ----------------
+let _nodeLogNodeId = '';
+let _nodeLogNodeName = '';
+let _nodeLogPage = 1;
+const _nodeLogPageSize = 50;
+
+async function openNodeLogModal(nodeId) {
+  const node = (window._nodesForEdit || []).find(n => n.node_id === nodeId);
+  _nodeLogNodeId = nodeId;
+  _nodeLogNodeName = node ? node.name : nodeId;
+  _nodeLogPage = 1;
+  document.getElementById('node-logs-modal-overlay').classList.add('show');
+  document.getElementById('node-logs-modal-title').firstChild.textContent =
+    'Node 运行日志 (' + _nodeLogNodeId + ') ';
+  document.getElementById('node-logs-name').textContent = _nodeLogNodeName;
+  // 同步环境下拉
+  await loadNodeLogEnvOptions();
+  await loadNodeLogs();
+}
+
+function closeNodeLogsModal() {
+  document.getElementById('node-logs-modal-overlay').classList.remove('show');
+}
+
+async function loadNodeLogEnvOptions() {
+  const sel = document.getElementById('node-log-env');
+  if (!sel) return;
+  try {
+    const envs = await api('/api/env-configs');
+    const list = Array.isArray(envs) ? envs : [];
+    sel.innerHTML = '<option value="">环境：全部</option>' + list.map(e =>
+      '<option value="' + esc(e.env_name || e.name || e) + '">' + esc(e.env_name || e.name || e) + '</option>'
+    ).join('');
+    sel.value = getActivityListEnv();
+  } catch (e) { /* 环境列表可选，失败不影响日志查询 */ }
+}
+
+async function loadNodeLogs() {
+  const box = document.getElementById('node-log-list');
+  if (!_nodeLogNodeId) return;
+  const p = getProject();
+  if (!p) { showToast('请先选择项目', 'error'); return; }
+  const params = new URLSearchParams();
+  const lv = document.getElementById('node-log-level').value;
+  const trace = document.getElementById('node-log-trace-id').value.trim();
+  const env = document.getElementById('node-log-env') ? document.getElementById('node-log-env').value.trim() : '';
+  if (lv) params.set('level', lv);
+  if (trace) params.set('trace_id', trace);
+  if (env) params.set('env', env);
+  params.set('page', String(_nodeLogPage));
+  params.set('page_size', String(_nodeLogPageSize));
+  box.innerHTML = '<div class="log-empty">加载中…</div>';
+  try {
+    const resp = await api('/api/nodes/' + encodeURIComponent(_nodeLogNodeId) + '/logs?' + params.toString());
+    const data = (resp && resp.list) || [];
+    const total = (resp && typeof resp.total === 'number') ? resp.total : data.length;
+    if (data.length === 0) {
+      box.innerHTML = '<div class="log-empty">暂无运行日志</div>';
+      renderNodeLogPager(total);
+      return;
+    }
+    box.innerHTML = data.map(renderNodeLogItem).join('');
+    renderNodeLogPager(total);
+  } catch (e) {
+    box.innerHTML = '<div class="log-empty">加载日志失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderNodeLogPager(total) {
+  const pager = document.getElementById('node-log-pager');
+  const info = document.getElementById('node-log-page-info');
+  const prev = document.getElementById('node-log-prev');
+  const next = document.getElementById('node-log-next');
+  const totalPages = Math.max(1, Math.ceil(total / _nodeLogPageSize));
+  if (total <= 0) { pager.style.display = 'none'; return; }
+  pager.style.display = 'flex';
+  info.textContent = '第 ' + _nodeLogPage + ' / ' + totalPages + ' 页（共 ' + total + ' 条）';
+  prev.disabled = _nodeLogPage <= 1;
+  next.disabled = _nodeLogPage >= totalPages;
+}
+
+function changeNodeLogPage(delta) {
+  const newPage = _nodeLogPage + delta;
+  if (newPage < 1) return;
+  _nodeLogPage = newPage;
+  loadNodeLogs();
+}
+
+function clearNodeLogFilters() {
+  document.getElementById('node-log-level').value = '';
+  document.getElementById('node-log-trace-id').value = '';
+  const envSel = document.getElementById('node-log-env');
+  if (envSel) envSel.value = getActivityListEnv();
+  _nodeLogPage = 1;
+}
+
+function renderNodeLogItem(r) {
+  const level = (r.level === 'error') ? 'error' : 'info';
+  const t = r.timestamp ? new Date(r.timestamp * 1000).toLocaleString() : '';
+  const eventLabel = {
+    request: '入参', response: '返回值', fail: '失败', start: '开始', end: '结束',
+  }[r.event_id] || r.event_id;
+  // node 耗时：duration_ms 存在时格式化展示（end 事件才有实际耗时）
+  let durHtml = '';
+  if (typeof r.duration_ms === 'number' && r.duration_ms > 0) {
+    const dur = r.duration_ms >= 1000
+      ? (r.duration_ms / 1000).toFixed(2) + ' s'
+      : r.duration_ms + ' ms';
+    durHtml = '<span class="log-meta log-duration">耗时=' + esc(dur) + '</span>';
+  }
+  const head = [
+    '<span class="log-level ' + level + '">' + esc(r.level || 'info') + '</span>',
+    '<span class="log-event">' + esc(eventLabel) + '</span>',
+    '<span class="log-meta">' + esc(t) + '</span>',
+    durHtml,
+    (r.node_name ? '<span class="log-meta log-node-name">node=' + esc(r.node_name) + '</span>' : ''),
+    (r.env ? '<span class="log-meta">env=' + esc(r.env) + '</span>' : ''),
+    (r.trace_id ? '<span class="log-meta">trace_id=' + esc(r.trace_id) + '</span>' : ''),
+  ].join(' ');
+  // request/fail 展示入参（payload），response 展示返回值（result）
+  let body = '';
+  const showPayload = (r.event_id === 'request' || r.event_id === 'fail' || r.event_id === 'start');
+  const key = showPayload ? 'payload' : 'result';
+  const raw = r[key];
+  if (raw) {
+    let pretty = raw;
+    try { pretty = JSON.stringify(JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)), null, 2); } catch (e) {}
+    body = '<div class="log-json"><div class="log-json-label">' + (showPayload ? '入参' : '返回值') +
+      '</div><pre>' + esc(pretty) + '</pre></div>';
+  }
+  if (r.error_msg) {
+    body += '<div class="log-error-msg">错误: ' + esc(r.error_msg) + '</div>';
+  }
+  return '<div class="log-item ' + level + '"><div class="log-head">' + head + '</div>' + body + '</div>';
 }
 
 async function loadActivityLogs() {

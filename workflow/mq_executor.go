@@ -124,6 +124,16 @@ func (e *MQExecutor) newMQClient(redisCfg *RedisConfig) (*mq.AsynqMessageQueue, 
 	return client, nil
 }
 
+// TestNodeResultData 测试单个节点时返回的数据，携带执行结果 Data 与本次测试的链路 ID（TraceID）。
+// TraceID 用于串联本次测试执行产生的所有 activity 日志（见 wf_activity_logs.trace_id），
+// 便于在测试记录中回查完整执行链路。
+type TestNodeResultData struct {
+	// Data 执行结果（FlowContext / map 等，由具体节点类型决定）
+	Data any `json:"data"`
+	// TraceID 本次测试的分布式追踪 ID
+	TraceID string `json:"trace_id"`
+}
+
 // TestNode 通过 MQ 同步调用分布式 worker 测试单个节点，返回 worker 执行结果。
 func (e *MQExecutor) TestNode(ctx context.Context, payload *TestNodePayload) (any, error) {
 	if payload == nil || payload.NodeDef == nil {
@@ -183,7 +193,6 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 		spanID = logInfo.SpanID
 		attributes = logInfo.Attributes
 	}
-
 	e.asyncPushLog(worker.Project, worker.Env, actDef.ActNamespace, actDef.ActName,
 		level, start.Unix(), durationMs, params, resp, errMsg, rootChainID, traceID, spanID, attributes)
 
@@ -350,9 +359,12 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 	}
 
 	// 返回路由结果（True/False/分支名）与消息体，便于调用方判断走哪个分支。
-	return map[string]any{
-		"relation_type": relationType,
-		"msg":           resultData,
+	return &TestNodeResultData{
+		Data: map[string]any{
+			"relation_type": relationType,
+			"msg":           resultData,
+		},
+		TraceID: id.NewUUID(),
 	}, nil
 }
 
@@ -439,7 +451,10 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	if execErr != nil {
 		return nil, execErr
 	}
-	return resultParam, nil
+	return &TestNodeResultData{
+		Data:    resultParam,
+		TraceID: metaData.TraceId,
+	}, nil
 }
 
 // getRedisConfig 从环境配置中解析出执行所需的 Redis 配置。

@@ -41,6 +41,7 @@ type WorkflowService struct {
 	activityRepo           *repo.ActivityRepo
 	activityTestRecordRepo *repo.ActivityTestRecordRepo
 	activityLogRepo        *repo.ActivityLogRepo
+	nodeLogRepo            *repo.NodeLogRepo
 	mqExecutor             *workflow.MQExecutor
 	dslBuilder             *builder.DSLBuilder
 	engine                 *engine.WorkflowEngine
@@ -61,6 +62,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		&models.ActivityModel{},
 		&models.ActivityTestRecordModel{},
 		&models.ActivityLogModel{},
+		&models.NodeLogModel{},
 	); err != nil {
 		return nil, err
 	}
@@ -70,6 +72,13 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	if err := db.Exec(
 		"ALTER TABLE wf_activity_logs MODIFY COLUMN result text",
 	).Error; err != nil {
+		return nil, err
+	}
+
+	// AutoMigrate 已自动新增 trace_id 列；这里补建索引（幂等：已存在则忽略报错）。
+	if err := db.Exec(
+		"ALTER TABLE wf_node_test_records ADD INDEX idx_trace_id (trace_id)",
+	).Error; err != nil && !strings.Contains(err.Error(), "Duplicate") && !strings.Contains(err.Error(), "Duplicate key name") {
 		return nil, err
 	}
 
@@ -100,6 +109,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	activityRepo := repo.NewActivityRepo(db)
 	activityTestRecordRepo := repo.NewActivityTestRecordRepo(db)
 	activityLogRepo := repo.NewActivityLogRepo(db)
+	nodeLogRepo := repo.NewNodeLogRepo(db)
 
 	s := &WorkflowService{
 		db:                     db,
@@ -114,6 +124,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		activityRepo:           activityRepo,
 		activityTestRecordRepo: activityTestRecordRepo,
 		activityLogRepo:        activityLogRepo,
+		nodeLogRepo:            nodeLogRepo,
 		mqExecutor:             workflow.NewMQExecutorWithLogAndEnv(activityLogRepo, envConfigRepo),
 		dslBuilder:             builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
 		engine:                 engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
@@ -678,6 +689,8 @@ type TestNodeResult struct {
 	ErrorMsg string `json:"error_msg,omitempty"`
 	// RecordID 保存的测试记录 ID（若 SaveRecord=true）
 	RecordID string `json:"record_id,omitempty"`
+	// TraceID 本次测试的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
+	TraceID string `json:"trace_id,omitempty"`
 }
 
 // TestNode 测试单个节点：
@@ -727,6 +740,10 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 	} else {
 		result.Status = "success"
 		result.Result = extractResultData(resp)
+		// 提取本次测试的链路 ID，便于回查 activity 日志
+		if tnr, ok := resp.(*workflow.TestNodeResultData); ok {
+			result.TraceID = tnr.TraceID
+		}
 	}
 
 	// 7. 保存测试记录（除非显式关闭）
@@ -737,6 +754,7 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 			NodeID:      req.NodeID,
 			NodeName:    nodeDef.Name,
 			EnvName:     req.EnvName,
+			TraceID:     result.TraceID,
 			InputParams: mustJSON(req.InputParams),
 			EnvVars:     mustJSON(envVars),
 			Status:      result.Status,
@@ -819,6 +837,10 @@ func (s *WorkflowService) getRedisConfig(ctx context.Context, project, envName s
 func extractResultData(resp any) string {
 	if resp == nil {
 		return ""
+	}
+	// TestNodeResultData 包装结构：取内部 Data
+	if tnr, ok := resp.(*workflow.TestNodeResultData); ok {
+		resp = tnr.Data
 	}
 	// mq.Response 结构：{error_msg, event, data}
 	if r, ok := resp.(*httputil.CommResponse); ok {
@@ -912,6 +934,8 @@ type TestActivityResult struct {
 	ErrorMsg string `json:"error_msg,omitempty"`
 	// RecordID 保存的测试记录 ID（若 SaveRecord=true）
 	RecordID string `json:"record_id,omitempty"`
+	// TraceID 本次测试的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
+	TraceID string `json:"trace_id,omitempty"`
 }
 
 // TestActivity 测试单个 activity：
@@ -1182,9 +1206,43 @@ func (s *WorkflowService) ListActivityLogs(ctx context.Context, project, actName
 	return records, total, nil
 }
 
+// ListNodeLogs 列出指定 node 的运行日志（按时间倒序，支持分页），返回日志列表与总条数。
+func (s *WorkflowService) ListNodeLogs(ctx context.Context, project, nodeID string, limit, offset int) ([]*workflow.NodeLogDef, int64, error) {
+	records, total, err := s.nodeLogRepo.ListByNode(ctx, project, nodeID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	if records == nil {
+		records = []*workflow.NodeLogDef{}
+	}
+	return records, total, nil
+}
+
 // ActivityLogRepo 返回 activity 日志仓储实例（供 web 层构造收集器复用同一仓储）。
 func (s *WorkflowService) ActivityLogRepo() *repo.ActivityLogRepo {
 	return s.activityLogRepo
+}
+
+// NodeLogRepo 返回 node 运行日志仓储实例（供 web 层构造收集器复用同一仓储）。
+func (s *WorkflowService) NodeLogRepo() *repo.NodeLogRepo {
+	return s.nodeLogRepo
+}
+
+// ListNodeLogsGlobal 按条件全局查询 node 运行日志（按时间倒序，支持分页），返回日志列表与总条数。
+// 常用于按 trace_id 回查某次执行涉及的所有 node 记录。
+func (s *WorkflowService) ListNodeLogsGlobal(ctx context.Context, project string, f *workflow.NodeLogFilter) ([]*workflow.NodeLogDef, int64, error) {
+	f2 := f
+	if f2 == nil {
+		f2 = &workflow.NodeLogFilter{}
+	}
+	records, total, err := s.nodeLogRepo.ListByFilter(ctx, project, f2)
+	if err != nil {
+		return nil, 0, err
+	}
+	if records == nil {
+		records = []*workflow.NodeLogDef{}
+	}
+	return records, total, nil
 }
 
 // ============================================================

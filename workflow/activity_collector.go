@@ -19,6 +19,8 @@ const (
 	collectorHeartbeatPrefix = rulegox.HeartbeatKeyPrefix
 	// collectorLogPrefix 执行日志 list key 前缀
 	collectorLogPrefix = rulegox.ActivityLogKeyPrefix
+	// collectorNodeLogPrefix node 运行日志 list key 前缀
+	collectorNodeLogPrefix = rulegox.NodeLogKeyPrefix
 
 	// heartbeatWindow 心跳统计窗口：最近 1 分钟
 	heartbeatWindow = 60 * time.Second
@@ -59,8 +61,9 @@ type redisTask struct {
 //  3. 当某个环境的 Redis 配置被移除（或环境被删除）时，对应监听任务被关闭，
 //     避免对无效 redis 进行无用扫描。
 type ActivityCollector struct {
-	logRepo ActivityLogStore
-	lister  EnvConfigLister
+	logRepo     ActivityLogStore
+	nodeLogRepo NodeLogStore
+	lister      EnvConfigLister
 
 	// 心跳缓存：key = project|actName，value = 最近 2 分钟内的心跳时间戳（秒）切片
 	hbMu    sync.RWMutex
@@ -74,14 +77,15 @@ type ActivityCollector struct {
 }
 
 // NewActivityCollector 创建活动日志/心跳收集器。
-// lister 用于发现各环境的 Redis 配置；logRepo 用于日志落库。
-func NewActivityCollector(logRepo ActivityLogStore, lister EnvConfigLister) *ActivityCollector {
+// lister 用于发现各环境的 Redis 配置；logRepo 用于活动日志落库；nodeLogRepo 用于 node 运行日志落库。
+func NewActivityCollector(logRepo ActivityLogStore, nodeLogRepo NodeLogStore, lister EnvConfigLister) *ActivityCollector {
 	return &ActivityCollector{
-		logRepo: logRepo,
-		lister:  lister,
-		hbCache: make(map[string][]int64),
-		tasks:   make(map[string]*redisTask),
-		stopCh:  make(chan struct{}),
+		logRepo:     logRepo,
+		nodeLogRepo: nodeLogRepo,
+		lister:      lister,
+		hbCache:     make(map[string][]int64),
+		tasks:       make(map[string]*redisTask),
+		stopCh:      make(chan struct{}),
 	}
 }
 
@@ -227,6 +231,18 @@ func (c *ActivityCollector) collectLogsLoop(t *redisTask) {
 		for _, key := range keys {
 			c.drainLogKey(t.redisCli, key)
 		}
+		// 同时消费 node 运行日志（workflow:node:log:*）
+		if c.nodeLogRepo != nil {
+			nodeKeys, err := c.scanKeys(t.redisCli, collectorNodeLogPrefix+"*")
+			if err != nil {
+				log.Warn().Err(err).Str("project", t.project).Str("env", t.env).
+					Msg("activity collector: scan node log keys failed")
+			} else {
+				for _, key := range nodeKeys {
+					c.drainNodeLogKey(t.redisCli, key)
+				}
+			}
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
 }
@@ -256,6 +272,35 @@ func (c *ActivityCollector) drainLogKey(cli *redis.Client, key string) {
 		}
 		if err := c.logRepo.Create(context.Background(), &rec); err != nil {
 			log.Warn().Err(err).Msg("activity collector: save log failed")
+		}
+	}
+}
+
+// drainNodeLogKey 从单个 node 运行日志 list 中拉取并落库（非阻塞，最多 logBatchSize 条）。
+func (c *ActivityCollector) drainNodeLogKey(cli *redis.Client, key string) {
+	for i := 0; i < logBatchSize; i++ {
+		res, err := cli.LPop(context.Background(), key).Result()
+		if err == redis.Nil {
+			return
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("activity collector: lpop node log failed")
+			return
+		}
+		var rec NodeLogDef
+		if err := json.Unmarshal([]byte(res), &rec); err != nil {
+			log.Warn().Err(err).Msg("activity collector: unmarshal node log failed, skip")
+			continue
+		}
+		// 兼容组件上报时使用的 "error" 字段名
+		if rec.ErrorMsg == "" {
+			rec.ErrorMsg = rec.Error
+		}
+		if rec.Timestamp == 0 {
+			rec.Timestamp = time.Now().Unix()
+		}
+		if err := c.nodeLogRepo.Create(context.Background(), &rec); err != nil {
+			log.Warn().Err(err).Msg("activity collector: save node log failed")
 		}
 	}
 }
