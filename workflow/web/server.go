@@ -46,9 +46,9 @@ func NewWebServer(db *gorm.DB) (*WebServer, error) {
 	return ws, nil
 }
 
-// Handler 返回 HTTP Handler。
+// Handler 返回 HTTP Handler（外层包上鉴权中间件）。
 func (ws *WebServer) Handler() http.Handler {
-	return ws.mux
+	return ws.authMiddleware(ws.mux)
 }
 
 // Shutdown 关闭工作流引擎与收集器，释放资源。
@@ -65,6 +65,19 @@ func (ws *WebServer) registerRoutes() {
 
 	// 健康检查
 	ws.mux.HandleFunc("GET /api/health", ws.handleHealth)
+
+	// 登录 / 登出 / 当前用户
+	ws.mux.HandleFunc("POST /api/login", ws.handleLogin)
+	ws.mux.HandleFunc("POST /api/logout", ws.handleLogout)
+	ws.mux.HandleFunc("GET /api/me", ws.handleMe)
+	ws.mux.HandleFunc("POST /api/me/password", ws.handleChangeMyPassword)
+
+	// 用户管理（仅 admin）
+	ws.mux.HandleFunc("GET /api/users", ws.handleListUsers)
+	ws.mux.HandleFunc("POST /api/users", ws.handleCreateUser)
+	ws.mux.HandleFunc("PUT /api/users/{user_id}", ws.handleUpdateUser)
+	ws.mux.HandleFunc("DELETE /api/users/{user_id}", ws.handleDeleteUser)
+	ws.mux.HandleFunc("POST /api/users/{user_id}/projects", ws.handleBindUserProject)
 
 	// Projects API（无需 project 参数）
 	ws.mux.HandleFunc("GET /api/projects", ws.handleListProjects)
@@ -180,10 +193,44 @@ func (ws *WebServer) handleListProjects(w http.ResponseWriter, r *http.Request) 
 	if projects == nil {
 		projects = []*workflow.ProjectDef{}
 	}
+	// viewer 仅能看到被授权的项目
+	if u := currentUser(r); u != nil && u.Role != "admin" {
+		allowed, e := ws.svc.UserRepo().ListProjectsByUser(r.Context(), u.ID)
+		if e != nil {
+			writeError(w, http.StatusInternalServerError, e.Error())
+			return
+		}
+		out := make([]*workflow.ProjectDef, 0, len(projects))
+		allowedSet := make(map[string]struct{}, len(allowed))
+		for _, p := range allowed {
+			allowedSet[p] = struct{}{}
+		}
+		for _, p := range projects {
+			if _, ok := allowedSet[p.Project]; ok {
+				out = append(out, p)
+			}
+		}
+		projects = out
+	}
 	writeJSON(w, http.StatusOK, projects)
 }
 
+// handleCreateProject 新建项目。任意登录用户均可创建；创建者自动绑定到该项目，
+// 普通用户（viewer）创建后即可在自己的项目列表中看到并访问它。
 func (ws *WebServer) handleCreateProject(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	if u == nil {
+		// 兜底：从会话 Cookie 重新解析当前用户
+		if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
+			if _, su, serr := ws.svc.UserRepo().GetSession(r.Context(), c.Value); serr == nil && su != nil {
+				u = su
+			}
+		}
+	}
+	if u == nil {
+		writeError(w, http.StatusUnauthorized, "未登录：缺少有效会话，请重新登录")
+		return
+	}
 	var def workflow.ProjectDef
 	if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
@@ -200,12 +247,20 @@ func (ws *WebServer) handleCreateProject(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	log.Info().Str("project", def.Project).Msg("project created via web")
+	// 创建者自动绑定到该项目（普通用户创建后立即可见，admin 绑不绑定都不影响全项目可见）。
+	if err := ws.svc.UserRepo().BindProject(r.Context(), u.ID, def.Project); err != nil {
+		writeError(w, http.StatusInternalServerError, "create project ok but bind owner failed: "+err.Error())
+		return
+	}
+	log.Info().Str("project", def.Project).Uint("owner", u.ID).Msg("project created via web")
 	writeJSON(w, http.StatusCreated, def)
 }
 
 func (ws *WebServer) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
+	if !ws.requireProjectAccess(w, r, project) {
+		return
+	}
 	var def workflow.ProjectDef
 	if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
@@ -222,6 +277,9 @@ func (ws *WebServer) handleUpdateProject(w http.ResponseWriter, r *http.Request)
 
 func (ws *WebServer) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
+	if !ws.requireProjectAccess(w, r, project) {
+		return
+	}
 	if err := ws.svc.DeleteProject(r.Context(), project); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

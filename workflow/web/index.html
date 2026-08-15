@@ -313,10 +313,55 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .arg-popover .ap-label { color: #e5e7eb; }
 .arg-popover .ap-none { color: #9ca3af; }
 .arg-popover .ap-count { color: #9ca3af; margin-top: 6px; font-size: .72rem; }
+
+/* ===== 登录遮罩 ===== */
+#login-overlay { position: fixed; inset: 0; background: linear-gradient(135deg, #4f46e5, #7c3aed); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+#login-overlay.hidden { display: none; }
+.login-card { background: #fff; border-radius: 16px; padding: 40px 36px; width: 360px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.login-card h2 { font-size: 1.4rem; color: var(--text); margin-bottom: 6px; text-align: center; }
+.login-card p.sub { color: var(--text-muted); font-size: .85rem; text-align: center; margin-bottom: 24px; }
+.login-card .form-group { margin-bottom: 16px; }
+.login-card label { display: block; font-size: .8rem; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+.login-card input { width: 100%; padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius); font-size: .9rem; outline: none; }
+.login-card input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,70,229,.12); }
+.login-card .btn { width: 100%; justify-content: center; margin-top: 8px; }
+.login-err { color: var(--danger); font-size: .82rem; text-align: center; min-height: 18px; margin-top: 8px; }
+
+/* ===== 用户管理 ===== */
+.user-row { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; }
+.user-row .u-main { flex: 1; }
+.user-row .u-name { font-weight: 600; }
+.user-row .u-meta { font-size: .78rem; color: var(--text-muted); margin-top: 2px; }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: .72rem; font-weight: 600; margin-left: 6px; }
+.tag-admin { background: rgba(79,70,229,.12); color: var(--primary); }
+.tag-viewer { background: rgba(16,185,129,.12); color: var(--success); }
+.tag-disabled { background: rgba(239,68,68,.12); color: var(--danger); }
+.chk-grid { display: flex; flex-wrap: wrap; gap: 6px; max-height: 180px; overflow-y: auto; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); }
+.chk-grid label { display: flex; align-items: center; gap: 6px; font-size: .82rem; font-weight: 400; }
+.user-only { display: none; }
+body.is-admin .user-only { display: inline-flex; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 </head>
 <body>
+
+<!-- 登录遮罩 -->
+<div id="login-overlay">
+  <div class="login-card">
+    <h2>&#9881; 流程管理中心</h2>
+    <p class="sub">请登录后继续</p>
+    <div class="form-group">
+      <label for="login-username">用户名</label>
+      <input id="login-username" placeholder="请输入用户名" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="form-group">
+      <label for="login-password">密码</label>
+      <input id="login-password" type="password" placeholder="请输入密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn btn-primary" onclick="doLogin()">登 录</button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
 
 <div class="header">
   <div class="header-left">
@@ -330,6 +375,10 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
     </select>
     <button class="btn btn-sm btn-outline" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openProjectModal()">+ 管理</button>
     <span id="project-badge">-</span>
+    <button class="btn btn-sm btn-outline user-only" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openUserModal()">用户管理</button>
+    <span id="current-user" style="color:#fff; font-size:.82rem; font-weight:600; display:none"></span>
+    <button class="btn btn-sm btn-outline" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openPwdModal()">修改密码</button>
+    <button class="btn btn-sm btn-outline" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="doLogout()">登出</button>
   </div>
 </div>
 
@@ -894,6 +943,10 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
         <div id="param-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无参数定义</div>
       </div>
     </div>
+    <div class="form-group" id="node-condition-section">
+      <label>执行条件 (node_condition) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（可选；配置了则该节点进入前先判断是否满足，不满足则跳过不执行；表达式变量来自流程参数与节点参数，如 age &gt; 18）</span></label>
+      <textarea id="node-condition" placeholder="例如：age > 18 && vip == true" style="min-height:60px" oninput="syncConditionConfig()"></textarea>
+    </div>
     <div class="form-group">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span>返回值定义 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（执行该节点后可得到的值，供下游节点引用）</span></span>
@@ -1221,7 +1274,7 @@ function copyDslContent() {
       <label>描述</label>
       <input id="project-description" placeholder="项目描述...">
     </div>
-    <div class="exec-card" style="margin:14px 0 8px">
+    <div class="exec-card admin-only" style="margin:14px 0 8px">
       <h4 style="font-size:.85rem;margin-bottom:8px">项目密钥（用于对外配置查询接口鉴权）</h4>
       <div class="form-row">
         <div class="form-group" style="flex:2">
@@ -1246,14 +1299,17 @@ function copyDslContent() {
       <button class="btn btn-outline" onclick="resetProjectForm()">重置</button>
       <button class="btn btn-primary" onclick="saveProject()" id="project-save-btn">新增</button>
     </div>
-    <h3 style="font-size:.95rem;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)">已有项目</h3>
-    <div class="table-wrap" style="max-height:300px;overflow-y:auto">
-      <table id="projects-table">
-        <thead><tr><th>Project ID</th><th>名称</th><th>描述</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody></tbody>
-      </table>
+    <div class="admin-only">
+      <h3 style="font-size:.95rem;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)">已有项目</h3>
+      <div class="table-wrap" style="max-height:300px;overflow-y:auto">
+        <table id="projects-table">
+          <thead><tr><th>Project ID</th><th>名称</th><th>描述</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
+    <div class="admin-only">
     <h3 style="font-size:.95rem;margin:18px 0 10px;padding-bottom:8px;border-bottom:1px solid var(--border)">环境配置</h3>
     <div id="env-config-panel" style="display:none">
       <div class="form-row">
@@ -1314,6 +1370,7 @@ function copyDslContent() {
       </div>
     </div>
     <div id="env-config-empty" class="empty-state" style="padding:12px 0"><p>请先选择一个项目，再配置环境</p></div>
+    </div>
 
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeProjectModal()">关闭</button>
@@ -1330,6 +1387,93 @@ function copyDslContent() {
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeProjectConfigModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 用户管理弹窗（仅 admin） -->
+<div class="modal-overlay" id="user-modal-overlay" onclick="if(event.target===this)closeUserModal()">
+  <div class="modal" style="width:680px">
+    <h2>用户管理<button class="modal-close" onclick="closeUserModal()" title="关闭">&times;</button></h2>
+    <div style="margin-bottom:12px">
+      <button class="btn btn-primary btn-sm" onclick="openUserEdit('')">+ 新建用户</button>
+    </div>
+    <div id="user-list" style="max-height:55vh;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- 用户编辑弹窗 -->
+<div class="modal-overlay" id="user-edit-overlay" onclick="if(event.target===this)closeUserEdit()">
+  <div class="modal" style="width:560px">
+    <h2 id="user-edit-title">编辑用户<button class="modal-close" onclick="closeUserEdit()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="user-edit-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label>用户名 *</label>
+        <input id="user-edit-username" placeholder="登录用户名" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>昵称</label>
+        <input id="user-edit-nickname" placeholder="显示昵称" autocomplete="off">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>密码</label>
+        <input id="user-edit-password" type="password" placeholder="请输入密码" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label>角色</label>
+        <select id="user-edit-role">
+          <option value="viewer">普通用户（仅授权项目）</option>
+          <option value="admin">管理员（全部项目）</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>状态</label>
+      <select id="user-edit-status">
+        <option value="1">启用</option>
+        <option value="0">禁用</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>授权项目（普通用户可访问的项目；管理员忽略此项，拥有全部）</label>
+      <div class="chk-grid" id="user-edit-projects"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeUserEdit()">取消</button>
+      <button class="btn btn-primary" onclick="saveUserEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 修改密码弹窗（当前登录用户自助修改） -->
+<div class="modal-overlay" id="pwd-modal-overlay" onclick="if(event.target===this)closePwdModal()">
+  <div class="modal" style="width:440px">
+    <h2>修改密码<button class="modal-close" onclick="closePwdModal()" title="关闭">&times;</button></h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>旧密码 *</label>
+        <input id="pwd-old" type="password" placeholder="请输入当前密码" autocomplete="current-password">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>新密码 *</label>
+        <input id="pwd-new" type="password" placeholder="至少 6 位" autocomplete="new-password">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>确认新密码 *</label>
+        <input id="pwd-confirm" type="password" placeholder="再次输入新密码" autocomplete="new-password">
+      </div>
+    </div>
+    <div class="login-err" id="pwd-err"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closePwdModal()">取消</button>
+      <button class="btn btn-primary" onclick="doChangePwd()">保存</button>
     </div>
   </div>
 </div>
@@ -1362,8 +1506,7 @@ function onProjectChange() {
 
 async function loadProjects() {
   try {
-    const res = await fetch('/api/projects');
-    const data = await res.json();
+    const data = await api('/api/projects');
     const sel = document.getElementById('project-select');
     const cur = sel.value;
     sel.innerHTML = '<option value="">-- 选择项目 --</option>';
@@ -1389,6 +1532,12 @@ async function loadProjects() {
 }
 
 function openProjectModal(proj) {
+  // 普通用户（viewer）也能打开弹窗创建自己的项目；
+  // 已有项目列表/密钥/环境配置等管理功能仅 admin 可见。
+  const admin = isAdmin();
+  document.querySelectorAll('#project-modal-overlay .admin-only').forEach(el => {
+    el.style.display = admin ? '' : 'none';
+  });
   // 重置表单
   resetProjectForm();
   if (proj) {
@@ -1458,12 +1607,15 @@ async function saveProject() {
   };
   if (!body.project) { showToast('Project ID 不能为空', 'error'); return; }
   try {
+    let res;
     if (isEdit) {
-      await fetch('/api/projects/' + encodeURIComponent(body.project), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      res = await fetch('/api/projects/' + encodeURIComponent(body.project), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (!res.ok) { const t = await res.json().catch(()=>({})); throw new Error(t.error || ('HTTP '+res.status)); }
       showToast('项目已更新', 'success');
     } else {
-      await fetch('/api/projects', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-      showToast('项目已创建', 'success');
+      res = await fetch('/api/projects', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (!res.ok) { const t = await res.json().catch(()=>({})); throw new Error(t.error || ('HTTP '+res.status)); }
+      showToast('项目已创建，已自动绑定到你的账号', 'success');
     }
     resetProjectForm();
     loadProjectTable();
@@ -1869,6 +2021,8 @@ function openNodeModal(node) {
     try { nodeCfg = typeof node.configuration === 'string' ? JSON.parse(node.configuration) : node.configuration; } catch(e) { /* ignore */ }
   }
   const nc = (nodeCfg && nodeCfg.node_config) || {};
+  // 回显执行条件 node_condition（所有节点类型通用，进入前判断是否执行）
+  document.getElementById('node-condition').value = nc.node_condition || '';
   // 先加载本节点参数定义（#node-params-container），确保后续渲染 activity 参数明细时，
   // 「引用节点」来源能正确列出节点参数下拉，编辑回显时也能自动选中已绑定的节点参数。
   clearParamRows();
@@ -1995,6 +2149,21 @@ function syncCondConfig() {
   if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
   if (typeof cfg.arguments === 'undefined') cfg.arguments = [];
   if (typeof cfg.responses === 'undefined') cfg.responses = {};
+  document.getElementById('node-configuration').value = prettyJson(cfg);
+}
+
+// 将执行条件输入框的内容写入 Configuration.node_config.node_condition（所有节点类型通用）
+function syncConditionConfig() {
+  let cfg;
+  try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
+  if (typeof cfg !== 'object' || cfg === null) cfg = {};
+  if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
+  const cond = document.getElementById('node-condition').value.trim();
+  if (cond) {
+    cfg.node_config.node_condition = cond;
+  } else {
+    delete cfg.node_config.node_condition;
+  }
   document.getElementById('node-configuration').value = prettyJson(cfg);
 }
 
@@ -2742,6 +2911,7 @@ async function saveNode() {
   };
   // Parse JSON fields
   try {
+    syncConditionConfig(); // 将执行条件写入 Configuration.node_config.node_condition
     body.configuration = JSON.parse(document.getElementById('node-configuration').value || '{}');
     body.additional_info = JSON.parse(document.getElementById('node-additional-info').value || '{}');
     body.params = collectParams();
@@ -7203,6 +7373,222 @@ function rebuildRefFieldSlot(wrap) {
   slot.setAttribute('data-type', type);
   slot.innerHTML = argRenderRefFieldSlot(prevs, prevId, type, selected);
 }
+
+// ============================================================
+// 登录 / 登出 / 当前用户
+// ============================================================
+let currentUser = null; // { username, nickname, role, projects }
+
+async function bootstrapAuth() {
+  try {
+    const res = await fetch('/api/me');
+    if (res.ok) {
+      currentUser = await res.json();
+      onLoginSuccess(currentUser);
+      return;
+    }
+  } catch (_) {}
+  // 未登录：显示遮罩
+  document.getElementById('login-overlay').classList.remove('hidden');
+}
+
+function onLoginSuccess(u) {
+  currentUser = u;
+  document.getElementById('login-overlay').classList.add('hidden');
+  document.getElementById('login-err').textContent = '';
+  const cu = document.getElementById('current-user');
+  cu.style.display = 'inline';
+  cu.textContent = (u.nickname || u.username) + (u.role === 'admin' ? ' (管理员)' : '');
+  if (u.role === 'admin') document.body.classList.add('is-admin');
+  else document.body.classList.remove('is-admin');
+  // 登录后加载主界面数据
+  loadProjects();
+}
+
+async function doLogin() {
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-err');
+  errEl.textContent = '';
+  if (!username || !password) { errEl.textContent = '请输入用户名和密码'; return; }
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    if (res.ok) {
+      const u = await res.json();
+      onLoginSuccess(u);
+    } else {
+      const t = await res.json().catch(() => ({}));
+      errEl.textContent = t.error || '登录失败';
+    }
+  } catch (e) {
+    errEl.textContent = '网络错误: ' + e.message;
+  }
+}
+
+async function doLogout() {
+  try { await fetch('/api/logout', { method: 'POST' }); } catch (_) {}
+  currentUser = null;
+  document.body.classList.remove('is-admin');
+  document.getElementById('current-user').style.display = 'none';
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+  document.getElementById('login-overlay').classList.remove('hidden');
+}
+
+// 修改密码（当前登录用户自助）
+function openPwdModal() {
+  document.getElementById('pwd-old').value = '';
+  document.getElementById('pwd-new').value = '';
+  document.getElementById('pwd-confirm').value = '';
+  document.getElementById('pwd-err').textContent = '';
+  document.getElementById('pwd-modal-overlay').classList.add('show');
+}
+function closePwdModal() {
+  document.getElementById('pwd-modal-overlay').classList.remove('show');
+}
+async function doChangePwd() {
+  const oldP = document.getElementById('pwd-old').value;
+  const newP = document.getElementById('pwd-new').value;
+  const confirmP = document.getElementById('pwd-confirm').value;
+  const errEl = document.getElementById('pwd-err');
+  errEl.textContent = '';
+  if (!oldP || !newP || !confirmP) { errEl.textContent = '请填写完整'; return; }
+  if (newP.length < 6) { errEl.textContent = '新密码至少 6 位'; return; }
+  if (newP !== confirmP) { errEl.textContent = '两次新密码不一致'; return; }
+  try {
+    const res = await fetch('/api/me/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_password: oldP, new_password: newP })
+    });
+    if (res.ok) {
+      showToast('密码已修改', 'success');
+      closePwdModal();
+    } else {
+      const t = await res.json().catch(() => ({}));
+      errEl.textContent = t.error || '修改失败';
+    }
+  } catch (e) {
+    errEl.textContent = '网络错误: ' + e.message;
+  }
+}
+
+// ============================================================
+// 用户管理（仅 admin）
+// ============================================================
+async function openUserModal() {
+  await loadUserTable();
+  document.getElementById('user-modal-overlay').classList.add('show');
+}
+function closeUserModal() {
+  document.getElementById('user-modal-overlay').classList.remove('show');
+}
+
+async function loadUserTable() {
+  const box = document.getElementById('user-list');
+  box.innerHTML = '<div style="color:var(--text-muted);padding:12px">加载中...</div>';
+  try {
+    const res = await fetch('/api/users');
+    if (!res.ok) { box.innerHTML = '<div class="login-err">加载失败</div>'; return; }
+    const users = await res.json();
+    if (!users.length) { box.innerHTML = '<div style="color:var(--text-muted);padding:12px">暂无用户</div>'; return; }
+    box.innerHTML = users.map(u => {
+      const roleTag = u.role === 'admin'
+        ? '<span class="tag tag-admin">管理员</span>'
+        : '<span class="tag tag-viewer">普通用户</span>';
+      const statusTag = u.status === 1 ? '' : '<span class="tag tag-disabled">已禁用</span>';
+      const projText = u.projects === 'all' ? '全部项目'
+        : (u.projects && u.projects.length ? u.projects.join(', ') : '无授权项目');
+      return '<div class="user-row">' +
+        '<div class="u-main">' +
+          '<div class="u-name">' + escHtml(u.username) + roleTag + statusTag + '</div>' +
+          '<div class="u-meta">昵称: ' + escHtml(u.nickname || '-') + ' &middot; 授权项目: ' + escHtml(projText) + '</div>' +
+        '</div>' +
+        '<button class="btn btn-sm btn-outline" onclick="openUserEdit(' + u.id + ')">编辑</button>' +
+        (u.username !== currentUser.username ? '<button class="btn btn-sm btn-danger" onclick="deleteUser(' + u.id + ')">删除</button>' : '') +
+      '</div>';
+    }).join('');
+  } catch (e) {
+    box.innerHTML = '<div class="login-err">加载失败: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+async function openUserEdit(id) {
+  let allProjects = [];
+  try {
+    const pr = await fetch('/api/projects');
+    if (pr.ok) { const pd = await pr.json(); allProjects = (pd || []).map(p => p.project); }
+  } catch (_) {}
+  let user = null;
+  let authorized = [];
+  if (id) {
+    const res = await fetch('/api/users');
+    if (res.ok) {
+      const users = await res.json();
+      user = users.find(x => x.id === id) || null;
+      if (user && user.projects !== 'all') authorized = user.projects || [];
+    }
+  }
+  document.getElementById('user-edit-id').value = id || '';
+  document.getElementById('user-edit-title').textContent = id ? '编辑用户' : '新建用户';
+  document.getElementById('user-edit-username').value = user ? user.username : '';
+  document.getElementById('user-edit-username').disabled = !!id;
+  document.getElementById('user-edit-nickname').value = user ? (user.nickname || '') : '';
+  document.getElementById('user-edit-password').value = '';
+  document.getElementById('user-edit-password').placeholder = id ? '留空表示不修改' : '请输入密码';
+  document.getElementById('user-edit-role').value = user ? user.role : 'viewer';
+  document.getElementById('user-edit-status').value = user ? String(user.status) : '1';
+  const grid = document.getElementById('user-edit-projects');
+  grid.innerHTML = allProjects.map(p =>
+    '<label><input type="checkbox" value="' + escAttr(p) + '"' + (authorized.includes(p) ? ' checked' : '') + '> ' + escHtml(p) + '</label>'
+  ).join('') || '<span style="color:var(--text-muted)">暂无项目</span>';
+  document.getElementById('user-edit-overlay').classList.add('show');
+}
+
+function closeUserEdit() {
+  document.getElementById('user-edit-overlay').classList.remove('show');
+}
+
+async function saveUserEdit() {
+  const id = document.getElementById('user-edit-id').value;
+  const payload = {
+    username: document.getElementById('user-edit-username').value.trim(),
+    password: document.getElementById('user-edit-password').value,
+    nickname: document.getElementById('user-edit-nickname').value.trim(),
+    role: document.getElementById('user-edit-role').value,
+    status: parseInt(document.getElementById('user-edit-status').value, 10),
+    projects: Array.from(document.querySelectorAll('#user-edit-projects input:checked')).map(c => c.value)
+  };
+  if (!payload.username) { showToast('用户名必填', 'error'); return; }
+  if (!id && !payload.password) { showToast('新建用户密码必填', 'error'); return; }
+  try {
+    const res = id
+      ? await fetch('/api/users/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      : await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!res.ok) { const t = await res.json().catch(() => ({})); throw new Error(t.error || res.status); }
+    showToast(id ? '用户已更新' : '用户已创建', 'success');
+    closeUserEdit();
+    loadUserTable();
+    loadProjects();
+  } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
+}
+
+async function deleteUser(id) {
+  if (!confirm('确认删除该用户？其项目授权也会一并清除。')) return;
+  try {
+    const res = await fetch('/api/users/' + id, { method: 'DELETE' });
+    if (!res.ok) { const t = await res.json().catch(() => ({})); throw new Error(t.error || res.status); }
+    showToast('用户已删除', 'success');
+    loadUserTable();
+  } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+}
+
+// 启动：先鉴权，再加载主界面
+bootstrapAuth();
 </script>
 </body>
 </html>

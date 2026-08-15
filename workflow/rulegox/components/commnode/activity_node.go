@@ -33,6 +33,7 @@ type ActivityGroup [][]*activity.Activity
 type ActivityNode struct {
 	Configuration *CommConfiguration     `json:"configuration"`
 	activities    [][]*activity.Activity // 执行阶段列表
+	nodeCondition string                 // 配置该node执行的条件，如果条件判断为true，则该node可以执行，否则不执行
 
 	// mqExecutor 包级默认 MQ 执行器（通过 commnode.SetActivityMQExecutor 注入）。
 	// 非空且执行环境（metaData.Env）非空时，单个 Activity 优先走 MQ 远程执行；
@@ -47,7 +48,8 @@ type ActivityNode struct {
 }
 
 type activityCfg struct {
-	Activities [][]*activity.Activity `json:"activities"`
+	Activities    [][]*activity.Activity `json:"activities"`
+	NodeCondition string                 `json:"node_condition"`
 }
 
 // cloneActivityList 深拷贝一组 Activity。
@@ -92,6 +94,8 @@ func (x *ActivityNode) New() types.Node {
 	return &ActivityNode{
 		Configuration: cfg,
 		activities:    cloneStages(x.activities),
+		nodeCondition: x.nodeCondition,
+		ruleObj:       x.ruleObj,
 		mqExecutor:    defaultActivityMQExecutor,
 	}
 }
@@ -140,6 +144,8 @@ func (x *ActivityNode) Init(_ types.Config, configuration types.Configuration) e
 
 	cfgActs := new(activityCfg)
 	_ = conv.Unmarshal(x.Configuration.NodeConfig, cfgActs)
+	// 解析执行条件（node_config.node_condition）：进入前判断是否执行，不满足则跳过
+	x.nodeCondition = cfgActs.NodeCondition
 	if len(cfgActs.Activities) == 0 {
 		return nil // 沿用注册时的原型阶段列表
 	}
@@ -179,6 +185,30 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	if err != nil {
 		ctx.TellFailure(msg, err)
 		return
+	}
+
+	// 执行条件（node_config.node_condition）判断：配置了则在进入前先求值，
+	// 不满足则跳过该节点（不执行活动），但流程继续向下传递。
+	if x.nodeCondition != "" {
+		condParams, _ := allParam.ToMaps()
+		for k, v := range stepFlowCtx.Arguments {
+			condParams[k] = v
+		}
+		condRes, cErr := x.ruleObj.RunString(x.nodeCondition, condParams)
+		if cErr != nil {
+			ctx.TellFailure(msg, fmt.Errorf("node_condition 表达式执行错误: %v", cErr))
+			return
+		}
+		ok, bErr := conv.Convert[bool](condRes)
+		if bErr != nil {
+			ctx.TellFailure(msg, fmt.Errorf("node_condition 表达式结果不是布尔值: %v", condRes))
+			return
+		}
+		if !ok {
+			// 条件不满足：跳过节点执行，直接放行消息，不影响下游流程
+			ctx.TellSuccess(msg)
+			return
+		}
 	}
 
 	metaDataAny := msg.GetMetadata()
@@ -371,34 +401,6 @@ func (x *ActivityNode) execParallelStage(ctx types.RuleContext, nodeSpanId strin
 	return retErr
 }
 
-// deepCopyParamCtx 通过序列化再反序列化实现 ParamCtx 深拷贝。
-func deepCopyFlowCtx(src *paramx.FlowContext) *paramx.FlowContext {
-	dst := &paramx.FlowContext{}
-	_ = conv.Unmarshal(conv.String(src), dst)
-	return dst
-}
-func deepCopyStep(src *paramx.Step) *paramx.Step {
-	dst := &paramx.Step{}
-	_ = conv.Unmarshal(conv.String(src), dst)
-	return dst
-}
-
-// toMapValue 将 Activity 返回的 arguments（可能为 map 或结构体）安全转为 map[string]any。
-// 非 map 类型（如标量）回退为空 map，避免 SetStepArguments 接收非法类型。
-func toMapValue(v any) map[string]any {
-	if v == nil {
-		return map[string]any{}
-	}
-	if m, ok := v.(map[string]any); ok {
-		return m
-	}
-	m := make(map[string]any)
-	if err := conv.Unmarshal(conv.String(v), &m); err == nil {
-		return m
-	}
-	return map[string]any{}
-}
-
 // execOneActivity 执行单个 Activity，结果回写 allParam。
 // 执行策略：
 //   - 若已注入 mqExecutor 且执行环境（metaData.Env）非空，则通过 MQ 同步调用分布式
@@ -472,25 +474,7 @@ func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*p
 		}
 		ruleObj := templates.NewTemplate(exp, "{{", "}}")
 		tempVal := ruleObj.Replace(allParam)
-		actParam[item.Key] = tempVal
-
-		if item.Type == "array" {
-			var expAny = make([]any, 0)
-			err := conv.Unmarshal(tempVal, &expAny)
-			if err == nil {
-				log.Printf("activityNode getActivityParam: Unmarshal err: %v", err)
-				actParam[item.Key] = expAny
-				continue
-			}
-		} else if item.Type == "map" {
-			var expMap = make(map[string]any)
-			err := conv.Unmarshal(tempVal, &expMap)
-			if err == nil {
-				log.Printf("activityNode getActivityParam: Unmarshal err: %v", err)
-				actParam[item.Key] = expMap
-				continue
-			}
-		}
+		actParam[item.Key], _ = conv.ConvertForTypeString(item.Type, tempVal)
 	}
 	return actParam
 }

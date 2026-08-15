@@ -9,6 +9,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	param "github.com/magic-lib/go-plat-utils/utils/httputil/param"
@@ -42,6 +44,7 @@ type WorkflowService struct {
 	activityTestRecordRepo *repo.ActivityTestRecordRepo
 	activityLogRepo        *repo.ActivityLogRepo
 	nodeLogRepo            *repo.NodeLogRepo
+	userRepo               *repo.UserRepo
 	mqExecutor             *workflow.MQExecutor
 	dslBuilder             *builder.DSLBuilder
 	engine                 *engine.WorkflowEngine
@@ -63,6 +66,9 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		&models.ActivityTestRecordModel{},
 		&models.ActivityLogModel{},
 		&models.NodeLogModel{},
+		&models.UserModel{},
+		&models.UserSessionModel{},
+		&models.UserProjectModel{},
 	); err != nil {
 		return nil, err
 	}
@@ -110,6 +116,12 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	activityTestRecordRepo := repo.NewActivityTestRecordRepo(db)
 	activityLogRepo := repo.NewActivityLogRepo(db)
 	nodeLogRepo := repo.NewNodeLogRepo(db)
+	userRepo := repo.NewUserRepo(db)
+
+	// 幂等种子：若 wf_users 为空，则根据环境变量创建一个 bootstrap 管理员账号。
+	if err := ensureBootstrapAdmin(db, userRepo); err != nil {
+		return nil, err
+	}
 
 	s := &WorkflowService{
 		db:                     db,
@@ -125,6 +137,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		activityTestRecordRepo: activityTestRecordRepo,
 		activityLogRepo:        activityLogRepo,
 		nodeLogRepo:            nodeLogRepo,
+		userRepo:               userRepo,
 		mqExecutor:             workflow.NewMQExecutorWithLogAndEnv(activityLogRepo, envConfigRepo),
 		dslBuilder:             builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
 		engine:                 engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
@@ -267,6 +280,9 @@ func (s *WorkflowService) DeleteNode(ctx context.Context, project, nodeID string
 
 // RegisterSubChain 注册子链到数据库。
 func (s *WorkflowService) RegisterSubChain(ctx context.Context, def *workflow.SubChainDef) error {
+	// 强制将 DSL 中的 ruleChain.id 还原为子链 ID，name 同步为子链名称，
+	// 防止用户手动修改 DSL 导致 id 与子链不一致（id 始终固定为 ChainID）。
+	normalizeSubChainDSL(def)
 	return s.subChainRepo.Create(ctx, def)
 }
 
@@ -292,7 +308,36 @@ func (s *WorkflowService) ListSubChains(ctx context.Context, project string) ([]
 
 // UpdateSubChain 更新子链配置。
 func (s *WorkflowService) UpdateSubChain(ctx context.Context, def *workflow.SubChainDef) error {
+	// 同 RegisterSubChain：DSL 中 ruleChain.id 固定为子链 ID，name 同步为当前名称。
+	normalizeSubChainDSL(def)
 	return s.subChainRepo.Update(ctx, def)
+}
+
+// normalizeSubChainDSL 强制把 def.DSLJSON 中的 ruleChain.id 还原为子链 ID（ChainID），
+// 并把 ruleChain.name 同步为子链当前名称（def.Name）。其余 DSL 内容原样保留。
+// 这样无论用户在前端手动怎么改 DSL 里的 id/name，落库时都会被纠正：
+// id 永远等于子链 ID，name 跟随子链名称变化，id 不会被改掉。
+// 若 def.DSLJSON 为空或非法 JSON，则不做处理（由 builder 在装配时正确生成）。
+func normalizeSubChainDSL(def *workflow.SubChainDef) {
+	if def == nil || strings.TrimSpace(def.DSLJSON) == "" || def.ChainID == "" {
+		return
+	}
+	var root map[string]interface{}
+	if err := json.Unmarshal([]byte(def.DSLJSON), &root); err != nil {
+		// 非法 JSON 不强行覆盖，交由后续校验/装配流程处理。
+		return
+	}
+	rc, ok := root["ruleChain"].(map[string]interface{})
+	if !ok {
+		// 不存在 ruleChain 节点时创建一个，保证 id/name 存在。
+		rc = map[string]interface{}{}
+		root["ruleChain"] = rc
+	}
+	rc["id"] = def.ChainID
+	rc["name"] = def.Name
+	if b, err := json.Marshal(root); err == nil {
+		def.DSLJSON = string(b)
+	}
 }
 
 // DeleteSubChain 软删除子链。
@@ -309,7 +354,12 @@ func (s *WorkflowService) CreateSubChainBuild(ctx context.Context, req *workflow
 		}
 		req.ChainID = nextID
 	}
-	return s.dslBuilder.BuildSubChain(ctx, req)
+	def, err := s.dslBuilder.BuildSubChain(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	normalizeSubChainDSL(def)
+	return def, nil
 }
 
 // UpdateSubChainBuild 编排方式更新子链 DSL（保留原 ChainID）。
@@ -321,9 +371,21 @@ func (s *WorkflowService) UpdateSubChainBuild(ctx context.Context, req *workflow
 	if err != nil {
 		return nil, err
 	}
+	// DSL 中 ruleChain.id 固定为子链 ID，name 同步为当前名称（安全兜底）。
+	normalizeSubChainDSL(def)
 	if err := s.subChainRepo.Update(ctx, def); err != nil {
 		return nil, err
 	}
+	return def, nil
+}
+
+// buildSubChainDef 内部公共：装配+规范化 DSL（id=ChainID, name=ChainName）。
+func (s *WorkflowService) buildSubChainDef(ctx context.Context, req *workflow.BuildSubChainRequest) (*workflow.SubChainDef, error) {
+	def, err := s.dslBuilder.AssembleSubChain(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	normalizeSubChainDSL(def)
 	return def, nil
 }
 
@@ -1226,6 +1288,49 @@ func (s *WorkflowService) ActivityLogRepo() *repo.ActivityLogRepo {
 // NodeLogRepo 返回 node 运行日志仓储实例（供 web 层构造收集器复用同一仓储）。
 func (s *WorkflowService) NodeLogRepo() *repo.NodeLogRepo {
 	return s.nodeLogRepo
+}
+
+// UserRepo 返回用户/会话/授权仓储实例（供 web 层鉴权与用户管理复用）。
+func (s *WorkflowService) UserRepo() *repo.UserRepo {
+	return s.userRepo
+}
+
+// ensureBootstrapAdmin 在 wf_users 为空时，按环境变量创建一个管理员账号（幂等）。
+func ensureBootstrapAdmin(db *gorm.DB, userRepo *repo.UserRepo) error {
+	ctx := context.Background()
+	cnt, err := userRepo.CountUsers(ctx)
+	if err != nil {
+		return err
+	}
+	if cnt > 0 {
+		return nil
+	}
+	username := osGetenv("WF_BOOTSTRAP_USER", "admin")
+	rawPwd := osGetenv("WF_BOOTSTRAP_PASSWORD", "admin123")
+	hash, err := bcrypt.GenerateFromPassword([]byte(rawPwd), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	_, err = userRepo.CreateUser(ctx, &models.UserModel{
+		Username:     username,
+		PasswordHash: string(hash),
+		Nickname:     "Admin",
+		Role:         "admin",
+		Status:       1,
+	})
+	if err != nil {
+		return err
+	}
+	log.Info().Msgf("bootstrap admin user created: %s", username)
+	return nil
+}
+
+// osGetenv 读取环境变量，缺失时返回默认值。
+func osGetenv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 // ListNodeLogsGlobal 按条件全局查询 node 运行日志（按时间倒序，支持分页），返回日志列表与总条数。
