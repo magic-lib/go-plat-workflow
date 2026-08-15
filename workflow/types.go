@@ -704,10 +704,6 @@ const ActivityArgSourceRefNode = "ref_node"
 //	    responses map[string]any // 该 activity 的返回值（整体可用 {{id.responses}}，单字段用 {{id.responses.field}}）
 //	    arguments map[string]any // 调用该 activity 时传入的参数值（单字段用 {{id.arguments.key}}）
 //	}
-//
-// 同时本节点参数定义（NodeDef.Params）以顶层 key 形式注入消息 data，供 {{node_param_key}} 引用。
-// 前序集合 = 按二维 stages 扁平顺序排在当前 activity 之前的所有 activity（外层串行，故其返回值已先就绪）。
-const ActivityRefPathPrefix = "{{"
 
 // NodeActivityConfig activity 类型节点的内部编排配置。
 // 约定存放在 NodeDef.Configuration.node_config.stages（二维数组）中。

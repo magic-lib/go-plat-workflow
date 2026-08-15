@@ -472,7 +472,7 @@ func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*p
 				continue
 			}
 		}
-		ruleObj := templates.NewTemplate(exp, "{{", "}}")
+		ruleObj := templates.NewTemplate(exp, templates.DefaultPrefix, templates.DefaultSuffix)
 		tempVal := ruleObj.Replace(allParam)
 		actParam[item.Key], _ = conv.ConvertForTypeString(item.Type, tempVal)
 	}

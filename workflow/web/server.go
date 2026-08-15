@@ -17,7 +17,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow/service"
 )
 
-//go:embed index.html
+//go:embed index.html orch.html assets
 var webAssets embed.FS
 
 // WebServer 工作流管理 Web 服务。
@@ -62,6 +62,10 @@ func (ws *WebServer) Shutdown(ctx context.Context) error {
 func (ws *WebServer) registerRoutes() {
 	// 静态页面
 	ws.mux.HandleFunc("/", ws.serveIndex)
+	// 子链编排独立页面
+	ws.mux.HandleFunc("GET /orch", ws.serveOrch)
+	// 公共静态资源（CSS / JS）
+	ws.mux.HandleFunc("GET /assets/", ws.serveAssets)
 
 	// 健康检查
 	ws.mux.HandleFunc("GET /api/health", ws.handleHealth)
@@ -177,6 +181,41 @@ func (ws *WebServer) serveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+// serveOrch 返回子链编排独立页面（orch.html）
+func (ws *WebServer) serveOrch(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(webAssets, "orch.html")
+	if err != nil {
+		http.Error(w, "orch.html not found", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+// serveAssets 返回公共静态资源（assets 目录下的 css/js 等）
+func (ws *WebServer) serveAssets(w http.ResponseWriter, r *http.Request) {
+	// /assets/xxx -> assets/xxx
+	name := strings.TrimPrefix(r.URL.Path, "/assets/")
+	if name == "" || strings.Contains(name, "..") {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := fs.ReadFile(webAssets, "assets/"+name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	switch {
+	case strings.HasSuffix(name, ".css"):
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	case strings.HasSuffix(name, ".js"):
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	default:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
 	w.Write(data)
 }
 
