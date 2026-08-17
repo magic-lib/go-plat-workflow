@@ -15,8 +15,8 @@ type ProjectModel struct {
 	Name        string         `gorm:"type:varchar(255);not null" json:"name"`
 	Description string         `gorm:"type:varchar(512)" json:"description"`
 	Status      int8           `gorm:"default:1;index" json:"status"`
-	// SecretKey 项目密钥，用于对外接口鉴权（不通过 ProjectDef 对外暴露）
-	SecretKey string `gorm:"column:secret_key;type:varchar(255)" json:"-"`
+	// CreatedBy 项目创建者用户名；普通用户在已有项目列表中仅展示自己创建的项目。
+	CreatedBy string `gorm:"column:created_by;type:varchar(128);index" json:"created_by"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
@@ -34,6 +34,7 @@ func (m *ProjectModel) ToDef() *workflow.ProjectDef {
 		Name:        m.Name,
 		Description: m.Description,
 		Status:      m.Status,
+		CreatedBy:   m.CreatedBy,
 	}
 }
 
@@ -43,5 +44,4 @@ func (m *ProjectModel) FromDef(def *workflow.ProjectDef) {
 	m.Name = def.Name
 	m.Description = def.Description
 	m.Status = def.Status
-	m.SecretKey = def.SecretKey
 }

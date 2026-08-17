@@ -42,10 +42,16 @@ function onProjectChange() {
 async function loadProjects() {
   try {
     const data = await api('/api/projects');
+    // 前端兜底：普通用户（非 admin）仅展示被授权的项目，过滤掉无权限项。
+    let list = data || [];
+    if (currentUser && currentUser.role !== 'admin' && Array.isArray(currentUser.projects)) {
+      const allowed = new Set(currentUser.projects);
+      list = list.filter(p => allowed.has(p.project));
+    }
     const sel = document.getElementById('project-select');
     const cur = sel.value;
     sel.innerHTML = '<option value="">-- 选择项目 --</option>';
-    (data || []).forEach(p => {
+    (list || []).forEach(p => {
       const opt = document.createElement('option');
       opt.value = p.project;
       opt.textContent = p.name ? p.project + ' (' + p.name + ')' : p.project;
@@ -54,13 +60,13 @@ async function loadProjects() {
     // 恢复之前选中值：优先 localStorage 中保存的项目，其次当前下拉值，最后回退到第一项
     let saved = '';
     try { saved = localStorage.getItem('wf_selected_project') || ''; } catch (_) {}
-    if (saved && data.some(p => p.project === saved)) {
+    if (saved && list.some(p => p.project === saved)) {
       sel.value = saved;
       onProjectChange();
-    } else if (cur && data.some(p => p.project === cur)) {
+    } else if (cur && list.some(p => p.project === cur)) {
       sel.value = cur;
-    } else if (data.length > 0) {
-      sel.value = data[0].project;
+    } else if (list.length > 0) {
+      sel.value = list[0].project;
       onProjectChange();
     }
   } catch (e) { showToast('加载项目列表失败: ' + e.message, 'error'); }
@@ -84,6 +90,9 @@ function openProjectModal(proj) {
     document.getElementById('project-status').value = String(proj.status);
     document.getElementById('project-description').value = proj.description || '';
     document.getElementById('project-save-btn').textContent = '更新';
+    loadProjectSecrets(proj.project); // admin 可见：加载该项目的多密钥列表
+  } else {
+    loadProjectSecrets(''); // 新建态清空密钥列表
   }
   document.getElementById('project-modal-overlay').classList.add('show');
   loadProjectTable();
@@ -99,6 +108,10 @@ function resetProjectForm() {
   document.getElementById('project-status').value = '1';
   document.getElementById('project-description').value = '';
   document.getElementById('project-save-btn').textContent = '新增';
+  document.getElementById('project-secret').value = '';
+  document.getElementById('project-secret-remark').value = '';
+  _projectSecrets = [];
+  renderProjectSecrets();
 }
 
 function closeProjectModal() {
@@ -107,15 +120,19 @@ function closeProjectModal() {
 
 async function loadProjectTable() {
   try {
-    const res = await fetch('/api/projects');
-    const data = await res.json();
+    const data = await api('/api/projects');
+    // 普通用户（非 admin）在已有项目列表中仅展示自己创建的项目
+    let list = data || [];
+    if (currentUser && currentUser.role !== 'admin' && currentUser.username) {
+      list = list.filter(p => p.created_by === currentUser.username);
+    }
     const tbody = document.querySelector('#projects-table tbody');
-    if (!data.length) {
+    if (!list.length) {
       tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><p>暂无项目</p></div></td></tr>';
       return;
     }
-    window._projectsForEdit = data; // 缓存供编辑按钮索引使用
-    tbody.innerHTML = data.map((p, i) => `
+    window._projectsForEdit = list; // 缓存供编辑按钮索引使用
+    tbody.innerHTML = list.map((p, i) => `
       <tr>
         <td class="code-cell" title="${esc(p.project)}">${esc(p.project)}</td>
         <td>${esc(p.name)}</td>
@@ -168,27 +185,74 @@ async function deleteProject(id) {
   } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
 }
 
-async function saveProjectSecret() {
+let _projectSecrets = [];
+
+async function loadProjectSecrets(project) {
+  if (!project) { _projectSecrets = []; renderProjectSecrets(); return; }
+  try {
+    const list = await api('/api/projects/' + encodeURIComponent(project) + '/secrets');
+    _projectSecrets = list || [];
+  } catch (e) {
+    _projectSecrets = [];
+  }
+  renderProjectSecrets();
+}
+
+function renderProjectSecrets() {
+  const box = document.getElementById('project-secrets-list');
+  if (!box) return;
+  if (!_projectSecrets || !_projectSecrets.length) {
+    box.innerHTML = '<div class="empty-state" style="padding:10px"><p style="margin:0">暂无密钥，添加后可分配给不同账户</p></div>';
+    return;
+  }
+  box.innerHTML = _projectSecrets.map((s, i) => `
+    <div class="secret-item">
+      <code class="secret-mask">${esc(maskSecret(s.secret_key))}</code>
+      <span class="secret-remark">${esc(s.remark || '')}</span>
+      <button class="btn btn-sm btn-danger" onclick="deleteProjectSecret(${i})">删除</button>
+    </div>`).join('');
+}
+
+function maskSecret(k) {
+  if (!k) return '';
+  if (k.length <= 4) return k;
+  return k.slice(0, 2) + '****' + k.slice(-2);
+}
+
+async function addProjectSecret() {
   const project = document.getElementById('project-project-id').value.trim();
-  if (!project) { showToast('请先填写 Project ID', 'error'); return; }
+  if (!project) { showToast('请先填写 Project ID 并创建项目', 'error'); return; }
   const secret = document.getElementById('project-secret').value;
   if (!secret) { showToast('密钥不能为空', 'error'); return; }
-  // 页面专用：密钥随项目更新接口一起提交（不提供独立的对外密钥设置接口）
-  const existing = (window._projectsForEdit || []).find(p => p.project === project);
+  const remark = document.getElementById('project-secret-remark').value.trim();
   try {
-    if (!existing) {
-      // 项目不存在则先创建（不含密钥）
-      await fetch('/api/projects', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ project, name: project, status: 1 }) });
-    }
-    const res = await fetch('/api/projects/' + encodeURIComponent(project), {
-      method: 'PUT', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ project, name: project, status: 1, secret_key: secret })
+    const res = await fetch('/api/projects/' + encodeURIComponent(project) + '/secrets', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ secret_key: secret, remark })
     });
-    if (!res.ok) { const t = await res.json().catch(()=>({})); throw new Error(t.error || res.status); }
-    showToast('项目密钥已保存', 'success');
-    loadProjectTable();
-    loadProjects();
-  } catch (e) { showToast('保存密钥失败: ' + e.message, 'error'); }
+    if (!res.ok) { const t = await res.json().catch(()=>({})); throw new Error(t.error || ('HTTP '+res.status)); }
+    document.getElementById('project-secret').value = '';
+    document.getElementById('project-secret-remark').value = '';
+    showToast('密钥已添加', 'success');
+    await loadProjectSecrets(project);
+  } catch (e) { showToast('添加密钥失败: ' + e.message, 'error'); }
+}
+
+async function deleteProjectSecret(idx) {
+  const s = _projectSecrets[idx];
+  if (!s) return;
+  const project = document.getElementById('project-project-id').value.trim();
+  if (!project) { showToast('请先填写 Project ID', 'error'); return; }
+  if (!confirm('确定删除该密钥吗？使用该密钥的账户将立即失去访问权限。')) return;
+  try {
+    const res = await fetch('/api/projects/' + encodeURIComponent(project) + '/secrets', {
+      method: 'DELETE', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ secret_key: s.secret_key })
+    });
+    if (!res.ok) { const t = await res.json().catch(()=>({})); throw new Error(t.error || ('HTTP '+res.status)); }
+    showToast('密钥已删除', 'success');
+    await loadProjectSecrets(project);
+  } catch (e) { showToast('删除密钥失败: ' + e.message, 'error'); }
 }
 
 async function queryProjectConfig() {
@@ -419,7 +483,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     btn.classList.add('active');
     const tab = btn.dataset.tab;
-    document.getElementById('tab-' + tab).classList.add('active');
+    const content = document.getElementById('tab-' + tab);
+    if (!content) return; // 跳转类按钮（如 orch.html 菜单跳回 index）无本页 content
+    content.classList.add('active');
     if (tab === 'nodes') loadNodes();
     else if (tab === 'activities') { loadActivityEnvOptions(); }
     else if (tab === 'sub-chains') loadSubChains();
@@ -458,8 +524,10 @@ function filterTable(tableId, q) {
 function filterNodes() {
   const searchEl = document.querySelector('#tab-nodes .search-box');
   const kindEl = document.getElementById('node-kind-filter');
+  const tagEl = document.getElementById('node-tag-filter');
   const q = (searchEl ? searchEl.value : '').toLowerCase();
   const kind = kindEl ? kindEl.value : '';
+  const tag = tagEl ? tagEl.value : '';
   const rows = document.querySelectorAll('#nodes-table tbody tr');
   rows.forEach(r => {
     let show = true;
@@ -473,8 +541,91 @@ function filterNodes() {
         if (kind === 'action' && kindText !== '策略执行') show = false;
       }
     }
+    if (show && tag) {
+      // 第6列是"标签"列（0-based index 5），取所有 chip 文本
+      const tagCell = r.cells[5];
+      const has = tagCell && Array.prototype.some.call(tagCell.querySelectorAll('.tag-chip'), c => c.textContent.replace(' ✓','').trim() === tag);
+      if (!has) show = false;
+    }
     r.style.display = show ? '' : 'none';
   });
+}
+
+// 渲染标签 chip 列表（列表列展示用，不可点击）
+function renderTagChipsHtml(tags) {
+  if (!tags || !tags.length) return '<span style="color:var(--text-muted)">-</span>';
+  return tags.map(t => '<span class="badge ' + tagColorClass(t) + '" style="margin-right:4px">' + escHtml(t) + '</span>').join('');
+}
+
+// 读取节点弹窗当前已选标签（input 手动输入 + 已点选 chip）
+function getNodeSelectedTags() {
+  return document.getElementById('node-tags').value.split(',')
+    .map(s => s.trim()).filter(s => s !== '');
+}
+
+// 设置节点弹窗当前已选标签（写回 input，并刷新 chips 高亮）
+function setNodeSelectedTags(tags) {
+  const uniq = [];
+  (tags || []).forEach(t => { if (t && uniq.indexOf(t) < 0) uniq.push(t); });
+  document.getElementById('node-tags').value = uniq.join(',');
+  renderNodeTagChips();
+}
+
+// 收集节点弹窗当前已选标签（保存时调用）
+function collectNodeTags() {
+  return getNodeSelectedTags();
+}
+
+// 渲染可点击的历史标签 chips（已选中的高亮，点击切换）；数据来源为节点列表缓存
+function renderNodeTagChips() {
+  const box = document.getElementById('node-tags-chips');
+  if (!box) return;
+  const allTags = {};
+  (window._nodesForEdit || []).forEach(n => {
+    (n.tags || []).forEach(t => { if (t) allTags[t] = true; });
+  });
+  const selected = getNodeSelectedTags();
+  const tags = Object.keys(allTags).sort();
+  if (tags.length === 0) { box.innerHTML = ''; return; }
+  box.innerHTML = tags.map(t => {
+    const v = escHtml(t);
+    const on = selected.indexOf(t) >= 0 ? ' on' : '';
+    return '<span class="tag-chip' + on + '" onclick="toggleNodeTag(\'' + v.replace(/'/g, "\\'") + '\')">' + v + (on ? ' ✓' : '') + '</span>';
+  }).join('');
+}
+
+// 点击 chip 切换标签选中状态
+function toggleNodeTag(tag) {
+  const selected = getNodeSelectedTags();
+  const idx = selected.indexOf(tag);
+  if (idx >= 0) {
+    selected.splice(idx, 1);
+  } else {
+    selected.push(tag);
+  }
+  setNodeSelectedTags(selected);
+}
+
+// 根据当前节点列表所有标签刷新筛选下拉项
+function refreshNodeTagFilter() {
+  const sel = document.getElementById('node-tag-filter');
+  if (!sel) return;
+  const cur = sel.value;
+  const tagSet = {};
+  (window._nodesForEdit || []).forEach(n => {
+    (n.tags || []).forEach(t => { if (t) tagSet[t] = true; });
+  });
+  const tags = Object.keys(tagSet).sort();
+  sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => {
+    const v = escHtml(t);
+    return '<option value="' + v + '">' + v + '</option>';
+  }).join('');
+  if (tags.indexOf(cur) >= 0) sel.value = cur;
+}
+
+// 标签筛选变化：结果集改变并重新加载列表
+function onNodeTagFilterChange() {
+  loadNodes();
 }
 
 // ============================================================
@@ -509,14 +660,24 @@ function escAttr(s) {
 async function loadNodes() {
   try {
     const env = getActivityListEnv();
-    const envQ = env ? ('?env=' + encodeURIComponent(env)) : '';
+    const nsFilter = document.getElementById('node-namespace-filter');
+    const ns = nsFilter ? nsFilter.value : '';
+    const tagFilter = document.getElementById('node-tag-filter');
+    const tag = tagFilter ? tagFilter.value : '';
+    const params = [];
+    if (env) params.push('env=' + encodeURIComponent(env));
+    if (ns) params.push('namespace=' + encodeURIComponent(ns));
+    if (tag) params.push('tag=' + encodeURIComponent(tag));
+    const envQ = params.length ? ('?' + params.join('&')) : '';
     const nodes = await api('/api/nodes' + envQ);
     const tbody = document.querySelector('#nodes-table tbody');
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
       return;
     }
     window._nodesForEdit = nodes; // 缓存供编辑按钮索引使用
+    refreshNodeNamespaceFilter(); // 同步命名空间过滤下拉（基于当前项目 Activity 缓存）
+    refreshNodeTagFilter(); // 同步标签过滤下拉（基于当前列表已有标签）
     tbody.innerHTML = nodes.map((n, i) => `
       <tr>
         <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
@@ -524,6 +685,8 @@ async function loadNodes() {
         <td><span class="code-cell">${esc(n.type)}</span></td>
         <td><span class="badge ${n.kind==='condition'?'badge-warning':'badge-info'}">${n.kind==='condition'?'查询获取':'策略执行'}</span></td>
         <td>${esc(n.category || '-')}</td>
+        <td>${renderTagChipsHtml(n.tags)}</td>
+        <td>${esc(n.namespace || '-')}</td>
         <td><span class="badge ${n.status==1?'badge-on':'badge-off'}">${n.status==1?'启用':'禁用'}</span></td>
         <td>${esc(n.version || '-')}</td>
         <td title="${esc(n.description||'')}">${esc(trunc(n.description, 30))}</td>
@@ -537,15 +700,51 @@ async function loadNodes() {
   } catch (e) { showToast('加载节点失败: ' + e.message, 'error'); }
 }
 
+// 从项目下 Activity 缓存去重得到命名空间列表，填充 Node 弹窗的命名空间选择框
+function refreshNodeNamespaceOptions() {
+  const sel = document.getElementById('node-namespace');
+  if (!sel) return;
+  const cur = sel.value;
+  const cache = (window._activityCache || []);
+  const nsSet = {};
+  cache.forEach(a => { if (a.act_namespace) nsSet[a.act_namespace] = true; });
+  const namespaces = Object.keys(nsSet).sort();
+  sel.innerHTML = '<option value="">（无）</option>' + namespaces.map(ns =>
+    `<option value="${esc(ns)}">${esc(ns)}</option>`
+  ).join('');
+  // 保留当前选择（若有）
+  sel.value = namespaces.indexOf(cur) >= 0 ? cur : '';
+}
+
+// 用当前项目下 Node 去重命名空间填充 Nodes 列表的命名空间过滤下拉
+function refreshNodeNamespaceFilter() {
+  const sel = document.getElementById('node-namespace-filter');
+  if (!sel) return;
+  const cur = sel.value;
+  const nodes = (window._nodesForEdit || []);
+  const nsSet = {};
+  nodes.forEach(n => { if (n.namespace) nsSet[n.namespace] = true; });
+  const namespaces = Object.keys(nsSet).sort();
+  sel.innerHTML = '<option value="">全部命名空间</option>' + namespaces.map(ns =>
+    `<option value="${esc(ns)}">${esc(ns)}</option>`
+  ).join('');
+  sel.value = namespaces.indexOf(cur) >= 0 ? cur : '';
+}
+
 function openNodeModal(node) {
   document.getElementById('node-is-edit').value = node ? '1' : '';
-  document.getElementById('node-modal-title').textContent = node ? '编辑 Node' : '新增 Node';
+  document.getElementById('node-modal-title-text').textContent = node ? '编辑 Node' : '新增 Node';
   document.getElementById('node-node-id').value = node ? node.node_id : '';
   document.getElementById('node-node-id').readOnly = !!node;
   document.getElementById('node-name').value = node ? node.name || '' : '';
+  // 命名空间选项来自该项目下 Activity 的去重命名空间；缓存就绪后再填充并回显选中值
+  refreshNodeNamespaceOptions();
+  document.getElementById('node-namespace').value = node ? node.namespace || '' : '';
   document.getElementById('node-type').value = node ? node.type : 'log';
   document.getElementById('node-kind').value = node ? node.kind || 'action' : 'action';
   document.getElementById('node-category').value = node ? node.category || '' : '';
+  document.getElementById('node-tags').value = node && Array.isArray(node.tags) ? node.tags.join(',') : '';
+  renderNodeTagChips();
   document.getElementById('node-version').value = node ? node.version || '' : '';
   document.getElementById('node-status').value = node ? String(node.status) : '1';
   document.getElementById('node-configuration').value = node ? prettyJson(node.configuration) : '{\n  "jsScript": "return {msg: \'hello\'};"\n}';
@@ -617,6 +816,9 @@ function openNodeModal(node) {
         }
       } catch(e) { /* ignore */ }
     }
+    // 缓存就绪后命名空间选项才完整，重新填充并回显选中值
+    refreshNodeNamespaceOptions();
+    document.getElementById('node-namespace').value = node ? node.namespace || '' : '';
   };
   if (window._activityCache.length === 0) {
     refreshActivityCache().then(afterCache);
@@ -1423,9 +1625,11 @@ async function saveNode() {
     type: document.getElementById('node-type').value,
     kind: document.getElementById('node-kind').value,
     category: document.getElementById('node-category').value.trim(),
+    tags: collectNodeTags(),
     version: document.getElementById('node-version').value.trim(),
     status: parseInt(document.getElementById('node-status').value),
     description: document.getElementById('node-description').value.trim(),
+    namespace: document.getElementById('node-namespace').value.trim(),
   };
   // Parse JSON fields
   try {
@@ -1659,7 +1863,7 @@ function renderActivityTable(list) {
   const tbody = document.getElementById('act-table');
   const all = list || [];
   if (all.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
     renderActivityPager(0);
     return;
   }
@@ -1701,7 +1905,6 @@ function renderActivityTable(list) {
       <td>${tagsHtml}</td>
       <td><span class="code-cell">${escHtml(a.act_namespace)}</span></td>
       <td><span class="code-cell">${escHtml(a.act_name)}</span></td>
-      <td>${escHtml(a.activity_type || '-')}</td>
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
       <td>${escHtml(a.created_at ? a.created_at.substring(0,10) : '-')}</td>
       <td><div class="actions">
@@ -3916,7 +4119,7 @@ async function loadSubChains() {
         <td class="code-cell">${dslSize}</td>
         <td class="actions">
           <button class="btn btn-sm btn-primary" onclick="executeSubChain('${esc(c.chain_id)}')">Execute</button>
-          <button class="btn btn-sm btn-outline" onclick="orchSubChainByIndex(${i})">编排</button>
+          <button class="btn btn-sm btn-outline" onclick="orchOpenInPage('${esc(c.chain_id)}')">编排</button>
           <button class="btn btn-sm btn-outline" onclick="editSubChainByIndex(${i})">编辑</button>
           <button class="btn btn-sm btn-danger" onclick="deleteSubChain('${esc(c.chain_id)}')">删除</button>
         </td>
@@ -4253,15 +4456,18 @@ let _cachedSubChains = null;
 
 async function refreshConnSuggestions() {
   try {
-    _cachedNodes = await api('/api/nodes');
-    _cachedSubChains = await api('/api/sub-chains');
+    _cachedNodes = await api('/api/nodes?only_enabled=true');
+    _cachedSubChains = await api('/api/sub-chains?only_enabled=true');
     rebuildConnDatalist();
   } catch(e) { /* ignore */ }
 }
 
 function loadToExecuteByIndex(i) { loadToExecute(window._rootChainsForEdit[i]); }
 function showFlowchartByIndex(i) { showFlowchart(window._rootChainsForEdit[i]); }
-function editRootChainByIndex(i) { loadRootChainToOrch(window._rootChainsForEdit[i]); }
+function editRootChainByIndex(i) {
+  const c = window._rootChainsForEdit[i];
+  if (c) orchOpenInPageRoot(c.chain_id);
+}
 
 function loadToExecute(c) {
   // 切换到 Execute tab
@@ -4640,8 +4846,10 @@ let orchConnSeq = 0;
 
 async function loadOrchData() {
   try {
-    _orchNodes = await api('/api/nodes');
-    _orchSubChains = await api('/api/sub-chains');
+    _orchNodes = await api('/api/nodes?only_enabled=true');
+    _orchSubChains = await api('/api/sub-chains?only_enabled=true');
+    refreshOrchNodeNsFilter();
+    refreshOrchNodeTagFilter();
     renderOrchNodeList();
     renderOrchSubList();
     refreshOrchConnOptions();
@@ -4649,10 +4857,14 @@ async function loadOrchData() {
   } catch(e) { showToast('加载编排数据失败: ' + e.message, 'error'); }
 }
 
-function renderOrchNodeList(filterText) {
+function renderOrchNodeList(filterText, filterNs, filterTag) {
   const container = document.getElementById('orch-node-list');
   const q = (filterText||'').toLowerCase();
+  const ns = (filterNs||'').trim();
+  const tag = (filterTag||'').trim();
   const filtered = _orchNodes.filter(n => {
+    if (ns && (n.namespace||'') !== ns) return false;
+    if (tag && !((n.tags||[]).includes(tag))) return false;
     if (!q) return true;
     return (n.node_id||'').toLowerCase().includes(q) || (n.name||'').toLowerCase().includes(q) || (n.type||'').toLowerCase().includes(q);
   });
@@ -4669,19 +4881,140 @@ function renderOrchNodeList(filterText) {
       try { return (JSON.parse(outputsJson) || []).length; } catch(e){ return 0; }
     })();
     return `<label class="orch-select-item" title="${esc(n.node_id)} - ${esc(n.description||'')}">
-      <input type="checkbox" value="${esc(n.node_id)}" data-kind="${esc(n.kind||'action')}" data-type="${esc(n.type)}" data-outputs="${esc(outputsJson)}" onchange="onOrchSelectionChange()">
       <span class="node-id">${esc(n.node_id)}</span>
       <span class="node-name">${esc(n.name||n.node_id)}</span>
       <span class="node-type-tag">${esc(n.type)}</span>
       <span class="node-kind badge ${kindClass}">${kindLabel}</span>
       ${outCount ? `<span class="node-out-badge" title="该节点定义了 ${outCount} 个返回值，供下游引用">↩ ${outCount}</span>` : ''}
+      <button class="btn btn-sm btn-outline orch-add-btn" type="button" onclick="addOrchNodeInstance('${esc(n.node_id)}')" title="添加到编排（可多次添加同一节点）">+ 添加</button>
     </label>`;
   }).join('');
 }
 
+// 添加节点实例到编排（同一节点可多次添加，实例 ID 形如 nodeId__N）
+function addOrchNodeInstance(nodeId) {
+  if (!window._orchNodeInstances) window._orchNodeInstances = [];
+  // 计算该节点的实例序号
+  const seq = window._orchNodeInstances.filter(i => i.nodeId === nodeId).length + 1;
+  const instanceId = nodeId + '__' + seq;
+  const n = (_orchNodes || []).find(x => x.node_id === nodeId);
+  window._orchNodeInstances.push({
+    instanceId: instanceId,
+    nodeId: nodeId,
+    name: n ? (n.name || n.node_id) : nodeId,
+    type: n ? n.type : '',
+    kind: n ? (n.kind || 'action') : 'action',
+    outputs: n ? (n.outputs || []) : [],
+  });
+  renderOrchNodeSelected();
+  onOrchSelectionChange();
+}
+
+// 删除指定节点实例
+function removeOrchNodeInstance(instanceId) {
+  if (!window._orchNodeInstances) return;
+  window._orchNodeInstances = window._orchNodeInstances.filter(i => i.instanceId !== instanceId);
+  renderOrchNodeSelected();
+  onOrchSelectionChange();
+}
+
+// 从 Live Preview 点击节点触发：二次确认后删除该实例（避免误删）
+function removeOrchNodeInstanceConfirm(instanceId) {
+  const inst = (window._orchNodeInstances || []).find(i => i.instanceId === instanceId);
+  if (!inst) return;
+  const name = inst.name || instanceId;
+  if (!window.confirm('确定要删除该节点实例吗？\n\n节点：' + name + '\n实例ID：' + instanceId + '\n\n删除后将从流程图中移除，且不可撤销。')) return;
+  removeOrchNodeInstance(instanceId);
+  // 删除后实时刷新预览与参数配置区
+  if (typeof renderOrchPreview === 'function') renderOrchPreview();
+  if (typeof renderOrchDslPreview === 'function') renderOrchDslPreview();
+  if (typeof renderOrchUpstreamHints === 'function') renderOrchUpstreamHints();
+  if (typeof renderOrchParamOverrides === 'function') renderOrchParamOverrides();
+}
+
+// 渲染已选节点实例列表（支持同一节点多次）
+function renderOrchNodeSelected() {
+  const box = document.getElementById('orch-node-selected');
+  const toggle = document.getElementById('orch-selected-toggle');
+  if (!box) return;
+  const list = window._orchNodeInstances || [];
+  if (toggle) toggle.textContent = '已选择的 Nodes (' + list.length + ')';
+  if (!list.length) {
+    box.innerHTML = '<div class="orch-select-empty" style="padding:8px;font-size:.78rem">尚未添加节点</div>';
+    return;
+  }
+  box.innerHTML = `<table class="data-table" style="width:100%;font-size:.85rem">
+      <thead><tr><th>#</th><th>节点名称</th><th>Node ID</th><th>实例序号</th><th style="text-align:right">操作</th></tr></thead>
+      <tbody>${list.map((i, idx) => {
+        const seq = i.instanceId.split('__')[1] || '';
+        return `<tr title="${esc(i.instanceId)}">
+          <td>${idx + 1}</td>
+          <td>${esc(i.name)}</td>
+          <td class="code-cell">${esc(i.nodeId)}</td>
+          <td>#${esc(seq)}</td>
+          <td style="text-align:right"><button class="btn btn-sm btn-danger" type="button" onclick="removeOrchNodeInstance('${esc(i.instanceId)}')">删除</button></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+}
+
+// 展开/收起已选节点面板
+function openOrchSelectedModal() {
+  renderOrchNodeSelected();
+  const overlay = document.getElementById('orch-selected-modal-overlay');
+  if (overlay) overlay.style.display = 'flex';
+}
+function closeOrchSelectedModal() {
+  const overlay = document.getElementById('orch-selected-modal-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+// 从保存的 node_ids（可能含实例后缀 baseId__N）还原已选节点实例列表
+function restoreOrchNodeInstances(nodeIds) {
+  window._orchNodeInstances = (nodeIds || []).map(raw => {
+    const baseId = raw.indexOf('__') >= 0 ? raw.split('__')[0] : raw;
+    const seq = raw.indexOf('__') >= 0 ? (raw.split('__')[1] || '') : '';
+    const n = (_orchNodes || []).find(x => x.node_id === baseId);
+    return {
+      instanceId: raw,
+      nodeId: baseId,
+      name: n ? (n.name || baseId) : baseId,
+      type: n ? n.type : '',
+      kind: n ? (n.kind || 'action') : 'action',
+      outputs: n ? (n.outputs || []) : [],
+      _seq: seq,
+    };
+  });
+  renderOrchNodeSelected();
+}
+
 function filterOrchNodes() {
-  const q = document.querySelector('#orch-node-list').previousElementSibling.value;
-  renderOrchNodeList(q);
+  const q = document.getElementById('orch-node-search').value;
+  const ns = document.getElementById('orch-node-ns-filter').value;
+  const tag = document.getElementById('orch-node-tag-filter').value;
+  renderOrchNodeList(q, ns, tag);
+}
+
+// 根据当前编排可选项节点刷新命名空间过滤下拉（去重）
+function refreshOrchNodeNsFilter() {
+  const sel = document.getElementById('orch-node-ns-filter');
+  if (!sel) return;
+  const cur = sel.value;
+  const nss = Array.from(new Set((_orchNodes || []).map(n => (n.namespace || '').trim()).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">全部命名空间</option>' + nss.map(ns => `<option value="${esc(ns)}">${esc(ns)}</option>`).join('');
+  sel.value = nss.includes(cur) ? cur : '';
+}
+
+// 根据当前编排可选项节点刷新标签过滤下拉（去重）
+function refreshOrchNodeTagFilter() {
+  const sel = document.getElementById('orch-node-tag-filter');
+  if (!sel) return;
+  const cur = sel.value;
+  const tagSet = {};
+  (_orchNodes || []).forEach(n => { (n.tags || []).forEach(t => { if (t) tagSet[t] = true; }); });
+  const tags = Object.keys(tagSet).sort();
+  sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  sel.value = tags.includes(cur) ? cur : '';
 }
 
 function renderOrchSubList(filterText) {
@@ -4716,8 +5049,8 @@ function filterOrchSubChains() {
 }
 
 function getSelectedOrchNodeIds() {
-  const cbs = document.querySelectorAll('#orch-node-list input[type="checkbox"]:checked');
-  return [...cbs].map(cb => cb.value);
+  // 返回节点实例 ID 列表（形如 nodeId__N，支持同一节点多次添加）
+  return (window._orchNodeInstances || []).map(i => i.instanceId);
 }
 
 function getSelectedOrchSubIds() {
@@ -4726,7 +5059,7 @@ function getSelectedOrchSubIds() {
 }
 
 function onOrchSelectionChange() {
-  const nodeCount = getSelectedOrchNodeIds().length;
+  const nodeCount = (window._orchNodeInstances || []).length;
   const subCount = getSelectedOrchSubIds().length;
   document.getElementById('orch-node-count').textContent = nodeCount + ' selected';
   document.getElementById('orch-sub-count').textContent = subCount + ' selected';
@@ -4739,11 +5072,12 @@ function refreshOrchConnOptions() {
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
 
-  // Build options for each node (显示名称，更直观)
+  // Build options for each node (显示名称 + 实例序号，更直观)
   const nodeOpts = nodeIds.map(id => {
-    const n = _orchNodes.find(x => x.node_id === id);
-    const label = n && n.name ? n.name : id;
-    const extra = n && n.name ? id + ' · ' + n.type : (n ? n.type : '');
+    const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
+    const label = inst ? inst.name : id;
+    const seq = inst ? inst.instanceId.split('__')[1] : '';
+    const extra = inst ? (inst.nodeId + (seq ? ' #' + seq : '') + ' · ' + inst.type) : '';
     return `<option value="${esc(id)}">⚙ ${esc(label)}${extra ? ' ('+esc(extra)+')' : ''}</option>`;
   }).join('');
 
@@ -4868,12 +5202,22 @@ function orchBuildMermaid() {
   });
 
   let lines = ['flowchart TD'];
+  // 按节点 kind 分组收集 safe id，动态生成配色 classDef
+  const kindSafeIds = {};
   nodeSet.forEach(id => {
     const safe = idMap[id];
+    const inst = (_orchNodeInstances || []).find(i => i.instanceId === id);
     const n = _orchNodes.find(x => x.node_id === id);
-    const label = n && n.name ? n.name : id;
-    const subLabel = n ? (n.name ? id + ' · ' + n.type : n.type) : id;
-    lines.push(`    ${safe}["<b>⚙ ${esc(label)}</b><br/><small>${esc(subLabel)}</small>"]`);
+    const baseId = n ? n.node_id : (inst ? inst.nodeId : id);
+    const cnName = (inst && inst.name) ? inst.name : (n && n.name ? n.name : id);
+    const k = (n && n.kind) || 'action';
+    const clsName = 'nodeKind_' + k.replace(/[^a-zA-Z0-9_]/g, '_');
+    // 标签：第一行中文名，第二行 node ID，第三行 实例 ID（同一节点多次添加时区分）
+    const labelLine = `<b>⚙ ${esc(cnName)}</b>`;
+    const idLine = `<small>NodeId: ${esc(baseId)}</small>`;
+    const instLine = inst && inst.instanceId !== baseId ? `<small>Id: ${esc(inst.instanceId)}</small>` : '';
+    lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}"]`);
+    (kindSafeIds[k] = kindSafeIds[k] || []).push(safe);
   });
   subSet.forEach(id => {
     const safe = idMap[id];
@@ -4893,12 +5237,23 @@ function orchBuildMermaid() {
     const to = idMap[c.to_id];
     if (from && to) lines.push(`    ${from} -->|${c.type||'True'}| ${to}`);
   });
-  const nodeClasses = [...nodeSet].map(id => idMap[id]).filter(Boolean).join(',');
   const subClasses = [...subSet].map(id => idMap[id]).filter(Boolean).join(',');
-  lines.push('    classDef nodeCls fill:#e0e7ff,stroke:#4f46e5,color:#1e1b4b,stroke-width:2px');
-  lines.push('    classDef subCls fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:2px');
-  if (nodeClasses) lines.push(`    class ${nodeClasses} nodeCls`);
+  // 根据节点 kind 类型动态生成不同背景色（每种 kind 一组 classDef）
+  const kindPalette = {
+    condition: { fill: '#fef3c7', stroke: '#d97706', color: '#78350f' }, // 查询获取=黄
+    action:    { fill: '#dbeafe', stroke: '#2563eb', color: '#1e3a8a' }, // 策略执行=蓝
+  };
+  const kindFallback = { fill: '#e0e7ff', stroke: '#4f46e5', color: '#1e1b4b' }; // 未知 kind 默认靛蓝
+  Object.keys(kindSafeIds).forEach(k => {
+    const c = kindPalette[k] || kindFallback;
+    const clsName = 'nodeKind_' + k.replace(/[^a-zA-Z0-9_]/g, '_');
+    lines.push(`    classDef ${clsName} fill:${c.fill},stroke:${c.stroke},color:${c.color},stroke-width:2px,text-align:left`);
+    lines.push(`    class ${kindSafeIds[k].join(',')} ${clsName}`);
+  });
+  lines.push('    classDef subCls fill:#ede9fe,stroke:#7c3aed,color:#4c1d95,stroke-width:2px,text-align:left');
   if (subClasses) lines.push(`    class ${subClasses} subCls`);
+  // 暴露 id 映射供预览图叠加删除叉时反向查询原始实例 ID
+  window._orchIdMap = idMap;
   return lines.join('\n');
 }
 
@@ -4950,6 +5305,7 @@ function orchBuildDslPreview() {
 let _orchChangeTimer = null;
 function onOrchChange() {
   clearTimeout(_orchChangeTimer);
+  updateOrchTargetByChainId(); // 链 ID 变化即时更新标题与目标
   _orchChangeTimer = setTimeout(() => {
     renderOrchPreview();
     renderOrchDslPreview();
@@ -5129,8 +5485,16 @@ function renderOrchParamOverrides() {
   if (!container) return;
 
   const nodeIds = getSelectedOrchNodeIds();
-  // 仅展示有参数定义的节点
-  const nodes = _orchNodes.filter(n => nodeIds.includes(n.node_id) && parseNodeParams(n).length > 0);
+  // 以"实例"为单位渲染（同一节点可多次添加），每个实例独立配置参数。
+  // instances: [{instanceId, nodeId, name, type, ...}]，仅保留有参数定义的实例。
+  const instances = (window._orchNodeInstances || []).filter(inst => {
+    const def = _orchNodes.find(n => n.node_id === inst.nodeId);
+    return def && parseNodeParams(def).length > 0;
+  });
+  const nodes = instances.map(inst => ({
+    inst,
+    def: _orchNodes.find(n => n.node_id === inst.nodeId),
+  }));
 
   if (!nodes.length) {
     if (emptyEl) emptyEl.style.display = '';
@@ -5139,7 +5503,7 @@ function renderOrchParamOverrides() {
     return;
   }
   if (emptyEl) emptyEl.style.display = 'none';
-  if (countEl) countEl.textContent = nodes.length + ' 个节点';
+  if (countEl) countEl.textContent = nodes.length + ' 个节点（含重复实例）';
 
   // 上游可引用值映射（fromId -> outputs），用于"上游返回值"下拉
   const upstreamMap = buildUpstreamOutputsMap();
@@ -5157,20 +5521,21 @@ function renderOrchParamOverrides() {
   });
 
   let html = '';
-  nodes.forEach(n => {
-    const params = parseNodeParams(n);
+  nodes.forEach(({ inst, def }) => {
+    const params = parseNodeParams(def);
+    const seq = inst.instanceId.split('__')[1] || '';
     html += `<div class="override-node-block">
       <div class="override-node-header" onclick="this.nextElementSibling.classList.toggle('hidden')">
         <span class="toggle-icon">▾</span>
-        <span class="code-cell">${esc(n.node_id)}</span>
-        <span style="font-weight:400">${esc(n.name || '')}</span>
-        <span style="margin-left:auto;font-weight:400;color:var(--text-muted);font-size:.72rem">${params.length} 个参数</span>
+        <span class="code-cell">${esc(inst.instanceId)}</span>
+        <span style="font-weight:400">${esc(def.name || '')}</span>
+        <span style="margin-left:auto;font-weight:400;color:var(--text-muted);font-size:.72rem">${params.length} 个参数${seq ? ' · #' + esc(seq) : ''}</span>
       </div>
       <div class="override-node-body">`;
     params.forEach(p => {
       const required = p.required ? ' <span class="param-required-star">*</span>' : '';
       const typeTag = p.type ? `<span class="param-type-tag">(${esc(p.type)})</span>` : '';
-      html += `<div class="override-field" data-node="${esc(n.node_id)}" data-key="${esc(p.key)}">
+      html += `<div class="override-field" data-node="${esc(inst.instanceId)}" data-key="${esc(p.key)}">
         <label>${esc(p.label || p.key)}${required} ${typeTag}</label>
         <div style="display:flex;gap:6px;align-items:center">
           <select class="param-src-select" style="flex:0 0 92px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:.72rem" onchange="onParamSrcChange(this)">
@@ -5343,21 +5708,54 @@ function applyOrchParamOverrides(saved) {
   } catch(e) { /* ignore */ }
 }
 
+let _orchPreviewScale = 1;
+
+function applyOrchPreviewScale() {
+  const box = document.getElementById('orch-preview-scale');
+  if (box) box.style.transform = 'scale(' + _orchPreviewScale + ')';
+  const label = document.getElementById('orch-zoom-label');
+  if (label) label.textContent = Math.round(_orchPreviewScale * 100) + '%';
+  // 缩放后内容尺寸可能变化，下一帧将预览区滚动到内容中心，方便查看
+  requestAnimationFrame(centerOrchPreview);
+}
+
+// 将 Live Preview 滚动到内容中心（节点多/放大后自动居中显示）
+function centerOrchPreview() {
+  const area = document.getElementById('orch-preview');
+  if (!area) return;
+  area.scrollLeft = Math.max(0, (area.scrollWidth - area.clientWidth) / 2);
+  area.scrollTop = Math.max(0, (area.scrollHeight - area.clientHeight) / 2);
+}
+
+// 放大/缩小：delta>0 放大，delta<0 缩小，限制 0.3~3 倍
+function zoomOrchPreview(delta) {
+  _orchPreviewScale = Math.min(3, Math.max(0.3, _orchPreviewScale + delta));
+  applyOrchPreviewScale();
+}
+
+function resetOrchPreview() {
+  _orchPreviewScale = 1;
+  applyOrchPreviewScale();
+}
+
 async function renderOrchPreview() {
   const container = document.getElementById('orch-preview');
+  const scaleBox = document.getElementById('orch-preview-scale');
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
   const conns = collectOrchConnections();
 
   if (nodeIds.length === 0 && subIds.length === 0) {
-    container.innerHTML = '<div class="orch-preview-empty">选择节点并添加连接后，这里将显示实时流程图</div>';
+    scaleBox.innerHTML = '<div class="orch-preview-empty">选择节点并添加连接后，这里将显示实时流程图</div>';
+    _orchPreviewScale = 1;
+    applyOrchPreviewScale();
     return;
   }
 
   const syntax = orchBuildMermaid();
   // Use a unique ID for mermaid rendering
   const mermaidId = 'orch-mermaid-' + Date.now();
-  container.innerHTML = `<div class="mermaid" id="${mermaidId}">${esc(syntax)}</div>`;
+  scaleBox.innerHTML = `<div class="mermaid" id="${mermaidId}">${esc(syntax)}</div>`;
   // Re-render with mermaid
   try {
     const el = document.getElementById(mermaidId);
@@ -5365,10 +5763,61 @@ async function renderOrchPreview() {
       el.removeAttribute('data-processed');
       el.textContent = syntax;
       await mermaid.run({ nodes: [el] });
+      enhanceOrchPreviewNodes(el);
     }
+    applyOrchPreviewScale();
+    // mermaid 内部布局可能稍晚稳定，延迟再居中一次确保内容位于视野中间
+    setTimeout(centerOrchPreview, 60);
   } catch(e) {
-    container.innerHTML = '<div class="orch-preview-empty" style="color:#ef4444">渲染失败: ' + esc(e.message) + '</div><pre style="font-size:.7rem;margin-top:8px;white-space:pre-wrap;max-height:150px;overflow:auto">' + esc(syntax) + '</pre>';
+    scaleBox.innerHTML = '<div class="orch-preview-empty" style="color:#ef4444">渲染失败: ' + esc(e.message) + '</div><pre style="font-size:.7rem;margin-top:8px;white-space:pre-wrap;max-height:150px;overflow:auto">' + esc(syntax) + '</pre>';
   }
+}
+
+// 在 Live Preview 的 mermaid 节点右上角叠加"删除叉"，hover 节点时显示，点击删除该实例
+// 注：叉默认常显（pointer-events:all），避免部分环境下 :hover 不触发导致无法看到/点击
+function enhanceOrchPreviewNodes(container) {
+  if (!container) return;
+  const idMap = window._orchIdMap || {};
+  const nodeIds = getSelectedOrchNodeIds();
+  const subIds = getSelectedOrchSubIds();
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const nodeGs = Array.from(container.querySelectorAll('g.node'));
+  nodeGs.forEach((g, idx) => {
+    // 反查实例 ID：优先用 g.id 在 idMap 中匹配（mermaid 保留自定义 id 时有效）
+    let instId = null;
+    if (g.id) {
+      for (const k in idMap) { if (idMap[k] === g.id) { instId = k; break; } }
+    }
+    // 兜底：按 DOM 顺序映射（mermaid 改写节点 id 时生效）；超出 node/sub 范围的孤立节点不加叉
+    if (!instId) {
+      if (idx < nodeIds.length) instId = nodeIds[idx];
+      else if (idx < nodeIds.length + subIds.length) instId = subIds[idx - nodeIds.length];
+    }
+    if (!instId) return;
+    // 防御：移除可能已存在的叉
+    const old = g.querySelector(':scope > g.orch-node-del');
+    if (old) old.remove();
+    let bbox;
+    try { bbox = g.getBBox(); } catch(e) { return; }
+    if (!bbox || !bbox.width) return;
+    const px = bbox.x + bbox.width - 9;
+    const py = bbox.y + 9;
+    const del = document.createElementNS(SVGNS, 'g');
+    del.setAttribute('class', 'orch-node-del');
+    del.setAttribute('transform', `translate(${px},${py})`);
+    const x1 = document.createElementNS(SVGNS, 'line');
+    const x2 = document.createElementNS(SVGNS, 'line');
+    x1.setAttribute('x1', '-4'); x1.setAttribute('y1', '-4'); x1.setAttribute('x2', '4'); x1.setAttribute('y2', '4');
+    x2.setAttribute('x1', '-4'); x2.setAttribute('y1', '4'); x2.setAttribute('x2', '4'); x2.setAttribute('y2', '-4');
+    x1.setAttribute('class', 'orch-node-del-x'); x2.setAttribute('class', 'orch-node-del-x');
+    del.appendChild(x1); del.appendChild(x2);
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      removeOrchNodeInstanceConfirm(instId);
+    });
+    g.appendChild(del);
+  });
 }
 
 function renderOrchDslPreview() {
@@ -5399,11 +5848,13 @@ window._orchTarget = 'root';
 // sub 目标下不显示 Sub Chains 选择区（子链嵌套子链引用在连接中已是可选目标，仍可引用）。
 function setOrchTarget(type) {
   window._orchTarget = type;
-  document.getElementById('orch-target-root').classList.toggle('btn-primary', type === 'root');
-  document.getElementById('orch-target-root').classList.toggle('btn-outline', type !== 'root');
-  document.getElementById('orch-target-sub').classList.toggle('btn-primary', type === 'sub');
-  document.getElementById('orch-target-sub').classList.toggle('btn-outline', type !== 'sub');
-
+  const rootBtn = document.getElementById('orch-target-root');
+  if (rootBtn) {
+    // 子链编排时仅能编辑 Sub Chain，隐藏 Root Chain 选项
+    rootBtn.style.display = (type === 'sub') ? 'none' : '';
+    rootBtn.classList.toggle('btn-primary', type === 'root');
+    rootBtn.classList.toggle('btn-outline', type !== 'root');
+  }
   const btn = document.getElementById('orch-generate-btn');
   const isEdit = btn.dataset.edit === '1';
   if (type === 'sub') {
@@ -5414,7 +5865,26 @@ function setOrchTarget(type) {
   }
 }
 
-// 编排新建子链：切换到 Orchestrate 页，目标设为 Sub Chain，清空表单。
+// 根据链 ID 前缀动态更新「编排目标」标题与编排目标：
+//   F 开头 -> 编排 Sub Chain（隐藏 Root Chain 选项）
+//   R 开头 -> 编排 Root Chain
+//   （空或其他前缀 -> 保持调用方已设定的 target，标题回退为「编排目标」）
+function updateOrchTargetByChainId() {
+  const titleEl = document.getElementById('orch-target-title');
+  if (!titleEl) return;
+  const chainId = (document.getElementById('orch-chain-id').value || '').trim();
+  if (chainId.startsWith('F')) {
+    titleEl.textContent = '编排 Sub Chain';
+    setOrchTarget('sub');
+  } else if (chainId.startsWith('R')) {
+    titleEl.textContent = '编排 Root Chain';
+    setOrchTarget('root');
+  } else {
+    titleEl.textContent = '编排目标';
+  }
+}
+
+// 编排新建：切换到 Orchestrate 页，目标设为 Root Chain，清空表单。
 function newSubChainViaOrch() {
   // 切换到 Orchestrate Tab
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -5429,20 +5899,21 @@ function newSubChainViaOrch() {
   document.getElementById('orch-chain-desc').value = '';
   document.getElementById('orch-debug-mode').checked = false;
   _orchParamPreset = {}; // 重置节点参数配置暂存
+  window._orchNodeInstances = []; // 重置已选节点实例
   document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
   const emptyEl = document.getElementById('orch-conn-empty');
   if (emptyEl) emptyEl.style.display = '';
+  renderOrchNodeSelected();
 
   // 确保数据已加载再取消勾选
   loadOrchData().then(() => {
-    document.querySelectorAll('#orch-node-list input[type="checkbox"]').forEach(cb => cb.checked = false);
     document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => cb.checked = false);
     onOrchSelectionChange();
   });
 
   const btn = document.getElementById('orch-generate-btn');
   btn.dataset.edit = '';
-  setOrchTarget('sub');
+  setOrchTarget('root');
   showToast('已切换到编排页，目标为 Sub Chain', 'success');
 }
 
@@ -5478,9 +5949,7 @@ function orchSubChainByIndex(i) {
     applyOrchParamOverrides(c.node_param_overrides);
 
     const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
-    document.querySelectorAll('#orch-node-list input[type="checkbox"]').forEach(cb => {
-      cb.checked = nodeIds.includes(cb.value);
-    });
+    restoreOrchNodeInstances(nodeIds);
     const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
     document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => {
       cb.checked = subIds.includes(cb.value);
@@ -5565,6 +6034,9 @@ async function generateOrchRootChain() {
 
 // Load root chain into orchestrate for editing
 function loadRootChainToOrch(c) {
+  // 编排页已拆分为独立 orch.html，统一跳转到独立页编辑
+  if (c && c.chain_id) { orchOpenInPageRoot(c.chain_id); return; }
+  orchOpenInPageRoot('');
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   const orchTab = document.querySelector('[data-tab="orchestrate"]');
@@ -5637,10 +6109,9 @@ function prettyJson(v) {
 // ============================================================
 // 优先加载项目列表（即使 mermaid 等外部脚本失败也不影响主流程）
 loadProjects().then(() => {
-  if (getProject()) loadNodes();
-  loadActivityEnvOptions();
-  // 初始化编排页目标为 Root Chain（设置按钮文案与高亮）
-  if (document.getElementById('orch-generate-btn')) setOrchTarget('root');
+  // 仅主页（index）存在 nodes-table 时才加载节点列表；编排独立页(orch.html)无此 DOM，避免崩溃
+  if (document.getElementById('nodes-table') && getProject()) loadNodes();
+  if (document.getElementById('activity-env-select')) loadActivityEnvOptions();
 });
 
 // 初始化 Mermaid（外部脚本，失败不影响主流程）
@@ -5894,6 +6365,11 @@ function rebuildRefFieldSlot(wrap) {
 // ============================================================
 let currentUser = null; // { username, nickname, role, projects }
 
+// 是否为管理员：由 onLoginSuccess 在 body 上标记 .is-admin
+function isAdmin() {
+  return document.body.classList.contains('is-admin');
+}
+
 async function bootstrapAuth() {
   try {
     const res = await fetch('/api/me');
@@ -5907,7 +6383,7 @@ async function bootstrapAuth() {
   document.getElementById('login-overlay').classList.remove('hidden');
 }
 
-function onLoginSuccess(u) {
+async function onLoginSuccess(u) {
   currentUser = u;
   document.getElementById('login-overlay').classList.add('hidden');
   document.getElementById('login-err').textContent = '';
@@ -5917,7 +6393,39 @@ function onLoginSuccess(u) {
   if (u.role === 'admin') document.body.classList.add('is-admin');
   else document.body.classList.remove('is-admin');
   // 登录后加载主界面数据
-  loadProjects();
+  await loadProjects();
+  // 支持从其它页面（如 orch.html）通过 ?tab= 跳转回指定 tab
+  applyInitialTab();
+}
+
+// 切换到指定 tab（仅 index 主页使用，依赖各 tab-content DOM）
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  const btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
+  if (!btn) return;
+  btn.classList.add('active');
+  const content = document.getElementById('tab-' + tab);
+  if (content) content.classList.add('active');
+  if (tab === 'nodes') loadNodes();
+  else if (tab === 'activities') loadActivityEnvOptions();
+  else if (tab === 'sub-chains') loadSubChains();
+  else if (tab === 'root-chains') loadRootChains();
+  else if (tab === 'orchestrate') loadOrchData();
+  else if (tab === 'execute') {
+    refreshConnSuggestions();
+    if (!document.querySelector('#exec-connections-container .conn-row')) {
+      addExecConnRow('', '', '');
+    }
+  }
+}
+
+// 启动时根据 URL ?tab= 参数自动切换主页 tab
+function applyInitialTab() {
+  const tab = new URLSearchParams(location.search).get('tab');
+  if (!tab) return;
+  const valid = ['activities', 'nodes', 'sub-chains', 'root-chains', 'orchestrate', 'execute'];
+  if (valid.includes(tab)) switchTab(tab);
 }
 
 async function doLogin() {
@@ -6102,6 +6610,18 @@ async function deleteUser(id) {
   } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
 }
 
+// 从列表页跳转到独立编排页（orch.html）编辑指定子链
+function orchOpenInPage(chainId) {
+  const p = encodeURIComponent(getProject() || '');
+  location.href = '/orch?target=sub&chain_id=' + encodeURIComponent(chainId) + (p ? '&project=' + p : '');
+}
+
+// 从列表页跳转到独立编排页（orch.html）编辑指定根链
+function orchOpenInPageRoot(chainId) {
+  const p = encodeURIComponent(getProject() || '');
+  location.href = '/orch?target=root&chain_id=' + encodeURIComponent(chainId) + (p ? '&project=' + p : '');
+}
+
 // 子链编排独立页（orch.html）按 chain_id 载入编辑态
 async function orchLoadSubChainById(chainId) {
   try {
@@ -6111,6 +6631,40 @@ async function orchLoadSubChainById(chainId) {
     if (i < 0) { showToast('未找到子链: ' + chainId, 'error'); return; }
     orchSubChainByIndex(i);
   } catch (e) { showToast('加载子链失败: ' + e.message, 'error'); }
+}
+
+// 根链编排独立页（orch.html）按 chain_id 载入编辑态（不切换已删除的 tab）
+async function orchLoadRootChainById(chainId) {
+  try {
+    const chains = await api('/api/root-chains');
+    const c = chains.find(x => x.chain_id === chainId);
+    if (!c) { showToast('未找到根链: ' + chainId, 'error'); return; }
+    document.getElementById('orch-chain-id').value = c.chain_id || '';
+    document.getElementById('orch-chain-key').value = c.chain_key || '';
+    document.getElementById('orch-chain-name').value = c.name || '';
+    document.getElementById('orch-chain-desc').value = c.description || '';
+    let debugMode = false;
+    try { debugMode = !!((JSON.parse(c.dsl_json || '{}').ruleChain || {}).debugMode); } catch(e) {}
+    document.getElementById('orch-debug-mode').checked = debugMode;
+    const btn = document.getElementById('orch-generate-btn');
+    btn.dataset.edit = '1';
+    setOrchTarget('root');
+    loadOrchData().then(() => {
+      applyOrchParamOverrides(c.node_param_overrides);
+      const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
+      restoreOrchNodeInstances(nodeIds);
+      const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
+      document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => { cb.checked = subIds.includes(cb.value); });
+      onOrchSelectionChange();
+      document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
+      try {
+        const conns = JSON.parse(c.connections_data || '[]');
+        conns.forEach(conn => addOrchConnRow(conn.from_id, conn.to_id, conn.type));
+      } catch(e) {}
+      onOrchChange();
+      showToast('已加载根链到编排页，修改后点击"更新 Root Chain"保存', 'success');
+    });
+  } catch (e) { showToast('加载根链失败: ' + e.message, 'error'); }
 }
 
 // 启动：先鉴权，再加载主界面

@@ -93,12 +93,19 @@ func (r *NodeRepo) ListByIDs(ctx context.Context, project string, nodeIDs []stri
 	return defs, nil
 }
 
-// List 列出指定项目下所有启用的节点。
-func (r *NodeRepo) List(ctx context.Context, project string) ([]*workflow.NodeDef, error) {
+// List 列出指定项目下的节点。onlyEnabled=true 时仅返回启用状态的节点（用于编排选择）；
+// onlyEnabled=false 时返回全部（含禁用，用于管理列表展示）。
+func (r *NodeRepo) List(ctx context.Context, project string, namespace string, onlyEnabled bool) ([]*workflow.NodeDef, error) {
 	var modelsList []models.NodeModel
-	err := r.db.WithContext(ctx).
-		Where("project = ? AND status = ?", project, models.NodeStatusEnabled).
-		Find(&modelsList).Error
+	query := r.db.WithContext(ctx).
+		Where("project = ?", project)
+	if onlyEnabled {
+		query = query.Where("status = ?", models.NodeStatusEnabled)
+	}
+	if namespace != "" {
+		query = query.Where("namespace = ?", namespace)
+	}
+	err := query.Find(&modelsList).Error
 	if err != nil {
 		return nil, err
 	}
@@ -118,12 +125,14 @@ func (r *NodeRepo) Update(ctx context.Context, def *workflow.NodeDef) error {
 			"name":            def.Name,
 			"type":            def.Type,
 			"debug_mode":      def.DebugMode,
+			"namespace":       def.Namespace,
 			"configuration":   string(def.Configuration),
 			"additional_info": string(def.AdditionalInfo),
 			"params":          string(def.Params),
 			"outputs":         string(def.Outputs),
 			"kind":            def.Kind,
 			"category":        def.Category,
+			"tags":            models.SerializeActivityTags(def.Tags),
 			"description":     def.Description,
 			"status":          def.Status,
 			"version":         def.Version,

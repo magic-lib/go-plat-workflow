@@ -110,6 +110,11 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .result-box { background: #1e293b; color: #e2e8f0; border-radius: var(--radius); padding: 16px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: .8rem; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
 .empty-state .icon { font-size: 3rem; margin-bottom: 12px; }
+/* Project secrets (multi-key) */
+.secrets-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.secret-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fff; border: 1px solid var(--border); border-radius: 6px; }
+.secret-item .secret-mask { font-family: 'SF Mono','Fira Code',monospace; font-size: .8rem; color: var(--text); background: #f1f5f9; padding: 2px 6px; border-radius: 4px; }
+.secret-item .secret-remark { flex: 1; color: var(--text-muted); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Connection row */
 .conn-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; padding: 6px; border-radius: 6px; background: #fff; border: 1px solid var(--border); transition: border-color .15s; }
 .conn-row:hover { border-color: var(--primary); }
@@ -168,11 +173,14 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .tag-chip .chip-tip { font-size: .65rem; opacity: .7; }
 
 /* Orchestrate Tab */
-.orch-layout { display: grid; grid-template-columns: 420px 1fr; gap: 24px; align-items: start; }
+.orch-layout { display: grid; grid-template-columns: 420px 1fr; gap: 24px; align-items: stretch; }
 .orch-panel { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); }
 .orch-left { padding: 20px; }
-.orch-right { padding: 20px; position: sticky; top: 24px; }
+.orch-right { padding: 20px; position: sticky; top: 24px; display: flex; flex-direction: column; }
 .orch-section { margin-bottom: 20px; }
+/* Live Preview 占满右侧剩余高度，内部预览区可滚动 */
+.orch-right > .orch-section:first-child { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-bottom: 20px; }
+.orch-right > .orch-section:last-child { flex-shrink: 0; }
 .orch-section h3 { font-size: .95rem; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
 .orch-section h3 .count { font-size: .75rem; font-weight: 400; color: var(--text-muted); }
 .orch-select-list { border: 1px solid var(--border); border-radius: 6px; max-height: 200px; overflow-y: auto; background: #fafbfc; }
@@ -206,9 +214,18 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .orch-conn-row .btn-remove:hover { color: #dc2626; }
 .orch-conn-row .conn-arrow { color: var(--text-muted); font-weight: 700; font-size: .85rem; flex-shrink: 0; }
 /* Preview in orchestrate */
-.orch-preview-area { border: 1px solid var(--border); border-radius: 6px; min-height: 300px; display: flex; align-items: center; justify-content: center; overflow: auto; background: #fafcfd; }
-.orch-preview-area svg { max-width: 100%; height: auto; }
+.orch-preview-area { border: 1px solid var(--border); border-radius: 6px; flex: 1; min-height: 0; display: block; overflow: auto; background: #fafcfd; position: relative; }
+/* 缩放包裹层：以左上角为原点缩放，配合 overflow:auto 产生滚动条 */
+.orch-preview-scale { transform-origin: top left; transition: transform .15s ease; width: 100%; height: 100%; }
+.orch-preview-area svg { display: block; }
+/* Live Preview 节点右上角删除叉：纯 X，常显，hover 变红 */
+.orch-node-del { opacity: .7; cursor: pointer; pointer-events: all; transition: opacity .12s ease; }
+g.node:hover > .orch-node-del { opacity: 1; }
+.orch-node-del-x { stroke: #6b7280; stroke-width: 2; stroke-linecap: round; }
+.orch-node-del:hover .orch-node-del-x { stroke: #ef4444; }
 .orch-preview-empty { text-align: center; color: var(--text-muted); padding: 40px; font-size: .9rem; }
+.orch-zoom { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+.orch-zoom-label { min-width: 42px; text-align: center; font-size: .8rem; color: var(--text-muted); }
 .orch-dsl-preview { background: #1e293b; color: #e2e8f0; border-radius: 6px; padding: 14px; font-family: 'SF Mono','Fira Code',monospace; font-size: .75rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 12px; display: none; }
 .orch-dsl-preview.show { display: block; }
 .orch-actions { display: flex; gap: 10px; margin-top: 16px; }

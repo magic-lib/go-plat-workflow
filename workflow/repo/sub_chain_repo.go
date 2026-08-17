@@ -93,12 +93,16 @@ func (r *SubChainRepo) ListByIDs(ctx context.Context, project string, chainIDs [
 	return defs, nil
 }
 
-// List 列出指定项目下所有启用的子链。
-func (r *SubChainRepo) List(ctx context.Context, project string) ([]*workflow.SubChainDef, error) {
+// List 列出指定项目下的子链。onlyEnabled=true 时仅返回启用状态的子链（用于编排选择）；
+// onlyEnabled=false 时返回全部（含禁用，用于管理列表展示）。
+func (r *SubChainRepo) List(ctx context.Context, project string, onlyEnabled bool) ([]*workflow.SubChainDef, error) {
 	var modelsList []models.SubChainModel
-	err := r.db.WithContext(ctx).
-		Where("project = ? AND status = ?", project, models.NodeStatusEnabled).
-		Find(&modelsList).Error
+	query := r.db.WithContext(ctx).
+		Where("project = ?", project)
+	if onlyEnabled {
+		query = query.Where("status = ?", models.NodeStatusEnabled)
+	}
+	err := query.Find(&modelsList).Error
 	if err != nil {
 		return nil, err
 	}

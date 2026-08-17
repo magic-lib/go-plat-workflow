@@ -78,9 +78,22 @@ type ProjectDef struct {
 	Description string `json:"description,omitempty"`
 	// Status 状态：1=启用，0=禁用
 	Status int8 `json:"status"`
-	// SecretKey 项目密钥，仅用于页面保存（写入），通过 GetByID/List 查询时不返回，
-	// 对外配置查询接口以其鉴权，避免整体配置泄密。
+	// CreatedBy 项目创建者用户名；普通用户在已有项目列表中仅展示自己创建的项目。
+	CreatedBy string `json:"created_by,omitempty"`
+	// SecretKeys 项目密钥列表（支持多个，每个含备注），仅用于页面保存（写入），
+	// 通过 GetByID/List 查询时不返回，对外配置查询接口以任一匹配密钥鉴权。
+	SecretKeys []SecretKeyItem `json:"secret_keys,omitempty"`
+	// SecretKey 已废弃：单个项目密钥，请使用 SecretKeys。保留仅为向后兼容，不再使用。
 	SecretKey string `json:"secret_key,omitempty"`
+}
+
+// SecretKeyItem 项目密钥项，支持一个项目配置多个密钥，并为每个密钥附加备注，
+// 便于为不同账户分配不同密钥访问对外配置查询接口。
+type SecretKeyItem struct {
+	// Key 密钥明文（仅在保存/查询密钥接口中传递，列表接口不返回）
+	Key string `json:"key"`
+	// Remark 密钥备注，标识该密钥用途或所属账户
+	Remark string `json:"remark,omitempty"`
 }
 
 // ProjectConfigSummary RootChain 概要信息（对外配置查询接口返回，避免泄露 DSL 详情）。
@@ -116,6 +129,8 @@ type NodeDef struct {
 	Project string `json:"project"`
 	// NodeID 节点唯一标识（同一 project 内唯一），对应 rulego RuleNode.Id
 	NodeID string `json:"node_id"`
+	// Namespace 命名空间，用于按模块归类 Node 并支持前端过滤查询（仅作标签，无路由作用）
+	Namespace string `json:"namespace,omitempty"`
 	// Name 节点名称
 	Name string `json:"name"`
 	// Type 节点类型，如 jsFilter/jsTransform/log/restApiCall 等
@@ -137,6 +152,8 @@ type NodeDef struct {
 	Kind string `json:"kind,omitempty"`
 	// Category 节点分类，便于组织和筛选
 	Category string `json:"category,omitempty"`
+	// Tags 标签多选，便于组织和筛选（与 activities 一致）
+	Tags []string `json:"tags,omitempty"`
 	// Description 节点描述
 	Description string `json:"description,omitempty"`
 	// Status 状态：1=启用，0=禁用
@@ -449,8 +466,8 @@ type ProjectStore interface {
 	Update(ctx context.Context, def *ProjectDef) error
 	// Delete 软删除项目
 	Delete(ctx context.Context, project string) error
-	// GetSecret 按项目 ID 查询密钥
-	GetSecret(ctx context.Context, project string) (string, error)
+	// GetSecrets 按项目 ID 查询所有密钥明文（用于对外配置查询接口鉴权）
+	GetSecrets(ctx context.Context, project string) ([]string, error)
 }
 
 // NodeStore 节点仓储接口。
@@ -463,8 +480,8 @@ type NodeStore interface {
 	GetByID(ctx context.Context, project, nodeID string) (*NodeDef, error)
 	// ListByIDs 按项目+节点 ID 列表批量查询
 	ListByIDs(ctx context.Context, project string, nodeIDs []string) ([]*NodeDef, error)
-	// List 列出指定项目下所有启用的节点
-	List(ctx context.Context, project string) ([]*NodeDef, error)
+	// List 列出指定项目下的节点。onlyEnabled=true 时仅返回启用状态（用于编排组装），false 时返回全部（含禁用，用于管理列表）。
+	List(ctx context.Context, project, namespace string, onlyEnabled bool) ([]*NodeDef, error)
 	// Update 更新节点
 	Update(ctx context.Context, def *NodeDef) error
 	// Delete 软删除节点（按 project + nodeID）
@@ -481,8 +498,8 @@ type SubChainStore interface {
 	GetByID(ctx context.Context, project, chainID string) (*SubChainDef, error)
 	// ListByIDs 按项目+子链 ID 列表批量查询
 	ListByIDs(ctx context.Context, project string, chainIDs []string) ([]*SubChainDef, error)
-	// List 列出指定项目下所有启用的子链
-	List(ctx context.Context, project string) ([]*SubChainDef, error)
+	// List 列出指定项目下的子链。onlyEnabled=true 时仅返回启用状态（用于编排组装），false 时返回全部（含禁用，用于管理列表）。
+	List(ctx context.Context, project string, onlyEnabled bool) ([]*SubChainDef, error)
 	// Update 更新子链
 	Update(ctx context.Context, def *SubChainDef) error
 	// Delete 软删除子链（按 project + chainID）

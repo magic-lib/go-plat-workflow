@@ -176,6 +176,45 @@ func (s *WorkflowService) DeleteProject(ctx context.Context, project string) err
 	return s.projectRepo.Delete(ctx, project)
 }
 
+// ListProjectSecrets 列出项目下所有密钥（含明文，仅用于管理查询接口）。
+func (s *WorkflowService) ListProjectSecrets(ctx context.Context, project string) ([]*workflow.SecretKeyItem, error) {
+	secretRepo := s.projectRepo.SecretRepo()
+	if secretRepo == nil {
+		return nil, fmt.Errorf("secret repo not initialized")
+	}
+	return secretRepo.List(ctx, project)
+}
+
+// CreateProjectSecret 为项目新增一个密钥（密钥明文 + 备注）。
+func (s *WorkflowService) CreateProjectSecret(ctx context.Context, project, secretKey, remark string) error {
+	if project == "" {
+		return fmt.Errorf("project is required")
+	}
+	if secretKey == "" {
+		return fmt.Errorf("secret_key is required")
+	}
+	secretRepo := s.projectRepo.SecretRepo()
+	if secretRepo == nil {
+		return fmt.Errorf("secret repo not initialized")
+	}
+	return secretRepo.Create(ctx, project, secretKey, remark)
+}
+
+// DeleteProjectSecret 删除项目下指定密钥（按明文匹配，内部转为记录 ID 删除）。
+func (s *WorkflowService) DeleteProjectSecret(ctx context.Context, project, secretKey string) error {
+	if project == "" {
+		return fmt.Errorf("project is required")
+	}
+	if secretKey == "" {
+		return fmt.Errorf("secret_key is required")
+	}
+	secretRepo := s.projectRepo.SecretRepo()
+	if secretRepo == nil {
+		return fmt.Errorf("secret repo not initialized")
+	}
+	return secretRepo.DeleteByKey(ctx, project, secretKey)
+}
+
 // GetProjectConfig 对外配置查询：根据项目密钥鉴权后，
 // 返回项目下的环境配置信息，以及可执行的 RootChains 概要列表（不含 DSL 等敏感内容）。
 // 密钥不匹配时返回错误。
@@ -186,14 +225,21 @@ func (s *WorkflowService) GetProjectConfig(ctx context.Context, project, secretK
 	if secretKey == "" {
 		return nil, fmt.Errorf("secret_key is required")
 	}
-	stored, err := s.projectRepo.GetSecret(ctx, project)
+	storedKeys, err := s.projectRepo.GetSecrets(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	if stored == "" {
+	if len(storedKeys) == 0 {
 		return nil, fmt.Errorf("project has no secret_key configured, please set it first")
 	}
-	if subtle.ConstantTimeCompare([]byte(stored), []byte(secretKey)) != 1 {
+	matched := false
+	for _, k := range storedKeys {
+		if subtle.ConstantTimeCompare([]byte(k), []byte(secretKey)) == 1 {
+			matched = true
+			break
+		}
+	}
+	if !matched {
 		return nil, fmt.Errorf("secret_key mismatch")
 	}
 
@@ -259,9 +305,29 @@ func (s *WorkflowService) GetNode(ctx context.Context, project, nodeID string) (
 	return s.nodeRepo.GetByID(ctx, project, nodeID)
 }
 
-// ListNodes 列出指定项目下所有可用节点。
-func (s *WorkflowService) ListNodes(ctx context.Context, project string) ([]*workflow.NodeDef, error) {
-	return s.nodeRepo.List(ctx, project)
+// ListNodes 列出指定项目下的节点，可按命名空间与 tag 过滤（为空表示不过滤）。
+// onlyEnabled=true 时仅返回启用状态（用于编排选择），false 时返回全部（含禁用，用于管理列表）。
+func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag string, onlyEnabled bool) ([]*workflow.NodeDef, error) {
+	all, err := s.nodeRepo.List(ctx, project, namespace, onlyEnabled)
+	if err != nil {
+		return nil, err
+	}
+	if all == nil {
+		all = []*workflow.NodeDef{}
+	}
+	if tag != "" {
+		filtered := make([]*workflow.NodeDef, 0, len(all))
+		for _, n := range all {
+			for _, t := range n.Tags {
+				if t == tag {
+					filtered = append(filtered, n)
+					break
+				}
+			}
+		}
+		all = filtered
+	}
+	return all, nil
 }
 
 // UpdateNode 更新节点配置。
@@ -301,9 +367,10 @@ func (s *WorkflowService) GetSubChain(ctx context.Context, project, chainID stri
 	return s.subChainRepo.GetByID(ctx, project, chainID)
 }
 
-// ListSubChains 列出指定项目下所有可用子链。
-func (s *WorkflowService) ListSubChains(ctx context.Context, project string) ([]*workflow.SubChainDef, error) {
-	return s.subChainRepo.List(ctx, project)
+// ListSubChains 列出指定项目下的子链。
+// onlyEnabled=true 时仅返回启用状态（用于编排选择），false 时返回全部（含禁用，用于管理列表）。
+func (s *WorkflowService) ListSubChains(ctx context.Context, project string, onlyEnabled bool) ([]*workflow.SubChainDef, error) {
+	return s.subChainRepo.List(ctx, project, onlyEnabled)
 }
 
 // UpdateSubChain 更新子链配置。

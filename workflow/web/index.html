@@ -10,7 +10,7 @@
 <body>
 
 <!-- 登录遮罩 -->
-<div id="login-overlay">
+<div id="login-overlay" class="hidden">
   <div class="login-card">
     <h2>&#9881; 流程管理中心</h2>
     <p class="sub">请登录后继续</p>
@@ -37,7 +37,7 @@
     <select id="project-select" onchange="onProjectChange()">
       <option value="">-- 选择项目 --</option>
     </select>
-    <button class="btn btn-sm btn-outline" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openProjectModal()">+ 管理</button>
+    <button class="btn btn-sm btn-outline" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openProjectModal()">+ 新建项目</button>
     <span id="project-badge">-</span>
     <button class="btn btn-sm btn-outline user-only" style="color:#fff; border-color:rgba(255,255,255,.4)" onclick="openUserModal()">用户管理</button>
     <span id="current-user" style="color:#fff; font-size:.82rem; font-weight:600; display:none"></span>
@@ -71,9 +71,9 @@
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>Activity ID</th><th>名称</th><th>标签</th><th>命名空间</th><th>活动名称</th><th>类型</th><th>参数数</th><th>创建时间</th><th>操作</th>
+          <th>Activity ID</th><th>名称</th><th>标签</th><th>命名空间</th><th>活动名称</th><th>参数数</th><th>创建时间</th><th>操作</th>
         </tr></thead>
-        <tbody id="act-table"><tr><td colspan="9" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr></tbody>
+        <tbody id="act-table"><tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr></tbody>
       </table>
       <div class="log-pager" id="act-pager" style="display:none">
         <button class="btn btn-sm btn-outline" id="act-prev" onclick="changeActivityPage(-1)">上一页</button>
@@ -250,12 +250,18 @@
         <option value="condition">查询获取</option>
         <option value="action">策略执行</option>
       </select>
+      <select id="node-namespace-filter" onchange="loadNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+        <option value="">全部命名空间</option>
+      </select>
+      <select id="node-tag-filter" onchange="onNodeTagFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+        <option value="">全部标签</option>
+      </select>
       <button class="btn btn-primary" onclick="openNodeModal()">+ 新增 Node</button>
       <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
     </div>
     <div class="table-wrap">
       <table id="nodes-table">
-        <thead><tr><th>Node ID</th><th>名称</th><th>类型</th><th>大类</th><th>分类</th><th>状态</th><th>版本</th><th>描述</th><th>操作</th></tr></thead>
+        <thead><tr><th>Node ID</th><th>名称</th><th>类型</th><th>大类</th><th>分类</th><th>标签</th><th>命名空间</th><th>状态</th><th>版本</th><th>描述</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -391,13 +397,19 @@
 <!-- Node Modal -->
 <div class="modal-overlay" id="node-modal-overlay">
   <div class="modal wide" id="node-modal">
-    <h2 id="node-modal-title">新增 Node<button class="modal-close" onclick="closeNodeModal()" title="关闭">&times;</button></h2>
+    <h2 id="node-modal-title"><span id="node-modal-title-text">新增 Node</span><button class="modal-close" onclick="closeNodeModal()" title="关闭">&times;</button></h2>
     <input type="hidden" id="node-is-edit">
     <input type="hidden" id="node-node-id">
     <div class="form-row">
       <div class="form-group">
         <label>名称</label>
         <input id="node-name" placeholder="日志节点">
+      </div>
+      <div class="form-group">
+        <label>命名空间（分组，便于按模块过滤）</label>
+        <select id="node-namespace" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">（无）</option>
+        </select>
       </div>
     </div>
     <div class="form-row">
@@ -447,6 +459,13 @@
       <div class="form-group">
         <label>分类</label>
         <input id="node-category" placeholder="transform">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>标签（多个标签用逗号分隔，也可点击下方历史标签快速选择）</label>
+        <input id="node-tags" placeholder="如：高优,风控,内部" oninput="renderNodeTagChips()">
+        <div id="node-tags-chips" class="tag-chips"></div>
       </div>
     </div>
     <div class="form-row">
@@ -813,19 +832,24 @@ function copyDslContent() {
       <input id="project-description" placeholder="项目描述...">
     </div>
     <div class="exec-card admin-only" style="margin:14px 0 8px">
-      <h4 style="font-size:.85rem;margin-bottom:8px">项目密钥（用于对外配置查询接口鉴权）</h4>
-      <div class="form-row">
+      <h4 style="font-size:.85rem;margin-bottom:8px">项目密钥（用于对外配置查询接口鉴权，可配置多个供不同账户使用）</h4>
+      <div id="project-secrets-list" class="secrets-list"></div>
+      <div class="form-row" style="margin-top:8px">
         <div class="form-group" style="flex:2">
-          <label>Secret Key</label>
-          <input id="project-secret" type="password" placeholder="设置/更新项目密钥" autocomplete="new-password">
+          <label>新增 Secret Key</label>
+          <input id="project-secret" type="password" placeholder="输入新密钥" autocomplete="new-password">
+        </div>
+        <div class="form-group" style="flex:2">
+          <label>备注</label>
+          <input id="project-secret-remark" placeholder="可选，如：账户A专用" autocomplete="off">
         </div>
         <div class="form-group" style="flex:1; align-self:flex-end">
-          <button class="btn btn-outline" onclick="saveProjectSecret()">保存密钥</button>
+          <button class="btn btn-outline" onclick="addProjectSecret()">添加密钥</button>
         </div>
       </div>
-      <div class="form-row" style="margin-top:6px">
+      <div class="form-row" style="margin-top:10px">
         <div class="form-group" style="flex:2">
-          <label>查询配置（输入密钥后点击查询）</label>
+          <label>查询配置（输入任一密钥后点击查询）</label>
           <input id="project-query-secret" type="password" placeholder="输入项目密钥" autocomplete="new-password">
         </div>
         <div class="form-group" style="flex:1; align-self:flex-end">
@@ -837,7 +861,7 @@ function copyDslContent() {
       <button class="btn btn-outline" onclick="resetProjectForm()">重置</button>
       <button class="btn btn-primary" onclick="saveProject()" id="project-save-btn">新增</button>
     </div>
-    <div class="admin-only">
+    <div class="viewer-allowed">
       <h3 style="font-size:.95rem;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)">已有项目</h3>
       <div class="table-wrap" style="max-height:300px;overflow-y:auto">
         <table id="projects-table">

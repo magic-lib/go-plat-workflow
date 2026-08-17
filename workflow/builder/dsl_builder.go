@@ -48,8 +48,8 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		return nil, fmt.Errorf("%w: at least one node or sub chain must be specified", workflow.ErrDSLBuildFailed)
 	}
 
-	// 1. 查询节点（仅当前项目）
-	nodes, err := b.nodeStore.ListByIDs(ctx, req.Project, req.NodeIDs)
+	// 1. 查询节点（仅当前项目）；node_ids 可能含实例后缀 baseId__N，需去重为节点定义 ID
+	nodes, err := b.nodeStore.ListByIDs(ctx, req.Project, dedupBaseIDs(req.NodeIDs))
 	if err != nil {
 		return nil, fmt.Errorf("%w: query nodes: %v", workflow.ErrDSLBuildFailed, err)
 	}
@@ -143,8 +143,8 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		return nil, fmt.Errorf("%w: at least one node or sub chain must be specified", workflow.ErrDSLBuildFailed)
 	}
 
-	// 查询节点（仅当前项目）
-	nodes, err := b.nodeStore.ListByIDs(ctx, req.Project, req.NodeIDs)
+	// 查询节点（仅当前项目）；node_ids 可能含实例后缀 baseId__N，需去重为节点定义 ID
+	nodes, err := b.nodeStore.ListByIDs(ctx, req.Project, dedupBaseIDs(req.NodeIDs))
 	if err != nil {
 		return nil, fmt.Errorf("%w: query nodes: %v", workflow.ErrDSLBuildFailed, err)
 	}
@@ -196,10 +196,57 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 	}, nil
 }
 
-// buildRuleNodes 将注册节点定义转换为 rulego RuleNode 列表（含参数覆盖策略合并）。
-func (b *DSLBuilder) buildRuleNodes(nodeDefs []*workflow.NodeDef, overrides map[string]map[string]interface{}) []*types.RuleNode {
-	ruleNodes := make([]*types.RuleNode, 0, len(nodeDefs))
-	for _, node := range nodeDefs {
+// instanceRef 描述一个编排中的节点实例：baseId 为节点定义 ID，instanceId 为 DSL 中
+// 实际使用的唯一节点 ID（同一节点可多次添加，instanceId 形如 baseId__N）。
+type instanceRef struct {
+	baseId     string
+	instanceId string
+}
+
+// dedupBaseIDs 将可能含实例后缀（baseId__N）的 ID 列表去重为节点定义 ID，用于查询节点定义。
+func dedupBaseIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, raw := range ids {
+		base := raw
+		if i := strings.Index(raw, "__"); i >= 0 {
+			base = raw[:i]
+		}
+		if base == "" || seen[base] {
+			continue
+		}
+		seen[base] = true
+		out = append(out, base)
+	}
+	return out
+}
+
+// parseInstanceRefs 将编排传入的 ID 列表（可能含 baseId__N 后缀）解析为实例引用列表。
+func parseInstanceRefs(ids []string) []instanceRef {
+	out := make([]instanceRef, 0, len(ids))
+	for _, raw := range ids {
+		if raw == "" {
+			continue
+		}
+		base := raw
+		if i := strings.Index(raw, "__"); i >= 0 {
+			base = raw[:i]
+		}
+		out = append(out, instanceRef{baseId: base, instanceId: raw})
+	}
+	return out
+}
+
+// buildRuleNodes 将节点实例引用转换为 rulego RuleNode 列表（含参数覆盖策略合并）。
+// 同一节点定义可出现多次，每次使用各自的 instanceId 作为 RuleNode ID，
+// 参数覆盖 override key 也以 instanceId 匹配，从而实现同一节点在编排中添加多次。
+func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]*workflow.NodeDef, overrides map[string]map[string]interface{}) []*types.RuleNode {
+	ruleNodes := make([]*types.RuleNode, 0, len(instances))
+	for _, inst := range instances {
+		node, ok := defById[inst.baseId]
+		if !ok {
+			continue
+		}
 		config := make(types.Configuration)
 		if len(node.Configuration) > 0 {
 			_ = json.Unmarshal(node.Configuration, &config)
@@ -212,9 +259,9 @@ func (b *DSLBuilder) buildRuleNodes(nodeDefs []*workflow.NodeDef, overrides map[
 			_ = json.Unmarshal(node.Params, &bindConfigs)
 		}
 
-		// 构建用户传入参数（frontend）
+		// 构建用户传入参数（frontend），override key 使用实例 ID 以区分同一节点的多次添加
 		frontendMap := make(map[string]any)
-		if nodeOverrides, ok := overrides[node.NodeID]; ok {
+		if nodeOverrides, ok := overrides[inst.instanceId]; ok {
 			for k, v := range nodeOverrides {
 				frontendMap[k] = v
 			}
@@ -259,7 +306,7 @@ func (b *DSLBuilder) buildRuleNodes(nodeDefs []*workflow.NodeDef, overrides map[
 		}
 
 		ruleNodes = append(ruleNodes, &types.RuleNode{
-			Id:             node.NodeID,
+			Id:             inst.instanceId,
 			Type:           node.Type,
 			Name:           node.Name,
 			DebugMode:      node.DebugMode,
@@ -276,8 +323,13 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 	var ruleNodes []*types.RuleNode
 	idMap := make(map[string]bool) // 用于检测 ID 冲突
 
-	// 3a. 添加主链节点
-	mainNodes := b.buildRuleNodes(nodeDefs, req.NodeParamOverrides)
+	// 3a. 添加主链节点（支持同一节点多次添加，实例 ID 形如 baseId__N）
+	defById := make(map[string]*workflow.NodeDef, len(nodeDefs))
+	for _, nd := range nodeDefs {
+		defById[nd.NodeID] = nd
+	}
+	instances := parseInstanceRefs(req.NodeIDs)
+	mainNodes := b.buildRuleNodes(instances, defById, req.NodeParamOverrides)
 	for _, n := range mainNodes {
 		idMap[n.Id] = true
 	}

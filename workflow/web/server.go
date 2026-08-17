@@ -90,6 +90,10 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("DELETE /api/projects/{project}", ws.handleDeleteProject)
 	// 对外配置查询（需传入项目密钥，返回环境配置 + 可执行 RootChains 列表）
 	ws.mux.HandleFunc("POST /api/projects/{project}/config", ws.handleGetProjectConfig)
+	// 项目密钥管理（仅 admin）：列出/新增/删除项目的多个访问密钥
+	ws.mux.HandleFunc("GET /api/projects/{project}/secrets", ws.handleListProjectSecrets)
+	ws.mux.HandleFunc("POST /api/projects/{project}/secrets", ws.handleCreateProjectSecret)
+	ws.mux.HandleFunc("DELETE /api/projects/{project}/secrets", ws.handleDeleteProjectSecret)
 
 	// Nodes API（project 通过查询参数 ?project=xxx 传入）
 	ws.mux.HandleFunc("GET /api/nodes", ws.handleListNodes)
@@ -168,6 +172,12 @@ func (ws *WebServer) registerRoutes() {
 // projectParam 从 URL query 中提取 project 参数，未传则返回空字符串。
 func projectParam(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("project"))
+}
+
+// onlyEnabledParam 从 URL query 中解析 only_enabled 参数，默认 false（返回全部，含禁用）。
+// 仅当显式传 only_enabled=true 时才只返回启用状态的记录（用于编排选择时过滤禁用项）。
+func onlyEnabledParam(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("only_enabled")), "true")
 }
 
 // ============================================================
@@ -282,6 +292,7 @@ func (ws *WebServer) handleCreateProject(w http.ResponseWriter, r *http.Request)
 	if def.Status == 0 {
 		def.Status = 1
 	}
+	def.CreatedBy = u.Username // 记录创建者，普通用户在已有项目列表中仅展示自己的项目
 	if err := ws.svc.CreateProject(r.Context(), &def); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -350,6 +361,68 @@ func (ws *WebServer) handleGetProjectConfig(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, cfg)
 }
 
+// requireAdmin 已在 auth.go 中定义（返回 *models.UserModel，nil 表示校验失败并已写出错误响应）。
+
+// handleListProjectSecrets 列出项目下所有密钥（含备注）。
+func (ws *WebServer) handleListProjectSecrets(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	if ws.requireAdmin(w, r) == nil {
+		return
+	}
+	secrets, err := ws.svc.ListProjectSecrets(r.Context(), project)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if secrets == nil {
+		secrets = []*workflow.SecretKeyItem{}
+	}
+	writeJSON(w, http.StatusOK, secrets)
+}
+
+// handleCreateProjectSecret 为项目新增密钥（密钥明文 + 备注）。
+func (ws *WebServer) handleCreateProjectSecret(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	if ws.requireAdmin(w, r) == nil {
+		return
+	}
+	var req struct {
+		SecretKey string `json:"secret_key"`
+		Remark    string `json:"remark"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	if err := ws.svc.CreateProjectSecret(r.Context(), project, req.SecretKey, req.Remark); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	log.Info().Str("project", project).Msg("project secret created via web")
+	writeJSON(w, http.StatusCreated, map[string]string{"message": "created"})
+}
+
+// handleDeleteProjectSecret 删除项目下指定密钥（按明文匹配）。
+func (ws *WebServer) handleDeleteProjectSecret(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	if ws.requireAdmin(w, r) == nil {
+		return
+	}
+	var req struct {
+		SecretKey string `json:"secret_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	if err := ws.svc.DeleteProjectSecret(r.Context(), project, req.SecretKey); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	log.Info().Str("project", project).Msg("project secret deleted via web")
+	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
+}
+
 // ============================================================
 // 健康检查
 // ============================================================
@@ -368,7 +441,7 @@ func (ws *WebServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
 		return
 	}
-	nodes, err := ws.svc.ListNodes(r.Context(), project)
+	nodes, err := ws.svc.ListNodes(r.Context(), project, r.URL.Query().Get("namespace"), r.URL.Query().Get("tag"), onlyEnabledParam(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -563,7 +636,7 @@ func (ws *WebServer) handleListSubChains(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
 		return
 	}
-	chains, err := ws.svc.ListSubChains(r.Context(), project)
+	chains, err := ws.svc.ListSubChains(r.Context(), project, onlyEnabledParam(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

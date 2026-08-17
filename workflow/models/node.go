@@ -27,6 +27,7 @@ type NodeModel struct {
 	ID             uint           `gorm:"primaryKey;autoIncrement" json:"id"`
 	Project        string         `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_node_id,priority:1;not null;index" json:"project"`
 	NodeID         string         `gorm:"column:node_id;type:varchar(128);uniqueIndex:uk_project_node_id,priority:2;not null" json:"node_id"`
+	Namespace      string         `gorm:"column:namespace;type:varchar(255);index" json:"namespace"`
 	Name           string         `gorm:"type:varchar(255);not null" json:"name"`
 	Type           string         `gorm:"type:varchar(128);not null;index" json:"type"`
 	DebugMode      bool           `gorm:"default:false" json:"debug_mode"`
@@ -36,6 +37,7 @@ type NodeModel struct {
 	Outputs        string         `gorm:"type:text" json:"outputs"`
 	Kind           string         `gorm:"type:varchar(32);default:action;index" json:"kind"`
 	Category       string         `gorm:"type:varchar(128);index" json:"category"`
+	Tags           string         `gorm:"type:varchar(512)" json:"tags"`
 	Description    string         `gorm:"type:varchar(512)" json:"description"`
 	Status         int8           `gorm:"default:1;index" json:"status"`
 	Version        string         `gorm:"type:varchar(64)" json:"version"`
@@ -90,6 +92,7 @@ func (m *NodeModel) ToNodeDef() *workflow.NodeDef {
 	return &workflow.NodeDef{
 		Project:        m.Project,
 		NodeID:         m.NodeID,
+		Namespace:      m.Namespace,
 		Name:           m.Name,
 		Type:           normalizeNodeType(m.Type),
 		DebugMode:      m.DebugMode,
@@ -99,6 +102,7 @@ func (m *NodeModel) ToNodeDef() *workflow.NodeDef {
 		Outputs:        json.RawMessage(outputs),
 		Kind:           m.Kind,
 		Category:       m.Category,
+		Tags:           parseTags(m.Tags),
 		Description:    m.Description,
 		Status:         m.Status,
 		Version:        m.Version,
@@ -109,6 +113,7 @@ func (m *NodeModel) ToNodeDef() *workflow.NodeDef {
 func (m *NodeModel) FromNodeDef(def *workflow.NodeDef) {
 	m.Project = def.Project
 	m.NodeID = def.NodeID
+	m.Namespace = def.Namespace
 	m.Name = def.Name
 	m.Type = def.Type
 	m.DebugMode = def.DebugMode
@@ -118,6 +123,7 @@ func (m *NodeModel) FromNodeDef(def *workflow.NodeDef) {
 	m.Outputs = rawOr(def.Outputs, "[]")
 	m.Kind = def.Kind
 	m.Category = def.Category
+	m.Tags = serializeTags(def.Tags)
 	m.Description = def.Description
 	m.Status = def.Status
 	m.Version = def.Version

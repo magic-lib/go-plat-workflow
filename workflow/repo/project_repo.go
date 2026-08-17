@@ -12,12 +12,13 @@ import (
 
 // ProjectRepo 项目仓储，实现 workflow.ProjectStore 接口。
 type ProjectRepo struct {
-	db *gorm.DB
+	db         *gorm.DB
+	secretRepo *ProjectSecretRepo
 }
 
 // NewProjectRepo 创建项目仓储实例。
 func NewProjectRepo(db *gorm.DB) *ProjectRepo {
-	return &ProjectRepo{db: db}
+	return &ProjectRepo{db: db, secretRepo: NewProjectSecretRepo(db)}
 }
 
 // Create 创建项目。
@@ -66,10 +67,7 @@ func (r *ProjectRepo) Update(ctx context.Context, def *workflow.ProjectDef) erro
 		"description": def.Description,
 		"status":      def.Status,
 	}
-	// 密钥仅在页面显式传入时才更新（避免清空已有密钥）
-	if def.SecretKey != "" {
-		updates["secret_key"] = def.SecretKey
-	}
+	// 密钥已迁移至 wf_project_secrets 子表，项目更新不再处理 secret_key。
 	result := r.db.WithContext(ctx).
 		Model(&models.ProjectModel{}).
 		Where("project = ?", def.Project).
@@ -83,20 +81,18 @@ func (r *ProjectRepo) Update(ctx context.Context, def *workflow.ProjectDef) erro
 	return nil
 }
 
-// GetSecret 按项目 ID 查询密钥（不返回其他字段）。
-func (r *ProjectRepo) GetSecret(ctx context.Context, project string) (string, error) {
-	var secret string
-	err := r.db.WithContext(ctx).
-		Model(&models.ProjectModel{}).
-		Where("project = ? AND status = ?", project, models.NodeStatusEnabled).
-		Pluck("secret_key", &secret).Error
-	if err != nil {
-		return "", err
+// SecretRepo 暴露项目密钥子表仓储，供 service 层做密钥的增删查管理。
+func (r *ProjectRepo) SecretRepo() *ProjectSecretRepo {
+	return r.secretRepo
+}
+
+// GetSecrets 按项目 ID 查询所有密钥明文（用于对外配置查询接口的鉴权比对）。
+// 项目密钥已迁移至 wf_project_secrets 子表，此处通过 ProjectSecretRepo 查询。
+func (r *ProjectRepo) GetSecrets(ctx context.Context, project string) ([]string, error) {
+	if r.secretRepo == nil {
+		return nil, workflow.ErrProjectNotFound
 	}
-	if secret == "" {
-		return "", workflow.ErrProjectNotFound
-	}
-	return secret, nil
+	return r.secretRepo.ListKeys(ctx, project)
 }
 
 // Delete 软删除项目。
