@@ -922,7 +922,11 @@ type NodeLogDef struct {
 	TraceID     string    `json:"trace_id"`
 	RootChainID string    `json:"root_chain_id"`
 	SpanID      string    `json:"span_id"`
-	CreatedAt   time.Time `json:"created_at"`
+	// RelationType 该 node 执行完成后往下传递的连接类型（relationType），
+	// 对应 rulego 的 TellSuccess/TellFailure/TellNext 等，取值如 Success/Failure/True/False 或自定义字符串。
+	// 用于回查本次 node 走了哪条分支链路。
+	RelationType string    `json:"relation_type"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // NodeLogFilter node 运行日志查询过滤条件。

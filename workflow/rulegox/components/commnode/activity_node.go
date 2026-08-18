@@ -251,7 +251,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		msg.SetData(conv.String(allParam))
 		log.Printf("[activityNode] node=%s 执行失败 error=%s", currNodeId, err.Error())
 		// 上报 node 失败日志（含入参），error_msg 填充失败原因，payload 为全部入参
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", allParam, stepFlowCtx.Arguments, err)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParam, stepFlowCtx.Arguments, err)
 		if cliErr == nil {
 			x.nodeLogCli = nodeCli
 		}
@@ -267,7 +267,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		allParam.SetStep(currNodeId, nodeStep)
 		msg.SetData(conv.String(allParam))
 		// 上报 node 返回值日志（落库 wf_node_logs）
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", allParam, dataMap, nil)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success, allParam, dataMap, nil)
 		if cliErr == nil {
 			x.nodeLogCli = nodeCli
 		}
@@ -275,7 +275,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
-	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "response", "error", allParam, allParam, err)
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "response", "error", types.Success, allParam, allParam, err)
 	if cliErr == nil {
 		x.nodeLogCli = nodeCli
 	}
@@ -289,27 +289,28 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 // 便于管理端收集器直接反序列化为 workflow.NodeLogDef 落库 wf_node_logs）。
 // 定义在 commnode 包内以避免反向 import workflow（workflow 已 import commnode，会产生循环依赖）。
 type nodeLogRecord struct {
-	Project     string          `json:"project"`
-	Env         string          `json:"env"`
-	NodeID      string          `json:"node_id"`
-	NodeName    string          `json:"node_name"`
-	EventID     string          `json:"event_id"`
-	Level       string          `json:"level"`
-	Timestamp   int64           `json:"timestamp"`
-	DurationMs  int64           `json:"duration_ms"`
-	Payload     json.RawMessage `json:"payload"`
-	Result      json.RawMessage `json:"result"`
-	ErrorMsg    string          `json:"error_msg"`
-	Error       string          `json:"error"`
-	TraceID     string          `json:"trace_id"`
-	RootChainID string          `json:"root_chain_id"`
-	SpanID      string          `json:"span_id"`
-	CreatedAt   time.Time       `json:"created_at"`
+	Project      string          `json:"project"`
+	Env          string          `json:"env"`
+	NodeID       string          `json:"node_id"`
+	NodeName     string          `json:"node_name"`
+	EventID      string          `json:"event_id"`
+	Level        string          `json:"level"`
+	Timestamp    int64           `json:"timestamp"`
+	DurationMs   int64           `json:"duration_ms"`
+	Payload      json.RawMessage `json:"payload"`
+	Result       json.RawMessage `json:"result"`
+	ErrorMsg     string          `json:"error_msg"`
+	Error        string          `json:"error"`
+	TraceID      string          `json:"trace_id"`
+	RootChainID  string          `json:"root_chain_id"`
+	SpanID       string          `json:"span_id"`
+	RelationType string          `json:"relation_type"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 // 由管理端收集器消费后落库 wf_node_logs，便于在前端查看每个 node 的运行情况。
 // redis 客户端基于 actMetaData.RedisConfig 惰性建立并缓存在组件实例上；配置缺失时静默跳过。
-func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level string, payload, result any, runErr error) (*redis.Client, error) {
+func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level, relationType string, payload, result any, runErr error) (*redis.Client, error) {
 	if metaData == nil || metaData.RedisConfig == nil {
 		return nil, nil
 	}
@@ -322,20 +323,21 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 	}
 	now := time.Now()
 	rec := nodeLogRecord{
-		Project:     metaData.Project,
-		Env:         metaData.Env,
-		NodeID:      nodeID,
-		NodeName:    nodeName,
-		EventID:     eventID,
-		DurationMs:  durationMs,
-		Level:       level,
-		Timestamp:   now.Unix(),
-		Payload:     json.RawMessage(conv.String(payload)),
-		Result:      json.RawMessage(conv.String(result)),
-		TraceID:     metaData.TraceId,
-		RootChainID: metaData.RootChainID,
-		SpanID:      nodeSpanId,
-		CreatedAt:   now,
+		Project:      metaData.Project,
+		Env:          metaData.Env,
+		NodeID:       nodeID,
+		NodeName:     nodeName,
+		EventID:      eventID,
+		DurationMs:   durationMs,
+		Level:        level,
+		Timestamp:    now.Unix(),
+		Payload:      json.RawMessage(conv.String(payload)),
+		Result:       json.RawMessage(conv.String(result)),
+		TraceID:      metaData.TraceId,
+		RootChainID:  metaData.RootChainID,
+		SpanID:       nodeSpanId,
+		RelationType: relationType,
+		CreatedAt:    now,
 	}
 	if runErr != nil {
 		rec.ErrorMsg = runErr.Error()

@@ -3004,6 +3004,7 @@ function renderNodeLogItem(r) {
     (r.node_name ? '<span class="log-meta log-node-name">node=' + esc(r.node_name) + '</span>' : ''),
     (r.env ? '<span class="log-meta">env=' + esc(r.env) + '</span>' : ''),
     (r.trace_id ? '<span class="log-meta">trace_id=' + esc(r.trace_id) + '</span>' : ''),
+    (r.relation_type ? '<span class="log-meta log-relation">relation=' + esc(r.relation_type) + '</span>' : ''),
   ].join(' ');
   // request/fail 展示入参（payload），response 展示返回值（result）
   let body = '';

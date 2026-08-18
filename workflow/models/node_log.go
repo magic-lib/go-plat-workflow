@@ -23,10 +23,11 @@ type NodeLogModel struct {
 	Payload     string    `gorm:"column:payload;type:json" json:"payload"`
 	Result      string    `gorm:"column:result;type:json" json:"result"`
 	ErrorMsg    string    `gorm:"column:error_msg;type:text" json:"error_msg"`
-	TraceID     string    `gorm:"column:trace_id;type:varchar(128);index;default:''" json:"trace_id"`
-	RootChainID string    `gorm:"column:root_chain_id;type:varchar(128);index;default:''" json:"root_chain_id"`
-	SpanID      string    `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
-	CreatedAt   time.Time `json:"created_at"`
+	TraceID      string    `gorm:"column:trace_id;type:varchar(128);index;default:''" json:"trace_id"`
+	RootChainID  string    `gorm:"column:root_chain_id;type:varchar(128);index;default:''" json:"root_chain_id"`
+	SpanID       string    `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
+	RelationType string    `gorm:"column:relation_type;type:varchar(64);index;default:''" json:"relation_type"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // TableName 返回表名。
@@ -49,10 +50,11 @@ func (m *NodeLogModel) ToDef() *workflow.NodeLogDef {
 		Payload:     json.RawMessage(m.Payload),
 		Result:      json.RawMessage(m.Result),
 		ErrorMsg:    m.ErrorMsg,
-		TraceID:     m.TraceID,
-		RootChainID: m.RootChainID,
-		SpanID:      m.SpanID,
-		CreatedAt:   m.CreatedAt,
+		TraceID:      m.TraceID,
+		RootChainID:  m.RootChainID,
+		SpanID:       m.SpanID,
+		RelationType: m.RelationType,
+		CreatedAt:    m.CreatedAt,
 	}
 }
 
@@ -72,4 +74,5 @@ func (m *NodeLogModel) FromDef(def *workflow.NodeLogDef) {
 	m.TraceID = def.TraceID
 	m.RootChainID = def.RootChainID
 	m.SpanID = def.SpanID
+	m.RelationType = def.RelationType
 }

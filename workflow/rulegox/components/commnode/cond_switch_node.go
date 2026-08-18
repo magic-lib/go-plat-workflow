@@ -115,36 +115,37 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	if isBool {
 		boolResult, err := conv.Convert[bool](conResult)
 		if err != nil {
-			nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "fail", "error", allParams, nodeParams, err)
+			nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "fail", "error", types.Failure, allParams, nodeParams, err)
 			if cliErr == nil {
 				x.nodeLogCli = nodeCli
 			}
 			ctx.TellFailure(msg, err)
 			return
 		}
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", allParams, nodeParams, nil)
+		relationType := types.True
+		if !boolResult {
+			relationType = types.False
+		}
+
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", relationType, allParams, nodeParams, nil)
 		if cliErr == nil {
 			x.nodeLogCli = nodeCli
 		}
-		if boolResult {
-			ctx.TellNext(msg, types.True)
-		} else {
-			ctx.TellNext(msg, types.False)
-		}
+		ctx.TellNext(msg, relationType)
 		return
 	}
-	if retStr, ok := conResult.(string); ok {
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", allParams, nodeParams, nil)
+	if relationTypeTemp, ok := conResult.(string); ok {
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", relationTypeTemp, allParams, nodeParams, nil)
 		if cliErr == nil {
 			x.nodeLogCli = nodeCli
 		}
-		ctx.TellNext(msg, retStr)
+		ctx.TellNext(msg, relationTypeTemp)
 		return
 	}
 	// 默认使用Success和Failure
 	changeBool, err := conv.Convert[bool](conResult)
 	if err != nil {
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "fail", "error", allParams, nodeParams, err)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "fail", "error", conv.String(conResult), allParams, nodeParams, err)
 		if cliErr == nil {
 			x.nodeLogCli = nodeCli
 		}
@@ -153,21 +154,38 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
-	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", allParams, nodeParams, nil)
+	relationType := types.Success
+	if !changeBool {
+		relationType = types.Failure
+	}
+
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", relationType, allParams, nodeParams, nil)
 	if cliErr == nil {
 		x.nodeLogCli = nodeCli
 	}
 	// 默认采用Success和Failure
-	if changeBool {
-		ctx.TellSuccess(msg)
-	} else {
-		ctx.TellNext(msg, types.Failure)
-	}
+	ctx.TellNext(msg, relationType)
 }
 
 // Desc returns the component description
 func (x *CondSwitchNode) Desc() string {
 	return "Routes to True/False. Variables: id, ts, data, msg, metadata, type, dataType"
+}
+
+// boolResultRelation 将布尔结果映射为 rulego 往下传递的 relationType。
+func boolResultRelation(b bool) string {
+	if b {
+		return "True"
+	}
+	return "False"
+}
+
+// defaultRelation 将默认分支的布尔结果映射为 relationType（true→Success，false→Failure）。
+func defaultRelation(b bool) string {
+	if b {
+		return "Success"
+	}
+	return "Failure"
 }
 
 // Destroy 清理资源
