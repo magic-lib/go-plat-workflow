@@ -222,7 +222,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	//log.Printf("[activityNode] OnMsg nodeId=%s metaData=%s", x.getNodeId(ctx), conv.String(actMetaData))
 
-	currNodeId := x.getNodeId(ctx)
+	currNodeId := getNodeId(ctx)
 	nodeStr := string(currNodeId)
 	// 上报 node 入参日志（落库 wf_node_logs，便于前端查看运行情况）
 	//x.pushNodeLog(actMetaData, nodeStr, nodeStr, "request", "info", allParam, stepFlowCtx.Arguments, nil)
@@ -251,7 +251,10 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		msg.SetData(conv.String(allParam))
 		log.Printf("[activityNode] node=%s 执行失败 error=%s", currNodeId, err.Error())
 		// 上报 node 失败日志（含入参），error_msg 填充失败原因，payload 为全部入参
-		x.pushNodeLog(actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", allParam, stepFlowCtx.Arguments, err)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", allParam, stepFlowCtx.Arguments, err)
+		if cliErr == nil {
+			x.nodeLogCli = nodeCli
+		}
 		ctx.TellFailure(msg, err)
 		return
 	}
@@ -264,12 +267,18 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		allParam.SetStep(currNodeId, nodeStep)
 		msg.SetData(conv.String(allParam))
 		// 上报 node 返回值日志（落库 wf_node_logs）
-		x.pushNodeLog(actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", allParam, dataMap, nil)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", allParam, dataMap, nil)
+		if cliErr == nil {
+			x.nodeLogCli = nodeCli
+		}
 		ctx.TellSuccess(msg)
 		return
 	}
 
-	x.pushNodeLog(actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "response", "error", allParam, allParam, err)
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "response", "error", allParam, allParam, err)
+	if cliErr == nil {
+		x.nodeLogCli = nodeCli
+	}
 
 	msg.SetData(conv.String(allParam))
 	ctx.TellSuccess(msg)
@@ -300,16 +309,16 @@ type nodeLogRecord struct {
 
 // 由管理端收集器消费后落库 wf_node_logs，便于在前端查看每个 node 的运行情况。
 // redis 客户端基于 actMetaData.RedisConfig 惰性建立并缓存在组件实例上；配置缺失时静默跳过。
-func (x *ActivityNode) pushNodeLog(metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level string, payload, result any, runErr error) {
+func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level string, payload, result any, runErr error) (*redis.Client, error) {
 	if metaData == nil || metaData.RedisConfig == nil {
-		return
+		return nil, nil
 	}
-	if x.nodeLogCli == nil {
+	if nodeLogCli == nil {
 		cli, err := rulegox.NewRedisClient(metaData.RedisConfig)
 		if err != nil {
-			return
+			return nil, err
 		}
-		x.nodeLogCli = cli
+		nodeLogCli = cli
 	}
 	now := time.Now()
 	rec := nodeLogRecord{
@@ -332,13 +341,15 @@ func (x *ActivityNode) pushNodeLog(metaData *rulegox.ActivityMetaData, nodeSpanI
 		rec.ErrorMsg = runErr.Error()
 	}
 	key := rulegox.NodeLogKeyPrefix + rulegox.GetMQNamespace(metaData.Project, metaData.Env)
-	_ = x.nodeLogCli.RPush(context.Background(), key, conv.String(rec)).Err()
+	_ = nodeLogCli.RPush(context.Background(), key, conv.String(rec)).Err()
 	// 限制单个 node 日志 list 长度，避免 redis 中无限增长
-	_ = x.nodeLogCli.LTrim(context.Background(), key, -500, -1).Err()
+	_ = nodeLogCli.LTrim(context.Background(), key, -500, -1).Err()
+
+	return nodeLogCli, nil
 }
 
 func (x *ActivityNode) getNodeFlowContext(ctx types.RuleContext, allParam *paramx.FlowContext) (*paramx.FlowContext, error) {
-	currNodeId := x.getNodeId(ctx)
+	currNodeId := getNodeId(ctx)
 	if currNodeId == "" {
 		return nil, fmt.Errorf("activityNode currNodeId is empty")
 	}
@@ -480,9 +491,9 @@ func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*p
 }
 
 // getNodeId 获取当前节点的 ID（优先用 ctx 中的 SelfId）
-func (x *ActivityNode) getNodeId(ctx types.RuleContext) paramx.StepId {
-	if id := ctx.GetSelfId(); id != "" {
-		return paramx.StepId(id)
+func getNodeId(ctx types.RuleContext) paramx.StepId {
+	if idTemp := ctx.GetSelfId(); idTemp != "" {
+		return paramx.StepId(idTemp)
 	}
 	return ""
 }

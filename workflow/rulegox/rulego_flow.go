@@ -19,7 +19,7 @@ type ActivityFlowConfig struct {
 	FlowContext  *paramx.FlowContext        //前端传入的参数
 	MsgType      string
 	IsAsync      bool
-	EndFunc      func(ctx context.Context, param *paramx.FlowContext, err error)
+	EndFunc      func(ctx context.Context, relationType string, param *paramx.FlowContext, err error)
 	// UseCache 是否复用全局 rulego 引擎池中已存在的同名链（以 RootChainID 为 key）。
 	// true：命中则直接复用旧实例，性能更好、配置保持稳定（适合正式环境高频复用）；
 	// false：每次都基于最新 DSL 通过 rulego.New 覆盖重建，配置更新可立即生效（适合 node 测试/开发环境）。
@@ -54,12 +54,12 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 	actConfig.FlowContext.SetFlowId(metaData.RootChainID)
 
 	if actConfig.EndFunc == nil {
-		actConfig.EndFunc = func(ctx context.Context, param *paramx.FlowContext, err error) {
+		actConfig.EndFunc = func(ctx context.Context, relationType string, param *paramx.FlowContext, err error) {
 			if err != nil {
-				log.Printf("工作流执行失败: %v", err)
+				log.Printf("工作流%s执行失败: %v", relationType, err)
 				return
 			}
-			log.Printf("工作流执行成功: %v\n", param)
+			log.Printf("工作流%s执行成功: %v\n", relationType, param)
 		}
 	}
 
@@ -131,15 +131,18 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 		newMetadata.PutValue(k, conv.String(v))
 	}
 
-	msg := types.NewMsg(0, actConfig.MsgType, types.JSON, newMetadata, conv.String(actConfig.FlowContext))
+	msg := types.NewMsgWithJsonData(conv.String(actConfig.FlowContext))
+	msg.SetType(actConfig.MsgType)
+	msg.SetMetadata(newMetadata)
+
 	endOption := types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
 		var resultParam = new(paramx.FlowContext)
 		_ = conv.Unmarshal(msg.GetData(), resultParam)
 		if err != nil {
-			actConfig.EndFunc(ruleCtx.GetContext(), resultParam, err)
+			actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, err)
 			return
 		}
-		actConfig.EndFunc(ruleCtx.GetContext(), resultParam, nil)
+		actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, nil)
 	})
 	if actConfig.IsAsync {
 		engineIns.OnMsg(msg, endOption, types.WithContext(ctx))

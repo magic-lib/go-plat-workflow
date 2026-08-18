@@ -865,20 +865,20 @@ function onNodeTypeChange() {
   if (isCond) {
     let cfg = {};
     try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
-    const cond = (cfg.node_config && cfg.node_config.conditon) || '';
-    document.getElementById('node-conditon').value = cond;
+    const cond = (cfg.node_config && cfg.node_config.condition) || '';
+    document.getElementById('node-condition').value = cond;
     syncCondConfig();
   }
 }
 
-// 将条件串输入框的内容写入 Configuration（CommConfiguration 结构：node_config.conditon 等）
+// 将条件串输入框的内容写入 Configuration（CommConfiguration 结构：node_config.condition 等）
 function syncCondConfig() {
   if (document.getElementById('node-type').value !== 'custom/CondSwitch') return;
   let cfg;
   try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
   if (typeof cfg !== 'object' || cfg === null) cfg = {};
   if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
-  cfg.node_config.conditon = document.getElementById('node-conditon').value;
+  cfg.node_config.condition = document.getElementById('node-condition').value;
   // 保证 CommConfiguration 各字段存在
   if (typeof cfg.arg_mapping === 'undefined') cfg.arg_mapping = {};
   if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
@@ -4891,12 +4891,20 @@ function renderOrchNodeList(filterText, filterNs, filterTag) {
   }).join('');
 }
 
-// 添加节点实例到编排（同一节点可多次添加，实例 ID 形如 nodeId__N）
+// 生成全局唯一的实例 ID：nodeId + "__" + 8位 base36 随机串（约 36^8 ≈ 2.8e12 组合，跨子链/删除均不冲突）
+function genOrchInstanceId(nodeId) {
+  let rnd;
+  do {
+    rnd = Math.random().toString(36).slice(2, 10);
+  } while ((window._orchNodeInstances || []).some(i => i.instanceId === nodeId + '__' + rnd));
+  return nodeId + '__' + rnd;
+}
+
+// 添加节点实例到编排（同一节点可多次添加，实例 ID 形如 nodeId__<随机段>，全局唯一且不依赖序号）
 function addOrchNodeInstance(nodeId) {
   if (!window._orchNodeInstances) window._orchNodeInstances = [];
-  // 计算该节点的实例序号
-  const seq = window._orchNodeInstances.filter(i => i.nodeId === nodeId).length + 1;
-  const instanceId = nodeId + '__' + seq;
+  // 用随机短码代替序号，避免删除导致空洞、跨子链序号碰撞
+  const instanceId = genOrchInstanceId(nodeId);
   const n = (_orchNodes || []).find(x => x.node_id === nodeId);
   window._orchNodeInstances.push({
     instanceId: instanceId,
@@ -4943,15 +4951,14 @@ function renderOrchNodeSelected() {
     box.innerHTML = '<div class="orch-select-empty" style="padding:8px;font-size:.78rem">尚未添加节点</div>';
     return;
   }
-  box.innerHTML = `<table class="data-table" style="width:100%;font-size:.85rem">
-      <thead><tr><th>#</th><th>节点名称</th><th>Node ID</th><th>实例序号</th><th style="text-align:right">操作</th></tr></thead>
+  box.innerHTML = `    <table class="data-table" style="width:100%;font-size:.85rem">
+      <thead><tr><th>#</th><th>节点名称</th><th>Node ID</th><th>实例 ID</th><th style="text-align:right">操作</th></tr></thead>
       <tbody>${list.map((i, idx) => {
-        const seq = i.instanceId.split('__')[1] || '';
         return `<tr title="${esc(i.instanceId)}">
           <td>${idx + 1}</td>
           <td>${esc(i.name)}</td>
           <td class="code-cell">${esc(i.nodeId)}</td>
-          <td>#${esc(seq)}</td>
+          <td class="code-cell">${esc(i.instanceId)}</td>
           <td style="text-align:right"><button class="btn btn-sm btn-danger" type="button" onclick="removeOrchNodeInstance('${esc(i.instanceId)}')">删除</button></td>
         </tr>`;
       }).join('')}</tbody>
@@ -5072,12 +5079,11 @@ function refreshOrchConnOptions() {
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
 
-  // Build options for each node (显示名称 + 实例序号，更直观)
+  // Build options for each node (显示名称 + 类型，instanceId 全局唯一不再展示序号)
   const nodeOpts = nodeIds.map(id => {
     const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
     const label = inst ? inst.name : id;
-    const seq = inst ? inst.instanceId.split('__')[1] : '';
-    const extra = inst ? (inst.nodeId + (seq ? ' #' + seq : '') + ' · ' + inst.type) : '';
+    const extra = inst ? (inst.nodeId + ' · ' + inst.type) : '';
     return `<option value="${esc(id)}">⚙ ${esc(label)}${extra ? ' ('+esc(extra)+')' : ''}</option>`;
   }).join('');
 
@@ -5121,7 +5127,10 @@ function addOrchConnRow(fromId, toId, connType) {
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
   const nodeOpts = nodeIds.map(id => {
-    const n = _orchNodes.find(x => x.node_id === id);
+    // id 是实例 ID（nodeId__随机段），需按实例的 nodeId 查定义
+    const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
+    const nodeId = inst ? inst.nodeId : id.split('__')[0];
+    const n = _orchNodes.find(x => x.node_id === nodeId);
     const label = n && n.name ? n.name : id;
     const extra = n && n.name ? id + ' · ' + n.type : (n ? n.type : '');
     return `<option value="${esc(id)}">⚙ ${esc(label)}${extra ? ' ('+esc(extra)+')' : ''}</option>`;
@@ -5264,10 +5273,15 @@ function orchBuildDslPreview() {
   const conns = collectOrchConnections();
 
   const nodes = nodeIds.map(id => {
-    const n = _orchNodes.find(x => x.node_id === id);
+    // id 是实例 ID（nodeId__随机段），需从 _orchNodeInstances 取实例，再按 nodeId 查定义
+    const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
+    const nodeId = inst ? inst.nodeId : id.split('__')[0];
+    const n = _orchNodes.find(x => x.node_id === nodeId);
     if (!n) return { id, type: 'unknown' };
+    // configuration 默认填充 node 数据库里存的 configuration 内容
     let config = {};
     try { config = JSON.parse(typeof n.configuration === 'string' ? n.configuration : JSON.stringify(n.configuration||{})); } catch(e){}
+    if (typeof config !== 'object' || config === null) config = {};
     // arguments 以 BindConfig 数组格式注入（保留 key/value/policy），便于后期执行时按策略判断覆盖
     try {
       const params = typeof n.params === 'string' ? JSON.parse(n.params) : (n.params || []);
@@ -5275,6 +5289,20 @@ function orchBuildDslPreview() {
         config.arguments = params;
       }
     } catch(e){}
+    // 叠加该实例在"参数配置区"填写的 override（按实例 ID 匹配），覆盖同名参数
+    const preset = (_orchParamPreset && _orchParamPreset[id]) || {};
+    Object.keys(preset).forEach(key => {
+      const { src, value } = preset[key];
+      if (!value || !value.trim()) return;
+      let finalVal = value.trim();
+      if (src === 'entry') finalVal = '{{' + value.trim() + '}}';
+      if (typeof config.arguments === 'undefined') config.arguments = [];
+      const arr = Array.isArray(config.arguments) ? config.arguments : [];
+      const idx = arr.findIndex(a => a && a.key === key);
+      if (idx >= 0) { arr[idx].value = finalVal; }
+      else { arr.push({ key, value: finalVal }); }
+      config.arguments = arr;
+    });
     return { id, type: n.type, name: n.name, configuration: config };
   });
 
@@ -5289,7 +5317,8 @@ function orchBuildDslPreview() {
       id: document.getElementById('orch-chain-id').value || 'auto',
       name: document.getElementById('orch-chain-name').value || '',
       debugMode: document.getElementById('orch-debug-mode').checked,
-      root: true,
+      // 子链不是根链：预览与后端 AssembleSubChain 一致（Root=false），根链才为 true
+      root: window._orchTarget !== 'sub',
     },
     metadata: {
       nodes: [...nodes, ...subNodes],
@@ -5523,13 +5552,12 @@ function renderOrchParamOverrides() {
   let html = '';
   nodes.forEach(({ inst, def }) => {
     const params = parseNodeParams(def);
-    const seq = inst.instanceId.split('__')[1] || '';
     html += `<div class="override-node-block">
       <div class="override-node-header" onclick="this.nextElementSibling.classList.toggle('hidden')">
         <span class="toggle-icon">▾</span>
         <span class="code-cell">${esc(inst.instanceId)}</span>
         <span style="font-weight:400">${esc(def.name || '')}</span>
-        <span style="margin-left:auto;font-weight:400;color:var(--text-muted);font-size:.72rem">${params.length} 个参数${seq ? ' · #' + esc(seq) : ''}</span>
+        <span style="margin-left:auto;font-weight:400;color:var(--text-muted);font-size:.72rem">${params.length} 个参数</span>
       </div>
       <div class="override-node-body">`;
     params.forEach(p => {
@@ -5822,6 +5850,7 @@ function enhanceOrchPreviewNodes(container) {
 
 function renderOrchDslPreview() {
   const container = document.getElementById('orch-dsl-preview');
+  if (!container) return; // 当前页面（如 index.html）无 DSL Preview 区域，直接跳过
   if (!container.classList.contains('show')) return;
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
@@ -5834,9 +5863,10 @@ function renderOrchDslPreview() {
 
 function toggleOrchDsl() {
   const container = document.getElementById('orch-dsl-preview');
+  if (!container) return; // 当前页面无 DSL Preview 区域，直接跳过
   const btn = document.getElementById('orch-dsl-toggle');
   container.classList.toggle('show');
-  btn.textContent = container.classList.contains('show') ? '收起' : '展开';
+  if (btn) btn.textContent = container.classList.contains('show') ? '收起' : '展开';
   if (container.classList.contains('show')) renderOrchDslPreview();
 }
 
@@ -6017,9 +6047,11 @@ async function generateOrchRootChain() {
     await api(endpoint, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     showToast((isSub ? 'Sub Chain' : 'Root Chain') + ' 已保存: ' + (chainId || '(自动生成)'), 'success');
     if (isSub) {
-      if (document.getElementById('tab-sub-chains').classList.contains('active')) loadSubChains();
+      const subTab = document.getElementById('tab-sub-chains');
+      if (subTab && subTab.classList.contains('active')) loadSubChains();
     } else {
-      if (document.getElementById('tab-root-chains').classList.contains('active')) loadRootChains();
+      const rootTab = document.getElementById('tab-root-chains');
+      if (rootTab && rootTab.classList.contains('active')) loadRootChains();
     }
     // 保存成功后清除编辑标记，恢复默认文案
     btn.dataset.edit = '';

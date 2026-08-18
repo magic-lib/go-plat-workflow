@@ -19,7 +19,6 @@ import (
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
-	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 )
 
@@ -129,7 +128,8 @@ func (e *MQExecutor) newMQClient(redisCfg *RedisConfig) (*mq.AsynqMessageQueue, 
 // 便于在测试记录中回查完整执行链路。
 type TestNodeResultData struct {
 	// Data 执行结果（FlowContext / map 等，由具体节点类型决定）
-	Data any `json:"data"`
+	Data         any    `json:"data"`
+	RelationType string `json:"relation_type"`
 	// TraceID 本次测试的分布式追踪 ID
 	TraceID string `json:"trace_id"`
 }
@@ -303,68 +303,67 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 		DebugMode:     payload.NodeDef.DebugMode,
 		Configuration: config,
 	}
-	dsl := map[string]interface{}{
-		"ruleChain": map[string]interface{}{
-			"id":   "condition_" + payload.NodeDef.NodeID,
-			"name": "condition " + payload.NodeDef.NodeID,
-			"root": true,
+
+	rootDsl := &types.RuleChain{
+		RuleChain: types.RuleChainBaseInfo{
+			ID:   ruleNode.Id,
+			Name: "condition " + ruleNode.Id,
+			Root: true,
 		},
-		"metadata": map[string]interface{}{
-			"nodes":       []interface{}{ruleNode},
-			"connections": []interface{}{},
+		Metadata: types.RuleMetadata{
+			Nodes:       []*types.RuleNode{ruleNode},
+			Connections: []types.NodeConnection{},
 		},
 	}
-	dslBytes, err := json.Marshal(dsl)
-	if err != nil {
-		return nil, fmt.Errorf("marshal condition node dsl: %w", err)
-	}
 
-	chainKey := payload.NodeDef.Type + ":" + payload.NodeDef.NodeID
-	if _, err := rulego.New(chainKey, dslBytes); err != nil {
-		return nil, fmt.Errorf("load condition node chain: %w", err)
-	}
-	defer rulego.Del(chainKey)
-
-	// condition 节点从 msg.Data(JSON) 解析参数，因此将 InputParams 作为消息体传入。
-	inputData := "{}"
-	if len(payload.InputParams) > 0 {
-		inputData = conv.String(payload.InputParams)
-	}
-	msg := types.NewMsgWithJsonData(inputData)
-
-	engineInst, ok := rulego.Get(chainKey)
-	if !ok {
-		return nil, fmt.Errorf("condition chain not found in pool after load")
-	}
-
-	var execErr error
-	var resultData types.RuleMsg
-	var relationType string
-	done := make(chan struct{})
-	engineInst.OnMsgAndWait(msg,
-		types.WithContext(ctx),
-		types.WithOnEnd(func(ctx types.RuleContext, msg types.RuleMsg, err error, relType string) {
-			if err != nil {
-				execErr = err
-			} else {
-				resultData = msg
-				relationType = relType
-			}
-			close(done)
-		}),
+	var (
+		resultParam        *paramx.FlowContext
+		relationTypeString string
+		execErr            error
 	)
-	<-done
+	flowCtx := paramx.NewFlowContext(ruleNode.Id, id.NewUUID(), payload.InputParams)
+
+	flowCfg := &rulegox.ActivityFlowConfig{
+		RootChainDSL: rootDsl,
+		FlowContext:  flowCtx,
+		IsAsync:      false,
+		UseCache:     false,
+		EndFunc: func(_ context.Context, relationType string, param *paramx.FlowContext, err error) {
+			resultParam = param
+			relationTypeString = relationType
+			execErr = err
+		},
+	}
+
+	// RedisConfig 通过 env 解析：按 project+env 从环境配置中查出 redis 配置，
+	// 再转换为 rulegox 所需的 *conn.Connect（与 MQ 执行路径共用同一套解析逻辑）。
+	redisDef, err := e.getRedisConfig(ctx, payload.NodeDef.Project, payload.Env)
+	if err != nil {
+		return nil, err
+	}
+	redisConn, err := buildConnect(redisDef)
+	if err != nil {
+		return nil, err
+	}
+
+	metaData := &rulegox.ActivityMetaData{
+		RootChainID: ruleNode.Id,
+		Env:         payload.Env,
+		Project:     payload.NodeDef.Project,
+		TraceId:     id.NewUUID(),
+		RedisConfig: redisConn,
+	}
+
+	if err := rulegox.StartActivityFlow(ctx, flowCfg, metaData); err != nil {
+		return nil, err
+	}
 	if execErr != nil {
 		return nil, execErr
 	}
-
-	// 返回路由结果（True/False/分支名）与消息体，便于调用方判断走哪个分支。
 	return &TestNodeResultData{
-		Data: map[string]any{
-			"relation_type": relationType,
-			"msg":           resultData,
-		},
-		TraceID: id.NewUUID(),
+		Data:         resultParam,
+		RelationType: relationTypeString,
+		TraceID:      metaData.TraceId,
 	}, nil
 }
 
@@ -409,8 +408,9 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	}
 
 	var (
-		resultParam *paramx.FlowContext
-		execErr     error
+		resultParam        *paramx.FlowContext
+		relationTypeString string
+		execErr            error
 	)
 	flowCtx := paramx.NewFlowContext(ruleNode.Id, id.NewUUID(), payload.InputParams)
 
@@ -418,11 +418,10 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		RootChainDSL: rootDsl,
 		FlowContext:  flowCtx,
 		IsAsync:      false,
-		// 透传 UseCache：测试默认不缓存（每次基于最新配置重建，修改即时生效）；
-		// 正式/高频复用场景可由调用方置 true 以复用引擎池中的旧链、提升性能。
-		UseCache: false,
-		EndFunc: func(_ context.Context, param *paramx.FlowContext, err error) {
+		UseCache:     false,
+		EndFunc: func(_ context.Context, relationType string, param *paramx.FlowContext, err error) {
 			resultParam = param
+			relationTypeString = relationType
 			execErr = err
 		},
 	}
@@ -452,8 +451,9 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		return nil, execErr
 	}
 	return &TestNodeResultData{
-		Data:    resultParam,
-		TraceID: metaData.TraceId,
+		Data:         resultParam,
+		RelationType: relationTypeString,
+		TraceID:      metaData.TraceId,
 	}, nil
 }
 

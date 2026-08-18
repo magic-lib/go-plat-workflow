@@ -4,12 +4,16 @@ import (
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
+	"github.com/redis/go-redis/v9"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 	"log"
+	"time"
 )
 
 type condSwitchCfg struct {
@@ -19,6 +23,7 @@ type condSwitchCfg struct {
 type CondSwitchNode struct {
 	Configuration *CommConfiguration `json:"configuration"`
 	condition     string
+	nodeLogCli    *redis.Client
 	ruleObj       *templates.RuleExprEngine
 }
 
@@ -64,13 +69,29 @@ func (x *CondSwitchNode) getCondition() string {
 // OnMsg 处理消息，通过评估编译的表达式来过滤消息
 // OnMsg processes incoming messages by evaluating the compiled expression.
 func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
-	dataStr := msg.GetData()
-	allParams := &paramx.FlowContext{}
-	err := conv.Unmarshal(dataStr, allParams)
-	if err != nil {
+	allParamStr := msg.GetData()
+	allParams := new(paramx.FlowContext)
+	if err := conv.Unmarshal(allParamStr, allParams); err != nil {
 		ctx.TellFailure(msg, err)
 		return
 	}
+
+	startTime := time.Now().UnixMilli()
+
+	metaDataAny := msg.GetMetadata()
+	metaDataMap := make(map[string]any)
+	metaDataAny.ForEach(func(key string, value string) bool {
+		metaDataMap[key] = value
+		return true
+	})
+	actMetaData := new(rulegox.ActivityMetaData)
+	_ = conv.Unmarshal(metaDataMap, actMetaData)
+
+	nodeSpanId := id.NewUUID()
+
+	currNodeId := getNodeId(ctx)
+	nodeStr := string(currNodeId)
+
 	condStr := x.getCondition()
 	if condStr == "" {
 		ctx.TellNext(msg) //结束流程了
@@ -88,12 +109,22 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
+	durationMs := time.Now().UnixMilli() - startTime
+
 	isBool := cond.IsBool(conResult)
 	if isBool {
 		boolResult, err := conv.Convert[bool](conResult)
 		if err != nil {
+			nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "fail", "error", allParams, nodeParams, err)
+			if cliErr == nil {
+				x.nodeLogCli = nodeCli
+			}
 			ctx.TellFailure(msg, err)
 			return
+		}
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", allParams, nodeParams, nil)
+		if cliErr == nil {
+			x.nodeLogCli = nodeCli
 		}
 		if boolResult {
 			ctx.TellNext(msg, types.True)
@@ -103,15 +134,28 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 	if retStr, ok := conResult.(string); ok {
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", allParams, nodeParams, nil)
+		if cliErr == nil {
+			x.nodeLogCli = nodeCli
+		}
 		ctx.TellNext(msg, retStr)
 		return
 	}
 	// 默认使用Success和Failure
 	changeBool, err := conv.Convert[bool](conResult)
 	if err != nil {
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "fail", "error", allParams, nodeParams, err)
+		if cliErr == nil {
+			x.nodeLogCli = nodeCli
+		}
 		// 如果出错，则采用转为字符串来进行处理
 		ctx.TellNext(msg, conv.String(conResult))
 		return
+	}
+
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", allParams, nodeParams, nil)
+	if cliErr == nil {
+		x.nodeLogCli = nodeCli
 	}
 	// 默认采用Success和Failure
 	if changeBool {

@@ -4,12 +4,13 @@ go 1.24.3
 
 require (
 	github.com/magic-lib/go-plat-mq v0.0.0
-	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260813063204-b45e4277a265
+	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260818103136-e724e747dd96
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.35.1
 	github.com/rulego/rulego v0.36.0
 	github.com/samber/lo v1.52.0
 	go.uber.org/multierr v1.11.0
+	golang.org/x/crypto v0.48.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.1
 )
@@ -124,7 +125,6 @@ require (
 	go.opentelemetry.io/otel/sdk v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect

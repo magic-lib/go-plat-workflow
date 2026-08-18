@@ -197,7 +197,7 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 }
 
 // instanceRef 描述一个编排中的节点实例：baseId 为节点定义 ID，instanceId 为 DSL 中
-// 实际使用的唯一节点 ID（同一节点可多次添加，instanceId 形如 baseId__N）。
+// 实际使用的唯一节点 ID（同一节点可多次添加，instanceId 形如 baseId__<随机段>，全局唯一）。
 type instanceRef struct {
 	baseId     string
 	instanceId string
