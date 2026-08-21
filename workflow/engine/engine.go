@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/magic-lib/go-plat-utils/conn"
+	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/rs/zerolog/log"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
@@ -183,8 +185,16 @@ func (e *WorkflowEngine) ExecuteByKey(ctx context.Context, project, chainKey str
 	return e.Execute(ctx, project, def.ChainID, jsonPayload)
 }
 
-// Execute 同步执行已加载的规则链并返回结果。
+// Execute 同步执行已加载的规则链并返回结果（不带环境，适用于无需按环境打 Redis 的场景）。
 func (e *WorkflowEngine) Execute(ctx context.Context, project, chainID string, jsonPayload string) (string, error) {
+	return e.ExecuteWithEnv(ctx, project, chainID, jsonPayload, "", nil)
+}
+
+// ExecuteWithEnv 同步执行已加载的规则链并返回结果。
+// envName 与 redisCfg 非空时，会将环境元数据（env / project / root_chain_id / redis_config）
+// 注入消息 metadata，使链内 Activity 节点能按环境将运行数据打入对应的 Redis
+// （ActivityNode 从 metadata 解析 ActivityMetaData，驱动 MQ worker 与 node 运行日志）。
+func (e *WorkflowEngine) ExecuteWithEnv(ctx context.Context, project, chainID string, jsonPayload, envName string, redisCfg *conn.Connect) (string, error) {
 	key := chainKey(project, chainID)
 
 	e.mu.RLock()
@@ -200,6 +210,13 @@ func (e *WorkflowEngine) Execute(ctx context.Context, project, chainID string, j
 	}
 
 	msg := types.NewMsgWithJsonData(jsonPayload)
+	// 注入环境元数据：供 Activity 节点按环境打入对应 Redis
+	if envName != "" && redisCfg != nil {
+		msg.Metadata.PutValue("env", envName)
+		msg.Metadata.PutValue("project", project)
+		msg.Metadata.PutValue("root_chain_id", chainID)
+		msg.Metadata.PutValue("redis_config", conv.String(redisCfg))
+	}
 
 	type result struct {
 		data string

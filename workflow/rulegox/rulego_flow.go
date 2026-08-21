@@ -3,6 +3,7 @@ package rulegox
 import (
 	"context"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
@@ -68,9 +69,10 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 
 	if len(actConfig.SubChainDSL) > 0 {
 		var subErr error
+
 		lo.ForEachWhile(actConfig.SubChainDSL, func(subChainDSL *types.RuleChainBaseInfo, index int) bool {
 			subChainDSL.Root = false
-			_, err := rulego.New(subChainDSL.ID, []byte(conv.String(subChainDSL)), rulego.WithConfig(config))
+			_, err := rulego.New(subChainDSL.ID, []byte(conv.String(subChainDSL)), rulego.WithConfig(config), types.WithAspects(&SubChainInjectAspect{}))
 			if err != nil {
 				subErr = err
 				return false
@@ -90,6 +92,22 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 	// - UseCache=false（默认）：每次都基于最新 DSL 通过 rulego.New 覆盖重建，确保配置更新立即生效
 	//   （适合 node 测试/开发环境，避免全局 pool 缓存旧链导致修改不生效）。
 	actConfig.RootChainDSL.RuleChain.Root = true
+
+	if actConfig.RootChainDSL.Metadata.FirstNodeIndex == 0 {
+		// 默认没有设置，则尝试找一下
+		fileNodeIndex := getFirstNodeIndexByConnection(actConfig.RootChainDSL.Metadata.Connections, actConfig.RootChainDSL.Metadata.Nodes)
+		if fileNodeIndex != -1 {
+			actConfig.RootChainDSL.Metadata.FirstNodeIndex = fileNodeIndex
+		}
+	}
+
+	if !actConfig.UseCache {
+		actConfig.RootChainDSL.RuleChain.DebugMode = true
+		config.OnDebug = func(ruleChainId string, flowType string, nodeId string, msg types.RuleMsg, relationType string, err error) {
+			fmt.Println("OnDebug", ruleChainId, flowType, nodeId, msg, relationType, err)
+		}
+	}
+
 	rootChainDSL := []byte(conv.String(actConfig.RootChainDSL))
 
 	var engineIns types.RuleEngine
@@ -113,11 +131,10 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 	}
 
 	// 配置未变化则直接复用旧实例；已变化时热更新该链（重新 Init 节点），使配置立即生效。
-	if !actConfig.UseCache {
-		if string(engineIns.DSL()) != string(rootChainDSL) {
-			if err := engineIns.ReloadSelf(rootChainDSL); err != nil {
-				return fmt.Errorf("reload rule chain %s failed: %w", metaData.RootChainID, err)
-			}
+	if !actConfig.UseCache &&
+		!cond.IsSameJson(string(engineIns.DSL()), string(rootChainDSL)) {
+		if err := engineIns.ReloadSelf(rootChainDSL); err != nil {
+			return fmt.Errorf("reload rule chain %s failed: %w", metaData.RootChainID, err)
 		}
 	}
 
@@ -150,4 +167,42 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 		engineIns.OnMsgAndWait(msg, endOption, types.WithContext(ctx))
 	}
 	return nil
+}
+
+// getFirstNodeIndexByConnection 将 connections 连成一个有向图（fromId -> toId），
+// 找出第一个节点（入度为 0 的起点，即只作为 fromId 出现、未被任何边指向的节点），
+// 然后通过该节点的 id 在 nodeList 中查找，返回其在 nodeList 中的索引值；找不到返回 -1。
+func getFirstNodeIndexByConnection(connections []types.NodeConnection, nodeList []*types.RuleNode) int {
+	if len(connections) == 0 {
+		return -1
+	}
+
+	// 收集所有被指向的节点 id（toId），用于判断入度
+	toSet := make(map[string]bool, len(connections))
+	for _, c := range connections {
+		if c.ToId != "" {
+			toSet[c.ToId] = true
+		}
+	}
+
+	// 找第一个入度为 0 的起点：fromId 存在且不在 toSet 中
+	firstID := ""
+	for _, c := range connections {
+		if c.FromId != "" && !toSet[c.FromId] {
+			firstID = c.FromId
+			break
+		}
+	}
+	// 若所有节点都有入度（成环），回退到第一条边的起点
+	if firstID == "" {
+		firstID = connections[0].FromId
+	}
+
+	// 在 nodeList 中按 id 查找索引
+	for i, n := range nodeList {
+		if n != nil && n.Id == firstID {
+			return i
+		}
+	}
+	return -1
 }

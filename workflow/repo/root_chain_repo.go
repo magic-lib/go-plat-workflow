@@ -71,7 +71,7 @@ func (r *RootChainRepo) GetByKey(ctx context.Context, project, chainKey string) 
 func (r *RootChainRepo) GetByID(ctx context.Context, project, chainID string) (*workflow.RootChainDef, error) {
 	var m models.RootChainModel
 	err := r.db.WithContext(ctx).
-		Where("project = ? AND chain_id = ? AND status = ?", project, chainID, models.NodeStatusEnabled).
+		Where("chain_id = ? AND status = ?", chainID, models.NodeStatusEnabled).
 		First(&m).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

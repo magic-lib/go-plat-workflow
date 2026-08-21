@@ -491,13 +491,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     else if (tab === 'sub-chains') loadSubChains();
     else if (tab === 'root-chains') loadRootChains();
     else if (tab === 'orchestrate') loadOrchData();
-    else if (tab === 'execute') {
-      // 加载节点/子链建议数据，并确保至少有一行连接
-      refreshConnSuggestions();
-      if (!document.querySelector('#exec-connections-container .conn-row')) {
-        addConnRow('', '', 'True');
-      }
-    }
   });
 });
 
@@ -1843,6 +1836,20 @@ async function refreshActivityCache() {
   } catch(e) { /* ignore */ }
 }
 
+// 根据参数值推断来源（调用传入/引用节点/固定配置），用于从 DSL arguments 兜底回显
+function inferOrchParamPreset(val) {
+  const s = (val == null) ? '' : String(val);
+  if (!s) return null;
+  if (/^\{\{steps\.[^.]+\.(arguments|responses)\.[^}]+?\}\}$/.test(s)) {
+    return { src: PARAM_SRC_UPSTREAM, value: s };
+  }
+  if (/^\{\{[^}]+\}\}$/.test(s)) {
+    // 调用传入：{{参数名}}
+    return { src: PARAM_SRC_ENTRY, value: s.replace(/^\{\{|\}\}$/g, '') };
+  }
+  return { src: PARAM_SRC_FIXED, value: s };
+}
+
 // Activities 列表分页状态（前端分页：接口返回全量，保证标签筛选项稳定）
 let _actPage = 1;
 const _actPageSize = 50;
@@ -2685,7 +2692,7 @@ async function loadNodeTestRecords(nodeId) {
             <button class="btn btn-sm btn-danger" onclick="deleteNodeTestRecord('${esc(r.record_id)}','${esc(nodeId)}')">删除</button>
           </span>
         </div>
-        <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}${r.trace_id?(' · trace_id: <code style="font-size:.72rem">'+esc(r.trace_id)+'</code>'):''}</div>
+        <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}${(r.duration_ms !== undefined && r.duration_ms !== null)?((' · 耗时: ' + formatDuration(r.duration_ms))):''}${r.trace_id?(' · trace_id: <code style="font-size:.72rem">'+esc(r.trace_id)+'</code>'):''}</div>
         <div><b>入参:</b> <code style="font-size:.72rem">${esc(trunc(r.input_params||'',200))}</code></div>
         <div><b>结果:</b> <code style="font-size:.72rem">${esc(trunc(r.result||r.error_msg||'',200))}</code></div>
       </div>`).join('');
@@ -3672,7 +3679,7 @@ function outputRenderRefFieldSlot(prevs, prevId, type, selectedField) {
 function outputSourceSelectHTML(source) {
   const s = source || 'value';
   return '<select class="output-source" onchange="onOutputSourceChange(this)" style="flex:0 0 78px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' +
-    '<option value="value"' + (s === 'value' ? ' selected' : '') + '>手工配置</option>' +
+    '<option value="value"' + (s === 'value' ? ' selected' : '') + '>固定配置</option>' +
     '<option value="ref_act"' + (s === 'ref_act' ? ' selected' : '') + '>activity选择</option>' +
     '<option value="ref_node"' + (s === 'ref_node' ? ' selected' : '') + '>引用节点</option>' +
     '</select>';
@@ -4173,11 +4180,8 @@ function editSubChainByIndex(i) { openSubChainModal(window._subChainsForEdit[i])
 async function executeSubChain(chainId) {
   const payload = prompt('输入子链执行参数 (JSON)：', '{"input": "hello world"}');
   if (payload === null) return;
-  // 切换到 Execute tab 展示结果
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  const execTab = document.querySelector('[data-tab="execute"]');
-  if (execTab) { execTab.classList.add('active'); document.getElementById('tab-execute').classList.add('active'); }
+  // 打开 Execute 模态框展示结果
+  openExecuteModal();
   const resultBox = document.getElementById('exec-result');
   resultBox.textContent = '子链 ' + chainId + ' 执行中...';
   try {
@@ -4236,7 +4240,7 @@ async function loadRootChains() {
         <td>${connCount} 条</td>
         <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
         <td class="actions">
-          <button class="btn btn-sm btn-outline" onclick="editRootChainByIndex(${i})">编辑</button>
+          <button class="btn btn-sm btn-outline" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
           <button class="btn btn-sm btn-primary" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
           <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
           <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
@@ -4255,6 +4259,41 @@ async function deleteRootChain(id) {
     showToast('根链已删除', 'success');
     loadRootChains();
   } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+}
+
+// ============================================================
+// 新增 Root Chain（仅录入基本信息，DSL 为空，编排后更新）
+// ============================================================
+function openCreateRootChainModal() {
+  document.getElementById('create-root-name').value = '';
+  document.getElementById('create-root-key').value = '';
+  document.getElementById('create-root-status').value = '0';
+  document.getElementById('create-root-desc').value = '';
+  document.getElementById('create-root-error').textContent = '';
+  document.getElementById('create-root-overlay').classList.add('show');
+}
+
+function closeCreateRootChainModal() {
+  document.getElementById('create-root-overlay').classList.remove('show');
+}
+
+async function createRootChain() {
+  const name = document.getElementById('create-root-name').value.trim();
+  const key = document.getElementById('create-root-key').value.trim();
+  const status = parseInt(document.getElementById('create-root-status').value, 10);
+  const desc = document.getElementById('create-root-desc').value.trim();
+  const errEl = document.getElementById('create-root-error');
+  if (!name) { errEl.textContent = '请填写名称'; return; }
+  try {
+    const def = await api('/api/root-chains/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chain_key: key, name: name, description: desc, status: status }),
+    });
+    showToast('已创建 Root Chain：' + (def.chain_id || '') + (def.chain_key ? '（' + def.chain_key + '）' : ''), 'success');
+    closeCreateRootChainModal();
+    loadRootChains();
+  } catch (e) { errEl.textContent = e.message || '创建失败'; }
 }
 
 // ============================================================
@@ -4382,7 +4421,7 @@ function addConnRow(fromId, toId, connType) {
     <input type="text" placeholder="from_id" value="${esc(fromId||'')}" list="conn-id-datalist" data-role="from" oninput="rebuildConnDatalist()">
     <span class="conn-arrow">→</span>
     <input type="text" placeholder="to_id" value="${esc(toId||'')}" list="conn-id-datalist" data-role="to" oninput="rebuildConnDatalist()">
-    <input type="text" data-role="type" list="conn-type-datalist" placeholder="类型" value="${esc(connType||'True')}" title="连接类型：True / False / Success / Failure 或自定义">
+    <input type="text" data-role="type" list="conn-type-datalist" placeholder="类型" value="${esc(connType||'True')}" title="连接类型：Success / Failure / True / False / Stream 或自定义">
     <button class="btn-remove" onclick="removeConnRow('conn-row-${connSeq}')" title="删除此连接">&times;</button>
   `;
   container.appendChild(row);
@@ -4463,6 +4502,20 @@ async function refreshConnSuggestions() {
   } catch(e) { /* ignore */ }
 }
 
+// 根据参数值推断来源（调用传入/引用节点/固定配置），用于从 DSL arguments 兜底回显
+function inferOrchParamPreset(val) {
+  const s = (val == null) ? '' : String(val);
+  if (!s) return null;
+  if (/^\{\{steps\.[^.]+\.(arguments|responses)\.[^}]+?\}\}$/.test(s)) {
+    return { src: PARAM_SRC_UPSTREAM, value: s };
+  }
+  if (/^\{\{[^}]+\}\}$/.test(s)) {
+    // 调用传入：{{参数名}}
+    return { src: PARAM_SRC_ENTRY, value: s.replace(/^\{\{|\}\}$/g, '') };
+  }
+  return { src: PARAM_SRC_FIXED, value: s };
+}
+
 function loadToExecuteByIndex(i) { loadToExecute(window._rootChainsForEdit[i]); }
 function showFlowchartByIndex(i) { showFlowchart(window._rootChainsForEdit[i]); }
 function editRootChainByIndex(i) {
@@ -4470,18 +4523,95 @@ function editRootChainByIndex(i) {
   if (c) orchOpenInPageRoot(c.chain_id);
 }
 
+// extractEntryParams 从 DSL JSON 中提取所有「调用传入」参数（去重，保留 key 与中文名 label）。
+// 「调用传入」即节点参数配置中 value 形如 {{arguments.参数key}} 的项；
+// 中文名来自 DSL 节点 additionalInfo.node_param_labels（后端在生成 DSL 时按 key→label 注入）。
+// 注意：rulego DSL 的节点位于 metadata.nodes（而非 ruleChain.nodes），且
+// configuration / additionalInfo 可能为对象或字符串，这里做兼容解析。
+function extractEntryParams(dslJson) {
+  const result = [];        // [{key, label}]
+  const seen = {};          // key -> true 去重
+  try {
+    const root = JSON.parse(dslJson || '{}');
+    // 优先 metadata.nodes（rulego 原生 DSL 结构），兼容 ruleChain.nodes 写法
+    let nodes = (root.metadata && root.metadata.nodes) || [];
+    if (!nodes.length && root.ruleChain && root.ruleChain.nodes) {
+      nodes = root.ruleChain.nodes;
+    }
+    // 预建 key -> label 映射（来自所有节点的参数定义）
+    const labelMap = {};
+    nodes.forEach(node => {
+      if (!node) return;
+      let addInfo = node.additionalInfo;
+      if (typeof addInfo === 'string') {
+        try { addInfo = JSON.parse(addInfo); } catch (e) { addInfo = null; }
+      }
+      const raw = addInfo && addInfo.node_param_labels;
+      if (!raw) return;
+      let m = raw;
+      if (typeof raw === 'string') {
+        try { m = JSON.parse(raw); } catch (e) { m = {}; }
+      }
+      if (m && typeof m === 'object') {
+        Object.keys(m).forEach(k => { if (!(k in labelMap)) labelMap[k] = m[k]; });
+      }
+    });
+    // 提取调用传入参数 key
+    nodes.forEach(node => {
+      if (!node) return;
+      // configuration 可能为字符串，兼容解析
+      let config = node.configuration;
+      if (typeof config === 'string') {
+        try { config = JSON.parse(config); } catch (e) { config = null; }
+      }
+      const args = (config && config.arguments) || [];
+      if (!Array.isArray(args)) return;
+      args.forEach(a => {
+        const val = (a && a.value != null) ? String(a.value) : '';
+        const m = val.match(/^\{\{arguments\.([^}]+)\}\}$/);
+        if (m && m[1] && !seen[m[1]]) {
+          seen[m[1]] = true;
+          result.push({ key: m[1], label: labelMap[m[1]] || '' });
+        }
+      });
+    });
+  } catch (e) { /* 解析失败则视为无参数 */ }
+  return result;
+}
+
+// renderExecEntryParams 将调用传入参数渲染到"输入参数"区：
+// 每行展示「key（中文名）」+ 一个可输入文本框，供执行时直接填写。
+function renderExecEntryParams(params) {
+  const box = document.getElementById('exec-entry-params');
+  if (!box) return;
+  if (!params || !params.length) {
+    box.innerHTML = '<span style="color:var(--text-muted)">暂无调用传入参数</span>';
+    return;
+  }
+  box.innerHTML = params.map(p => {
+    const labelHtml = p.label ? '（' + esc(p.label) + '）' : '';
+    return '<div style="margin:6px 0;display:flex;align-items:center">' +
+             '<label style="white-space:nowrap;font-family:monospace;font-size:.8rem;color:var(--text);margin-right:8px">' +
+               esc(p.key) + '<span style="color:#2563eb">' + labelHtml + '</span>' +
+             '</label>' +
+             '<input type="text" class="exec-entry-input" data-key="' + escAttr(p.key) + '" ' +
+               'placeholder="请输入 ' + escAttr(p.key) + '" ' +
+               'style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem" />' +
+           '</div>';
+  }).join('');
+}
+
 function loadToExecute(c) {
-  // 切换到 Execute tab
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  const execTab = document.querySelector('[data-tab="execute"]');
-  execTab.classList.add('active');
-  document.getElementById('tab-execute').classList.add('active');
+  // Execute 已改为独立模态框，由 Root Chains / SubChains 列表的 Execute 按钮打开
+  openExecuteModal();
 
   document.getElementById('exec-chain-id').value = c.chain_id || '';
   document.getElementById('exec-chain-name').value = c.name || '';
   document.getElementById('exec-node-ids').value = c.node_ids || '';
   document.getElementById('exec-sub-ids').value = c.sub_chain_ids || '';
+
+  // 列出该流程 DSL 中「调用传入」参数（去重，含中文名），展示在"输入参数"区供填写
+  renderExecEntryParams(extractEntryParams(c.dsl_json));
 
   // 清除旧连接行并填充新连接
   clearAllConnRows();
@@ -4494,9 +4624,22 @@ function loadToExecute(c) {
   }
 
   rebuildConnDatalist();
+  refreshConnSuggestions();
   window._currentTestCase = null;
   refreshTestCases();
   showToast('已加载根链: ' + esc(c.chain_id), 'success');
+}
+
+function openExecuteModal() {
+  const overlay = document.getElementById('execute-modal-overlay');
+  if (overlay) overlay.classList.add('show');
+  // 每次打开重置"输入参数"区，由具体加载函数（loadToExecute）填充
+  const box = document.getElementById('exec-entry-params');
+  if (box) box.innerHTML = '<span style="color:var(--text-muted)">暂无调用传入参数</span>';
+}
+function closeExecuteModal() {
+  const overlay = document.getElementById('execute-modal-overlay');
+  if (overlay) overlay.classList.remove('show');
 }
 
 async function executeWorkflow() {
@@ -4513,9 +4656,9 @@ async function executeWorkflow() {
     node_ids: nodeIdsStr ? nodeIdsStr.split(',').map(s=>s.trim()).filter(Boolean) : [],
     sub_chain_ids: subIdsStr ? subIdsStr.split(',').map(s=>s.trim()).filter(Boolean) : [],
     connections: connections,
-    payload: document.getElementById('exec-payload').value.trim(),
-    debug_mode: document.getElementById('exec-debug').checked,
-    use_release: document.getElementById('exec-use-release').checked,
+    payload: safeVal('exec-payload', '{}'),
+    debug_mode: safeChecked('exec-debug'),
+    use_release: safeChecked('exec-use-release'),
   };
   try {
     const data = await api('/api/workflow/execute', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -4551,26 +4694,38 @@ async function executeWorkflow() {
   }
 }
 
-// MQ 分布式执行 rootChain：通过 go-plat-mq/asynq 投递到分布式 worker 执行
+// 本地执行 rootChain：直接在当前进程内通过 rulego 执行（/api/workflow/execute）
 async function executeWorkflowByMQ() {
   const resultBox = document.getElementById('exec-result');
+  resultBox.textContent = '执行中...';
+
+  // 执行环境为必填：后台执行时按环境将数据打入对应的 Redis
   const envName = document.getElementById('exec-env').value;
-  if (!envName) { showToast('MQ 执行请先选择执行环境', 'error'); return; }
-  resultBox.textContent = 'MQ 执行中...';
+  if (!envName) { showToast('请先选择执行环境', 'error'); return; }
+
+  // 收集「输入参数」区中用户填写的调用传入参数，组装为 JSON 对象作为执行 payload。
+  // 这些参数对应 DSL 中的 {{arguments.x}}，rulego 在执行时会从消息 data 顶层字段取值。
+  const args = {};
+  document.querySelectorAll('#exec-entry-params .exec-entry-input').forEach(inp => {
+    const k = inp.getAttribute('data-key');
+    if (k) args[k] = inp.value;
+  });
+  const payload = JSON.stringify(args);
+
   const body = {
     project: getProject(),
     chain_id: document.getElementById('exec-chain-id').value.trim(),
-    payload: document.getElementById('exec-payload').value.trim() || '{}',
+    payload: payload,
     env_name: envName,
-    use_release: document.getElementById('exec-use-release').checked,
+    use_release: safeChecked('exec-use-release'),
   };
   try {
-    const data = await api('/api/workflow/execute-mq', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const data = await api('/api/workflow/execute', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     resultBox.textContent = JSON.stringify(data, null, 2);
-    showToast('MQ 执行成功', 'success');
+    showToast('执行成功', 'success');
   } catch (e) {
     resultBox.textContent = 'ERROR: ' + e.message;
-    showToast('MQ 执行失败: ' + e.message, 'error');
+    showToast('执行失败: ' + e.message, 'error');
   }
 }
 
@@ -4580,11 +4735,14 @@ async function refreshExecEnvs() {
   const sel = document.getElementById('exec-env');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '<option value="">（本地执行无需环境）</option>';
+  sel.innerHTML = '';
   if (!p) return;
   try {
     const envs = await api('/api/env-configs');
+    const seenEnv = {};
     (envs || []).forEach(e => {
+      if (!e || !e.env_name || seenEnv[e.env_name]) return; // 按 env_name 去重
+      seenEnv[e.env_name] = true;
       const opt = document.createElement('option');
       opt.value = e.env_name;
       opt.textContent = e.env_name + (e.description ? ' (' + e.description + ')' : '');
@@ -4620,9 +4778,9 @@ function collectTestCaseFields() {
     node_ids: nodeIdsStr ? nodeIdsStr : '',
     sub_chain_ids: subIdsStr ? subIdsStr : '',
     connections_data: JSON.stringify(connections),
-    payload: document.getElementById('exec-payload').value.trim(),
-    debug_mode: document.getElementById('exec-debug').checked,
-    use_release: document.getElementById('exec-use-release').checked,
+    payload: safeVal('exec-payload', '{}'),
+    debug_mode: safeChecked('exec-debug'),
+    use_release: safeChecked('exec-use-release'),
   };
 }
 
@@ -4632,9 +4790,9 @@ function applyTestCaseToForm(c) {
   document.getElementById('exec-chain-name').value = c.chain_name || '';
   document.getElementById('exec-node-ids').value = c.node_ids || '';
   document.getElementById('exec-sub-ids').value = c.sub_chain_ids || '';
-  document.getElementById('exec-payload').value = c.payload || '{}';
-  document.getElementById('exec-debug').checked = !!c.debug_mode;
-  document.getElementById('exec-use-release').checked = !!c.use_release;
+  const payloadEl = document.getElementById('exec-payload'); if (payloadEl) payloadEl.value = c.payload || '{}';
+  const debugEl = document.getElementById('exec-debug'); if (debugEl) debugEl.checked = !!c.debug_mode;
+  const releaseEl = document.getElementById('exec-use-release'); if (releaseEl) releaseEl.checked = !!c.use_release;
 
   // 填充连接
   clearAllConnRows();
@@ -4741,7 +4899,31 @@ async function deleteTestCase(caseId) {
 // ============================================================
 // Flowchart (Mermaid)
 // ============================================================
-function buildMermaidSyntax(chain) {
+// ensureNameMaps 确保节点与子链的中文名缓存已就绪（用于流程图显示中文名）。
+// 若缓存为空则并行请求接口补全，避免用户在 root-chains tab 直接点"流程图"时映射缺失。
+async function ensureNameMaps() {
+  // 始终拉取最新数据，确保拿到当前 project 下所有 node / sub-chain 的中文名，
+  // 避免因缓存为空或过期导致流程图只显示 ID。请求失败时降级为空映射。
+  try {
+    const [nodes, subs] = await Promise.all([
+      api('/api/nodes').catch(() => []),
+      api('/api/sub-chains').catch(() => [])
+    ]);
+    window._nodesForEdit = nodes || [];
+    window._subChainsForEdit = subs || [];
+  } catch (e) {
+    window._nodesForEdit = window._nodesForEdit || [];
+    window._subChainsForEdit = window._subChainsForEdit || [];
+  }
+  // 构建 id -> 中文名 映射
+  const nameMap = {};
+  (window._nodesForEdit || []).forEach(n => { if (n && n.node_id) nameMap[n.node_id] = n.name || ''; });
+  (window._subChainsForEdit || []).forEach(c => { if (c && c.chain_id) nameMap[c.chain_id] = c.name || ''; });
+  return nameMap;
+}
+
+function buildMermaidSyntax(chain, nameMap) {
+  nameMap = nameMap || {};
   const nodeIds = (chain.node_ids || '').split(',').map(s => s.trim()).filter(Boolean);
   const subIds = (chain.sub_chain_ids || '').split(',').map(s => s.trim()).filter(Boolean);
   let conns = [];
@@ -4771,20 +4953,39 @@ function buildMermaidSyntax(chain) {
 
   let lines = ['flowchart TD'];
 
-  // 添加节点定义（不同的形状区分 node 和 subchain）
+  // 添加节点定义（不同的形状区分 node 和 subchain），显示中文名 + NodeId + 实例Id（与编排 Live Preview 一致）
+  function baseNodeId(id) {
+    return id.indexOf('__') >= 0 ? id.split('__')[0] : id;
+  }
+  function nodeName(id) {
+    if (nameMap[id]) return nameMap[id];
+    return nameMap[baseNodeId(id)] || '';
+  }
   nodeSet.forEach(id => {
     const safe = idMap[id];
-    lines.push(`    ${safe}["<b>⚙ ${esc(id)}</b>"]`);
+    const cn = nodeName(id);
+    const base = baseNodeId(id);
+    const labelLine = cn ? `<b>⚙ ${esc(cn)}</b>` : `<b>⚙ ${esc(id)}</b>`;
+    const idLine = `<small>NodeId: ${esc(base)}</small>`;
+    const instLine = id !== base ? `<small>Id: ${esc(id)}</small>` : '';
+    lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>' + instLine : ''}"]`);
   });
   subSet.forEach(id => {
     const safe = idMap[id];
-    lines.push(`    ${safe}(["<b>🔗 ${esc(id)}</b>"])`);
+    const cn = nodeName(id);
+    const subLabel = cn ? id : '';
+    lines.push(`    ${safe}(["<b>🔗 ${esc(cn || id)}</b>${subLabel ? '<br/><small>' + esc(subLabel) + '</small>' : ''}"])`);
   });
   // 未分类的 ID（只在 connections 中出现）
   allIds.forEach(id => {
     if (!nodeSet.has(id) && !subSet.has(id)) {
       const safe = idMap[id];
-      lines.push(`    ${safe}["<b>? ${esc(id)}</b>"]`);
+      const cn = nodeName(id);
+      const base = baseNodeId(id);
+      const labelLine = cn ? `<b>? ${esc(cn)}</b>` : `<b>? ${esc(id)}</b>`;
+      const idLine = `<small>NodeId: ${esc(base)}</small>`;
+      const instLine = id !== base ? `<small>Id: ${esc(id)}</small>` : '';
+      lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>' + instLine : ''}"]`);
     }
   });
 
@@ -4822,7 +5023,8 @@ async function showFlowchart(chain) {
   container.innerHTML = '';
   container.removeAttribute('data-processed');
 
-  const syntax = buildMermaidSyntax(chain);
+  const nameMap = await ensureNameMaps();
+  const syntax = buildMermaidSyntax(chain, nameMap);
   container.textContent = syntax;
 
   document.getElementById('flowchart-modal-overlay').classList.add('show');
@@ -4844,6 +5046,9 @@ function closeFlowchartModal() {
 let _orchNodes = [];      // 缓存的节点数据
 let _orchSubChains = [];  // 缓存的子链数据
 let orchConnSeq = 0;
+let _orchNodeListFiltered = [];  // 当前过滤后的节点列表（供分页复用）
+let _orchNodeListPage = 1;       // 当前页码
+let _orchNodeListPageSize = 20;  // 每页条数
 
 async function loadOrchData() {
   try {
@@ -4859,21 +5064,39 @@ async function loadOrchData() {
 }
 
 function renderOrchNodeList(filterText, filterNs, filterTag) {
-  const container = document.getElementById('orch-node-list');
   const q = (filterText||'').toLowerCase();
   const ns = (filterNs||'').trim();
   const tag = (filterTag||'').trim();
-  const filtered = _orchNodes.filter(n => {
+  _orchNodeListFiltered = (_orchNodes || []).filter(n => {
     if (ns && (n.namespace||'') !== ns) return false;
     if (tag && !((n.tags||[]).includes(tag))) return false;
     if (!q) return true;
     return (n.node_id||'').toLowerCase().includes(q) || (n.name||'').toLowerCase().includes(q) || (n.type||'').toLowerCase().includes(q);
   });
-  if (!filtered.length) {
+  // 过滤条件变化，回到第一页
+  _orchNodeListPage = 1;
+  renderOrchNodeListPage();
+}
+
+// 前端分页渲染：每页 _orchNodeListPageSize 条
+function renderOrchNodeListPage() {
+  const container = document.getElementById('orch-node-list');
+  const pager = document.getElementById('orch-node-pager');
+  const filtered = _orchNodeListFiltered || [];
+  const pageSize = _orchNodeListPageSize;
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (_orchNodeListPage > totalPages) _orchNodeListPage = totalPages;
+  if (_orchNodeListPage < 1) _orchNodeListPage = 1;
+  const startIdx = (pageSize * (_orchNodeListPage - 1));
+  const pageItems = filtered.slice(startIdx, startIdx + pageSize);
+
+  if (!total) {
     container.innerHTML = '<div class="orch-select-empty">无匹配节点</div>';
+    if (pager) pager.innerHTML = '';
     return;
   }
-  container.innerHTML = filtered.map(n => {
+  container.innerHTML = pageItems.map(n => {
     const kindClass = n.kind === 'condition' ? 'badge-warning' : 'badge-info';
     const kindLabel = n.kind === 'condition' ? '查询' : '执行';
     let outputsJson = '[]';
@@ -4890,6 +5113,19 @@ function renderOrchNodeList(filterText, filterNs, filterTag) {
       <button class="btn btn-sm btn-outline orch-add-btn" type="button" onclick="addOrchNodeInstance('${esc(n.node_id)}')" title="添加到编排（可多次添加同一节点）">+ 添加</button>
     </label>`;
   }).join('');
+
+  if (pager) {
+    pager.innerHTML = `
+      <button class="btn btn-sm btn-outline" type="button" ${_orchNodeListPage<=1?'disabled':''} onclick="orchNodeListGoPage(${_orchNodeListPage-1})">上一页</button>
+      <span class="orch-pager-info">第 ${_orchNodeListPage}/${totalPages} 页 · 共 ${total} 个</span>
+      <button class="btn btn-sm btn-outline" type="button" ${_orchNodeListPage>=totalPages?'disabled':''} onclick="orchNodeListGoPage(${_orchNodeListPage+1})">下一页</button>`;
+  }
+}
+
+// 翻页（不改变过滤条件）
+function orchNodeListGoPage(page) {
+  _orchNodeListPage = page;
+  renderOrchNodeListPage();
 }
 
 // 生成全局唯一的实例 ID：nodeId + "__" + 8位 base36 随机串（约 36^8 ≈ 2.8e12 组合，跨子链/删除均不冲突）
@@ -4937,7 +5173,6 @@ function removeOrchNodeInstanceConfirm(instanceId) {
   // 删除后实时刷新预览与参数配置区
   if (typeof renderOrchPreview === 'function') renderOrchPreview();
   if (typeof renderOrchDslPreview === 'function') renderOrchDslPreview();
-  if (typeof renderOrchUpstreamHints === 'function') renderOrchUpstreamHints();
   if (typeof renderOrchParamOverrides === 'function') renderOrchParamOverrides();
 }
 
@@ -4978,7 +5213,21 @@ function closeOrchSelectedModal() {
 }
 
 // 从保存的 node_ids（可能含实例后缀 baseId__N）还原已选节点实例列表
-function restoreOrchNodeInstances(nodeIds) {
+// dslJson 可选：编辑态传入，用于解析各节点已写入 DSL 的 arguments，作为回显兜底
+function restoreOrchNodeInstances(nodeIds, dslJson) {
+  // 解析 DSL 中各实例节点的 arguments（配置后的值），用于重新编辑时自动回显 select
+  const overrideByInst = {};
+  if (dslJson) {
+    try {
+      const dsl = typeof dslJson === 'string' ? JSON.parse(dslJson) : dslJson;
+      const nodes = (((dsl || {}).ruleChain || {}).nodes) || [];
+      nodes.forEach(nd => {
+        const cfg = (nd.configuration || {});
+        const args = cfg.arguments || cfg.Arguments || [];
+        if (Array.isArray(args) && args.length) overrideByInst[nd.id] = args;
+      });
+    } catch (e) { /* ignore */ }
+  }
   window._orchNodeInstances = (nodeIds || []).map(raw => {
     const baseId = raw.indexOf('__') >= 0 ? raw.split('__')[0] : raw;
     const seq = raw.indexOf('__') >= 0 ? (raw.split('__')[1] || '') : '';
@@ -4990,6 +5239,7 @@ function restoreOrchNodeInstances(nodeIds) {
       type: n ? n.type : '',
       kind: n ? (n.kind || 'action') : 'action',
       outputs: n ? (n.outputs || []) : [],
+      override: overrideByInst[raw] || [],
       _seq: seq,
     };
   });
@@ -5151,7 +5401,7 @@ function addOrchConnRow(fromId, toId, connType) {
     <select data-role="orch-from">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
     <span class="conn-arrow">→</span>
     <select data-role="orch-to">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
-    <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="True" value="${esc(connType||'True')}" title="连接类型：True / False / Success / Failure 或自定义">
+    <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="True" value="${esc(connType||'True')}" title="连接类型：Success / Failure / True / False / Stream 或自定义">
     <button class="btn-remove" onclick="removeOrchConnRow('orch-conn-row-${orchConnSeq}')" title="删除">&times;</button>
   `;
   container.appendChild(row);
@@ -5296,7 +5546,13 @@ function orchBuildDslPreview() {
       const { src, value } = preset[key];
       if (!value || !value.trim()) return;
       let finalVal = value.trim();
-      if (src === 'entry') finalVal = '{{' + value.trim() + '}}';
+      // 调用传入：已在 collectOrchParamOverrides 统一包成 {{arguments.参数key}}，此处仅兜底（旧数据裸值/{{x}} 再包一次），避免双重包裹
+      if (src === 'entry' && !/^\{\{arguments\.[^}]+\}\}$/.test(finalVal)) {
+        let k = finalVal;
+        if (/^\{\{[^}]+\}\}$/.test(k)) k = k.replace(/^\{\{|\}\}$/g, '');
+        while (k.startsWith('arguments.')) k = k.slice('arguments.'.length);
+        finalVal = '{{arguments.' + k + '}}';
+      }
       if (typeof config.arguments === 'undefined') config.arguments = [];
       const arr = Array.isArray(config.arguments) ? config.arguments : [];
       const idx = arr.findIndex(a => a && a.key === key);
@@ -5339,7 +5595,6 @@ function onOrchChange() {
   _orchChangeTimer = setTimeout(() => {
     renderOrchPreview();
     renderOrchDslPreview();
-    renderOrchUpstreamHints();
     renderOrchParamOverrides();
   }, 200);
 }
@@ -5359,142 +5614,30 @@ function parseNodeOutputs(node) {
   return raw.filter(o => o && o.key);
 }
 
-// 构建反向依赖图：返回每个节点/子链能引用到的全部上游 outputs
-// 结构：{ targetId: [ { fromId, fromName, fromType, sub, outputs:[{key,label,type,description}] } ] }
-function buildUpstreamOutputsMap() {
-  const nodeIds = getSelectedOrchNodeIds();
-  const subIds = getSelectedOrchSubIds();
-  const conns = collectOrchConnections();
-  const allTargets = new Set([...nodeIds, ...subIds]);
-
-  // 查找某 id 的元信息（节点或子链）
-  const metaOf = (id) => {
-    const n = _orchNodes.find(x => x.node_id === id);
-    if (n) return { name: n.name || id, type: n.type, outputs: parseNodeOutputs(n), sub: false };
-    const s = _orchSubChains.find(x => x.chain_id === id);
-    if (s) return { name: s.name || id, type: 'sub', outputs: [], sub: true };
-    return { name: id, type: '', outputs: [], sub: false };
-  };
-
-  // 反向邻接表：to -> [from...]
-  const revAdj = {};
-  allTargets.forEach(t => revAdj[t] = []);
-  conns.forEach(c => {
-    if (allTargets.has(c.to_id) && allTargets.has(c.from_id)) {
-      revAdj[c.to_id].push(c.from_id);
-    }
-  });
-
-  // 从 to 反向 BFS，收集所有上游（去重，避免环）
-  const result = {};
-  allTargets.forEach(target => {
-    const visited = new Set();
-    const queue = [...(revAdj[target] || [])];
-    const ups = [];
-    while (queue.length) {
-      const cur = queue.shift();
-      if (visited.has(cur) || cur === target) continue;
-      visited.add(cur);
-      const m = metaOf(cur);
-      if (m.outputs.length > 0) {
-        ups.push({ fromId: cur, fromName: m.name, fromType: m.type, sub: m.sub, outputs: m.outputs });
-      }
-      (revAdj[cur] || []).forEach(p => { if (!visited.has(p)) queue.push(p); });
-    }
-    // 保留连接顺序中更接近的上游在前
-    result[target] = ups;
-  });
-  return result;
-}
-
-function renderOrchUpstreamHints() {
-  const container = document.getElementById('orch-upstream-hints');
-  const emptyEl = document.getElementById('orch-upstream-empty');
-  const countEl = document.getElementById('orch-upstream-count');
-  if (!container) return;
-
-  const map = buildUpstreamOutputsMap();
-  const targets = Object.keys(map).filter(t => map[t].length > 0);
-  let total = 0;
-  targets.forEach(t => map[t].forEach(u => total += u.outputs.length));
-
-  if (!targets.length) {
-    if (emptyEl) emptyEl.style.display = '';
-    container.querySelectorAll('.upstream-group').forEach(e => e.remove());
-    if (countEl) countEl.textContent = '0 个可引用值';
-    return;
-  }
-  if (emptyEl) emptyEl.style.display = 'none';
-  if (countEl) countEl.textContent = total + ' 个可引用值';
-
-  // 生成 HTML
-  const metaOf = (id) => {
-    const n = _orchNodes.find(x => x.node_id === id);
-    if (n) return n.name || id;
-    const s = _orchSubChains.find(x => x.chain_id === id);
-    return s ? (s.name || id) : id;
-  };
-  let html = '';
-  targets.forEach(t => {
-    const tName = metaOf(t);
-    html += `<div class="upstream-group" style="margin-bottom:10px">
-      <div class="upstream-target" style="font-weight:600;font-size:.82rem;color:#1e293b;margin-bottom:4px">▸ 目标节点 <span class="code-cell">${esc(t)}</span> <span style="font-weight:400;color:var(--text-muted)">${esc(tName)}</span> 可引用：</div>`;
-    map[t].forEach(u => {
-      html += `<div class="upstream-from" style="margin-left:10px;font-size:.78rem;color:#475569;margin-bottom:3px">来自 <span class="code-cell">${esc(u.fromId)}</span> <span style="color:var(--text-muted)">${esc(u.fromName)}</span>${u.sub?'（子链）':''}：</div>`;
-      u.outputs.forEach(o => {
-        const ref = '{{steps.' + u.fromId + '.arguments.' + o.key + '}}';
-        html += `<div class="upstream-item" style="margin-left:20px;display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer" onclick="copyUpstreamRef('${esc(ref)}')" title="点击复制/填入引用路径：${esc(ref)}">
-          <code style="background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:4px;font-size:.76rem">${esc(o.key)}</code>
-          <span style="color:#334155">${esc(o.label||'')}</span>
-          ${o.type?`<span class="node-type-tag" style="font-size:.7rem">${esc(o.type)}</span>`:''}
-          ${o.description?`<span style="color:var(--text-muted);font-size:.72rem">- ${esc(o.description)}</span>`:''}
-          <span style="margin-left:auto;color:var(--text-muted);font-size:.7rem">${esc(ref)}</span>
-        </div>`;
-      });
-    });
-    html += `</div>`;
-  });
-  // 清除旧内容（保留 empty 占位）
-  container.querySelectorAll('.upstream-group').forEach(e => e.remove());
-  container.insertAdjacentHTML('beforeend', html);
-}
-
-// 记录当前聚焦的参数值输入框，供"上游返回值提示"点击插入引用
-let _focusedParamInput = null;
-
-function copyUpstreamRef(ref) {
-  // 若有聚焦的参数输入框且来源为"上游返回值"，直接填入引用语法
-  if (_focusedParamInput && document.activeElement === _focusedParamInput) {
-    _focusedParamInput.value = ref;
-    _focusedParamInput.dispatchEvent(new Event('input', { bubbles: true }));
-    showToast('已填入引用：' + ref, 'success');
-    return;
-  }
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(ref).then(
-        () => showToast('已复制引用路径：' + ref, 'success'),
-        () => fallbackCopy(ref)
-      );
-    } else { fallbackCopy(ref); }
-  } catch(e) { fallbackCopy(ref); }
-}
-function fallbackCopy(text) {
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text; document.body.appendChild(ta); ta.select();
-    document.execCommand('copy'); ta.remove();
-    showToast('已复制引用路径：' + text, 'success');
-  } catch(e) { showToast('复制失败：' + text, 'error'); }
-}
-
 // ============================================================
 // Node Param Overrides (节点参数配置：每个 node 的每个参数指定值来源)
 // ============================================================
-// 来源类型常量
-const PARAM_SRC_FIXED = 'fixed';   // 固定值（手工填写）
-const PARAM_SRC_ENTRY = 'entry';   // 入口参数（运行时由根链输入传入，引用 {{参数名}}）
-const PARAM_SRC_UPSTREAM = 'upstream'; // 上游返回值（引用 {{fromId.arguments.key}}）
+// 来源类型常量（编排页面参数配置来源下拉，界面展示三档）
+const PARAM_SRC_VALUE = 'value';     // 固定配置 → 内部 fixed
+const PARAM_SRC_REF_ACT = 'ref_act'; // 引用节点 → 内部 upstream
+const PARAM_SRC_REF_NODE = 'ref_node'; // 调用传入 → 内部 entry
+// 内部存储来源（与 collectOrchParamOverrides 兼容）
+const PARAM_SRC_FIXED = 'fixed';
+const PARAM_SRC_ENTRY = 'entry';
+const PARAM_SRC_UPSTREAM = 'upstream';
+// 界面来源 <-> 内部来源 互转
+function orchParamSrcToInternal(s) {
+  if (s === PARAM_SRC_VALUE) return PARAM_SRC_FIXED;
+  if (s === PARAM_SRC_REF_ACT) return PARAM_SRC_UPSTREAM;
+  if (s === PARAM_SRC_REF_NODE) return PARAM_SRC_ENTRY;
+  return PARAM_SRC_FIXED;
+}
+function orchParamSrcToDisplay(s) {
+  if (s === PARAM_SRC_FIXED) return PARAM_SRC_VALUE;
+  if (s === PARAM_SRC_UPSTREAM) return PARAM_SRC_REF_ACT;
+  if (s === PARAM_SRC_ENTRY) return PARAM_SRC_REF_NODE;
+  return PARAM_SRC_VALUE;
+}
 
 // 解析节点 params 定义（兼容字符串/数组）
 function parseNodeParams(node) {
@@ -5535,21 +5678,6 @@ function renderOrchParamOverrides() {
   if (emptyEl) emptyEl.style.display = 'none';
   if (countEl) countEl.textContent = nodes.length + ' 个节点（含重复实例）';
 
-  // 上游可引用值映射（fromId -> outputs），用于"上游返回值"下拉
-  const upstreamMap = buildUpstreamOutputsMap();
-  // 构造"上游返回值"扁平选项：[{ref:'{{fromId.arguments.key}}', label:'fromName.key'}]
-  const upstreamOptions = [];
-  Object.keys(upstreamMap).forEach(t => {
-    upstreamMap[t].forEach(u => {
-      u.outputs.forEach(o => {
-        upstreamOptions.push({
-          ref: '{{steps.' + u.fromId + '.arguments.' + o.key + '}}',
-          label: u.fromName + ' › ' + (o.label || o.key),
-        });
-      });
-    });
-  });
-
   let html = '';
   nodes.forEach(({ inst, def }) => {
     const params = parseNodeParams(def);
@@ -5564,16 +5692,23 @@ function renderOrchParamOverrides() {
     params.forEach(p => {
       const required = p.required ? ' <span class="param-required-star">*</span>' : '';
       const typeTag = p.type ? `<span class="param-type-tag">(${esc(p.type)})</span>` : '';
-      html += `<div class="override-field" data-node="${esc(inst.instanceId)}" data-key="${esc(p.key)}">
-        <label>${esc(p.label || p.key)}${required} ${typeTag}</label>
-        <div style="display:flex;gap:6px;align-items:center">
-          <select class="param-src-select" style="flex:0 0 92px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:.72rem" onchange="onParamSrcChange(this)">
-            <option value="fixed">固定值</option>
-            <option value="entry">入口参数</option>
-            <option value="upstream">上游返回值</option>
-          </select>
-          <span class="param-value-slot" style="flex:1;display:flex;gap:4px;align-items:center"></span>
-        </div>
+      html += `<div class="override-field param-row" data-node="${esc(inst.instanceId)}" data-key="${esc(p.key)}">
+        <input class="param-key" value="${esc(p.key)}" readonly title="参数英文名" style="flex:0 1 130px;min-width:110px;background:var(--bg-muted)">
+        <input class="param-label" value="${esc(p.label || '')}" readonly title="显示名" style="flex:1 1 120px;min-width:90px;background:var(--bg-muted)">
+        <select class="param-type" disabled style="flex:0 1 92px;min-width:80px">
+          <option value="string" ${p.type==='string'?'selected':''}>string</option>
+          <option value="int64" ${p.type==='int64'?'selected':''}>int64</option>
+          <option value="float64" ${p.type==='float64'?'selected':''}>float64</option>
+          <option value="bool" ${p.type==='bool'?'selected':''}>bool</option>
+          <option value="formula" ${p.type==='formula'?'selected':''}>formula</option>
+        </select>
+        <select class="param-src-select" style="flex:0 1 110px;min-width:96px" onchange="onParamSrcChange(this)">
+          <option value="value">固定配置</option>
+          <option value="ref_act">引用节点</option>
+          <option value="ref_node">调用传入</option>
+        </select>
+        <span class="param-value-slot" style="flex:1.4;display:flex;gap:4px;align-items:center;min-width:0"></span>
+        <label class="param-required" style="flex:0 0 auto">${p.required ? '<span class="param-required-star">*</span>必填' : ''}</label>
       </div>`;
     });
     html += `</div></div>`;
@@ -5587,17 +5722,19 @@ function renderOrchParamOverrides() {
   container.querySelectorAll('.override-field').forEach(field => {
     const nodeId = field.getAttribute('data-node');
     const key = field.getAttribute('data-key');
-    const preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || null;
+    let preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || null;
+    // 兜底：未单独保存 node_param_overrides 时，从 DSL 节点 arguments 恢复（已写入配置后的值）
+    if (!preset) {
+      const inst = (_orchNodeInstances || []).find(i => i.instanceId === nodeId);
+      if (inst && Array.isArray(inst.override)) {
+        const bc = inst.override.find(b => (b.Key || b.key) === key);
+        if (bc && bc.Value != null && bc.Value !== '') {
+          preset = inferOrchParamPreset(bc.Value);
+        }
+      }
+    }
     initParamValueControl(field, preset);
   });
-
-  // 若有上游可引用值，自动把来源为 upstream 的控件刷新为下拉
-  if (upstreamOptions.length) {
-    container.querySelectorAll('.override-field').forEach(field => {
-      const sel = field.querySelector('.param-src-select');
-      if (sel && sel.value === PARAM_SRC_UPSTREAM) refreshUpstreamSelect(field, upstreamOptions);
-    });
-  }
 }
 
 // 暂存已编辑的参数值（key=nodeId, value={key: {src, value}}），用于重渲染时保留
@@ -5610,21 +5747,18 @@ function onParamSrcChange(sel) {
   const slot = field.querySelector('.param-value-slot');
   const nodeId = field.getAttribute('data-node');
   const key = field.getAttribute('data-key');
-  const preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || { src, value: '' };
+  const preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || { src: orchParamSrcToInternal(src), value: '' };
 
-  if (src === PARAM_SRC_UPSTREAM) {
-    const upstreamMap = buildUpstreamOutputsMap();
-    const upstreamOptions = [];
-    Object.keys(upstreamMap).forEach(t => {
-      upstreamMap[t].forEach(u => u.outputs.forEach(o => {
-        upstreamOptions.push({ ref: '{{steps.' + u.fromId + '.arguments.' + o.key + '}}', label: u.fromName + ' › ' + (o.label || o.key) });
-      }));
-    });
-    preset.src = src;
-    renderUpstreamSelect(slot, upstreamOptions, preset.value);
+  if (src === PARAM_SRC_REF_ACT) {
+    preset.src = PARAM_SRC_UPSTREAM;
+    renderOrchRefNodeControl(slot, nodeId, preset.value);
+  } else if (src === PARAM_SRC_REF_NODE) {
+    preset.src = PARAM_SRC_ENTRY;
+    preset.value = '';
+    renderCallInputHint(slot, key);
   } else {
-    preset.src = src;
-    renderFixedInput(slot, preset.value, src === PARAM_SRC_ENTRY ? '填写入口参数名，如 userName' : '填写固定值');
+    preset.src = PARAM_SRC_FIXED;
+    renderFixedInput(slot, preset.value, '填写固定值');
   }
   storeParamPreset();
 }
@@ -5633,42 +5767,135 @@ function initParamValueControl(field, preset) {
   const sel = field.querySelector('.param-src-select');
   const slot = field.querySelector('.param-value-slot');
   if (!preset) {
-    sel.value = PARAM_SRC_FIXED;
+    sel.value = PARAM_SRC_VALUE;
     renderFixedInput(slot, '', '填写固定值');
     return;
   }
-  sel.value = preset.src || PARAM_SRC_FIXED;
+  sel.value = orchParamSrcToDisplay(preset.src) || PARAM_SRC_VALUE;
   if (preset.src === PARAM_SRC_UPSTREAM) {
-    const upstreamMap = buildUpstreamOutputsMap();
-    const upstreamOptions = [];
-    Object.keys(upstreamMap).forEach(t => {
-      upstreamMap[t].forEach(u => u.outputs.forEach(o => {
-        upstreamOptions.push({ ref: '{{steps.' + u.fromId + '.arguments.' + o.key + '}}', label: u.fromName + ' › ' + (o.label || o.key) });
-      }));
-    });
-    renderUpstreamSelect(slot, upstreamOptions, preset.value);
+    renderOrchRefNodeControl(slot, field.getAttribute('data-node'), preset.value);
+  } else if (preset.src === PARAM_SRC_ENTRY) {
+    renderCallInputHint(slot, field.getAttribute('data-key'), preset.value);
   } else {
-    renderFixedInput(slot, preset.value, preset.src === PARAM_SRC_ENTRY ? '填写入口参数名，如 userName' : '填写固定值');
+    renderFixedInput(slot, preset.value, '填写固定值');
   }
 }
 
-function renderFixedInput(slot, value, placeholder) {
-  slot.innerHTML = `<input class="param-value-input" placeholder="${esc(placeholder || '')}" value="${esc(value || '')}" onfocus="_focusedParamInput=this" onblur="setTimeout(()=>{if(_focusedParamInput===this)_focusedParamInput=null;},100)" oninput="storeParamPreset()">`;
+// 调用传入：无需输入框，由调用方在接口调用时传入
+// 保留隐藏 input 记录外部参数名（默认参数英文名），以便保存并回显为「调用传入」
+function renderCallInputHint(slot, paramKey, paramName) {
+  slot.style.flex = '';
+  slot.style.flexWrap = '';
+  slot.innerHTML = `<span class="param-call-hint">调用接口时由用户传入（参数名：${esc(paramName || paramKey || '')}）</span>` +
+    `<input class="param-value-input" type="hidden" value="${esc(paramName || paramKey || '')}">`;
 }
 
-function renderUpstreamSelect(slot, options, value) {
-  let opts = `<option value="">— 选择上游返回值 —</option>`;
-  options.forEach(o => {
-    opts += `<option value="${esc(o.ref)}" ${o.ref === value ? 'selected' : ''}>${esc(o.label)} (${esc(o.ref)})</option>`;
+// 解析 {{steps.<id>.arguments.<key>}} / {{steps.<id>.responses.<key>}}
+function parseStepsRef(ref) {
+  if (typeof ref !== 'string') return null;
+  const m = ref.match(/^\{\{\s*steps\.([^.]+)\.(arguments|responses)\.([^}]+?)\s*\}\}$/);
+  if (!m) return null;
+  return { nodeId: m[1], kind: m[2], key: m[3] };
+}
+
+// 收集「已选择的其它节点/子链」用于「引用节点」选择（excludeId 为当前实例 instanceId）
+function getOrchRefNodeCandidates(excludeId) {
+  const cands = [];
+  // 已选节点实例（按 instanceId 排除自身）
+  (window._orchNodeInstances || []).forEach(inst => {
+    if (inst.instanceId === excludeId) return;
+    const def = (_orchNodes || []).find(n => n.node_id === inst.nodeId);
+    if (!def) return;
+    cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: parseNodeParams(def), outputs: parseNodeOutputs(def) });
   });
-  slot.innerHTML = `<select class="param-value-input" onfocus="_focusedParamInput=this" onblur="setTimeout(()=>{if(_focusedParamInput===this)_focusedParamInput=null;},100)" onchange="storeParamPreset()">${opts}</select>`;
+  // 已选子链（按 chain_id 排除自身）
+  getSelectedOrchSubIds().forEach(subId => {
+    if (subId === excludeId) return;
+    const s = (_orchSubChains || []).find(x => x.chain_id === subId);
+    if (!s) return;
+    cands.push({ id: s.chain_id, name: s.name || s.chain_id, type: 'sub', params: parseNodeParams(s), outputs: parseNodeOutputs(s) });
+  });
+  return cands;
 }
 
-function refreshUpstreamSelect(field, options) {
+// 渲染「引用节点」控件：先选节点，再选 参数定义/返回值定义
+function renderOrchRefNodeControl(slot, excludeId, presetValue) {
+  // 引用节点控件较宽，独占整行并允许内部换行，避免被右侧面板遮挡
+  slot.style.flex = '1 1 100%';
+  slot.style.flexWrap = 'wrap';
+  const parsed = parseStepsRef(presetValue);
+  const cands = getOrchRefNodeCandidates(excludeId);
+  const selNodeId = parsed ? parsed.nodeId : (cands[0] ? cands[0].id : '');
+  const cand = cands.find(c => c.id === selNodeId) || cands[0] || null;
+  const kind = parsed ? parsed.kind : 'arguments';
+  const presetKey = parsed ? parsed.key : '';
+
+  let nodeOpts = `<option value="">— 选择节点 —</option>`;
+  cands.forEach(c => {
+    nodeOpts += `<option value="${esc(c.id)}" ${c.id === selNodeId ? 'selected' : ''}>${esc(c.name)} <${esc(c.id)}></option>`;
+  });
+
+  const fieldOpts = renderOrchRefNodeFieldOptions(cand, kind, presetKey);
+  const finalRef = cand ? buildOrchRefRef(cand.id, kind, presetKey) : '';
+
+  slot.innerHTML =
+    `<select class="param-ref-node-select" style="flex:0 0 150px" onchange="onOrchRefNodeChange(this)">${nodeOpts}</select>` +
+    `<select class="param-ref-kind-select" style="flex:0 0 110px" onchange="onOrchRefNodeChange(this)">` +
+      `<option value="arguments" ${kind === 'arguments' ? 'selected' : ''}>参数定义</option>` +
+      `<option value="responses" ${kind === 'responses' ? 'selected' : ''}>返回值定义</option>` +
+    `</select>` +
+    `<select class="param-value-input" style="flex:1;min-width:0" onchange="onOrchRefNodeFieldChange(this)">${fieldOpts}</select>` +
+    `<input type="hidden" class="param-ref-final" value="${esc(finalRef)}">`;
+}
+
+function renderOrchRefNodeFieldOptions(cand, kind, presetKey) {
+  if (!cand) return `<option value="">— 无可用节点 —</option>`;
+  const list = (kind === 'responses') ? cand.outputs : cand.params;
+  if (!list || !list.length) {
+    return `<option value="">— ${kind === 'responses' ? '无返回值定义' : '无参数定义'} —</option>`;
+  }
+  let opts = `<option value="">— 选择字段 —</option>`;
+  list.forEach(f => {
+    const ref = '{{steps.' + cand.id + '.' + kind + '.' + f.key + '}}';
+    opts += `<option value="${esc(ref)}" ${f.key === presetKey ? 'selected' : ''}>${esc(f.label || f.key)} (${esc(f.key)})</option>`;
+  });
+  return opts;
+}
+
+function buildOrchRefRef(nodeId, kind, key) {
+  if (!nodeId || !key) return '';
+  return '{{steps.' + nodeId + '.' + kind + '.' + key + '}}';
+}
+
+// 切换节点 / 切换 参数定义·返回值定义
+function onOrchRefNodeChange(sel) {
+  const field = sel.closest('.override-field');
   const slot = field.querySelector('.param-value-slot');
-  const cur = field.querySelector('.param-value-input');
-  const val = cur ? cur.value : '';
-  renderUpstreamSelect(slot, options, val);
+  const nodeId = field.getAttribute('data-node');
+  const nodeSel = slot.querySelector('.param-ref-node-select');
+  const kindSel = slot.querySelector('.param-ref-kind-select');
+  const finalInput = slot.querySelector('.param-ref-final');
+  const cand = getOrchRefNodeCandidates(nodeId).find(c => c.id === nodeSel.value) || null;
+  const fieldSel = slot.querySelector('.param-value-input');
+  fieldSel.innerHTML = renderOrchRefNodeFieldOptions(cand, kindSel.value, '');
+  finalInput.value = '';
+  storeParamPreset();
+}
+
+// 选择具体字段，拼装最终引用路径
+function onOrchRefNodeFieldChange(sel) {
+  const field = sel.closest('.override-field');
+  const slot = field.querySelector('.param-value-slot');
+  const finalInput = slot.querySelector('.param-ref-final');
+  finalInput.value = sel.value;
+  storeParamPreset();
+}
+
+function renderFixedInput(slot, value, placeholder) {
+  // 固定配置输入框独占整行，与来源选择框换行展示
+  slot.style.flex = '1 1 100%';
+  slot.style.flexWrap = 'wrap';
+  slot.innerHTML = `<input class="param-value-input" style="flex:1;min-width:200px" placeholder="${esc(placeholder || '')}" value="${esc(value || '')}" oninput="storeParamPreset()">`;
 }
 
 // 将当前 UI 中的参数配置写入暂存对象
@@ -5678,7 +5905,7 @@ function storeParamPreset() {
   container.querySelectorAll('.override-field').forEach(field => {
     const nodeId = field.getAttribute('data-node');
     const key = field.getAttribute('data-key');
-    const src = field.querySelector('.param-src-select').value;
+    const src = orchParamSrcToInternal(field.querySelector('.param-src-select').value);
     const valEl = field.querySelector('.param-value-input');
     const value = valEl ? valEl.value : '';
     if (!_orchParamPreset[nodeId]) _orchParamPreset[nodeId] = {};
@@ -5686,8 +5913,10 @@ function storeParamPreset() {
   });
 }
 
-// 收集为 node_param_overrides：{ nodeId: { key: value } }
-// 仅含：固定值(非空) / 入口参数(非空，包成 {{名}}) / 上游返回值(非空 ref)
+// 收集为 node_param_overrides：{ nodeId: { key: { src, value } } }
+// 同时保存来源(src)与最终值(value)，确保编辑回显时能准确还原"来源选择"，
+// 而不依赖值格式推断。value 为最终值（引用节点即选择的值：{{steps.<节点ID>.<kind>.<字段>}}），
+// 后端写入节点 arguments 时取其中的 value 字段。
 function collectOrchParamOverrides() {
   const result = {};
   Object.keys(_orchParamPreset).forEach(nodeId => {
@@ -5696,18 +5925,27 @@ function collectOrchParamOverrides() {
       const { src, value } = keys[key];
       if (!value || !value.trim()) return; // 空值不覆盖
       let finalVal = value.trim();
-      if (src === PARAM_SRC_ENTRY) {
-        // 入口参数：包成 {{参数名}}
-        if (!/^\{\{.*\}\}$/.test(finalVal)) finalVal = '{{' + finalVal + '}}';
+      let finalSrc = src; // _orchParamPreset 已存内部来源(fixed/upstream/entry)，无需再转换
+      if (finalSrc === PARAM_SRC_ENTRY) {
+        // 调用传入：包成 {{arguments.参数key}}
+        // 已是正确格式则保持；否则规整为裸参数 key 再包裹（去掉可能存在的 arguments. 前缀与外层 {{}}）
+        if (!/^\{\{arguments\.[^}]+\}\}$/.test(finalVal)) {
+          let k = finalVal;
+          if (/^\{\{[^}]+\}\}$/.test(k)) k = k.replace(/^\{\{|\}\}$/g, '');
+          while (k.startsWith('arguments.')) k = k.slice('arguments.'.length);
+          finalVal = '{{arguments.' + k + '}}';
+        }
       }
       if (!result[nodeId]) result[nodeId] = {};
-      result[nodeId][key] = finalVal;
+      result[nodeId][key] = { src: finalSrc, value: finalVal };
     });
   });
   return result;
 }
 
 // 回显已保存的 node_param_overrides（编辑加载时调用）
+// 保存结构：{ paramKey: { src, value } }，src 为内部来源(fixed/upstream/entry)
+// 兼容旧格式：paramKey 直接是字符串值（纯值，按格式推断来源）
 function applyOrchParamOverrides(saved) {
   _orchParamPreset = {};
   if (!saved) return;
@@ -5716,25 +5954,79 @@ function applyOrchParamOverrides(saved) {
     Object.keys(obj || {}).forEach(nodeId => {
       const kv = obj[nodeId] || {};
       Object.keys(kv).forEach(key => {
-        const rawVal = kv[key];
-        if (rawVal == null) return;
-        const s = String(rawVal);
-        let src = PARAM_SRC_FIXED;
-        let value = s;
-        // 形如 {{x.arguments.y}} 或 {{参数名}} 视为引用
-        if (/^\{\{.*\}\}$/.test(s)) {
-          if (/^\{\{[^.]+\.arguments\./.test(s) || /^\{\{[^.]+\.[^.]+\}\}/.test(s)) {
+        const raw = kv[key];
+        if (raw == null) return;
+        if (!_orchParamPreset[nodeId]) _orchParamPreset[nodeId] = {};
+        if (typeof raw === 'object') {
+          // 新格式：明确携带 src 与 value
+          const src = raw.src || PARAM_SRC_FIXED;
+          const value = raw.value != null ? String(raw.value) : '';
+          _orchParamPreset[nodeId][key] = { src, value };
+        } else {
+          // 旧格式：纯值，按格式推断
+          const s = String(raw);
+          let src = PARAM_SRC_FIXED;
+          let value = '';
+          if (/^\{\{steps\.[^.]+\.(arguments|responses)\.[^}]+?\}\}$/.test(s)) {
             src = PARAM_SRC_UPSTREAM;
-          } else {
+            value = s;
+          } else if (/^\{\{arguments\.[^}]+\}\}$/.test(s)) {
+            // 调用传入：{{arguments.参数key}}
+            src = PARAM_SRC_ENTRY;
+            value = s.replace(/^\{\{arguments\.|\}\}$/g, '');
+          } else if (/^\{\{[^}]+\}\}$/.test(s)) {
+            // 调用传入（旧格式：{{参数名}}）
             src = PARAM_SRC_ENTRY;
             value = s.replace(/^\{\{|\}\}$/g, '');
+          } else {
+            src = PARAM_SRC_FIXED;
+            value = s;
           }
+          _orchParamPreset[nodeId][key] = { src, value };
         }
-        if (!_orchParamPreset[nodeId]) _orchParamPreset[nodeId] = {};
-        _orchParamPreset[nodeId][key] = { src, value };
       });
     });
   } catch(e) { /* ignore */ }
+}
+
+// 根据参数值推断来源（调用传入/引用节点/固定配置），用于从 DSL arguments 兜底回显
+function inferOrchParamPreset(val) {
+  const s = (val == null) ? '' : String(val);
+  if (!s) return null;
+  if (/^\{\{steps\.[^.]+\.(arguments|responses)\.[^}]+?\}\}$/.test(s)) {
+    return { src: PARAM_SRC_UPSTREAM, value: s };
+  }
+  if (/^\{\{arguments\.[^}]+\}\}$/.test(s)) {
+    // 调用传入：{{arguments.参数key}}（兼容已污染的 {{arguments.arguments.x}}）
+    let k = s.replace(/^\{\{|\}\}$/g, '');
+    while (k.startsWith('arguments.')) k = k.slice('arguments.'.length);
+    return { src: PARAM_SRC_ENTRY, value: k };
+  }
+  if (/^\{\{[^}]+\}\}$/.test(s)) {
+    // 调用传入（旧格式：{{参数名}}）
+    return { src: PARAM_SRC_ENTRY, value: s.replace(/^\{\{|\}\}$/g, '') };
+  }
+  return { src: PARAM_SRC_FIXED, value: s };
+}
+
+// 根据参数值推断来源（调用传入/引用节点/固定配置），用于从 DSL arguments 兜底回显
+function inferOrchParamPreset(val) {
+  const s = (val == null) ? '' : String(val);
+  if (!s) return null;
+  if (/^\{\{steps\.[^.]+\.(arguments|responses)\.[^}]+?\}\}$/.test(s)) {
+    return { src: PARAM_SRC_UPSTREAM, value: s };
+  }
+  if (/^\{\{arguments\.[^}]+\}\}$/.test(s)) {
+    // 调用传入：{{arguments.参数key}}（兼容已污染的 {{arguments.arguments.x}}）
+    let k = s.replace(/^\{\{|\}\}$/g, '');
+    while (k.startsWith('arguments.')) k = k.slice('arguments.'.length);
+    return { src: PARAM_SRC_ENTRY, value: k };
+  }
+  if (/^\{\{[^}]+\}\}$/.test(s)) {
+    // 调用传入（旧格式：{{参数名}}）
+    return { src: PARAM_SRC_ENTRY, value: s.replace(/^\{\{|\}\}$/g, '') };
+  }
+  return { src: PARAM_SRC_FIXED, value: s };
 }
 
 let _orchPreviewScale = 1;
@@ -5879,13 +6171,21 @@ window._orchTarget = 'root';
 // sub 目标下不显示 Sub Chains 选择区（子链嵌套子链引用在连接中已是可选目标，仍可引用）。
 function setOrchTarget(type) {
   window._orchTarget = type;
-  const rootBtn = document.getElementById('orch-target-root');
-  if (rootBtn) {
-    // 子链编排时仅能编辑 Sub Chain，隐藏 Root Chain 选项
-    rootBtn.style.display = (type === 'sub') ? 'none' : '';
-    rootBtn.classList.toggle('btn-primary', type === 'root');
-    rootBtn.classList.toggle('btn-outline', type !== 'root');
-  }
+  // root/sub 模式内容区分：切换 root-only / sub-only 区块显隐
+  const showRoot = (type === 'root');
+  document.querySelectorAll('.root-only').forEach(el => {
+    el.style.display = showRoot ? '' : 'none';
+  });
+  document.querySelectorAll('.sub-only').forEach(el => {
+    el.style.display = showRoot ? 'none' : '';
+  });
+  // 标题与区分提示
+  const titleEl = document.getElementById('orch-target-title');
+  const hintEl = document.getElementById('orch-target-hint');
+  if (titleEl) titleEl.textContent = showRoot ? '编排 Root Chain' : '编排 Sub Chain';
+  if (hintEl) hintEl.textContent = showRoot
+    ? 'Root Chain 为流程入口，可设置全局唯一的 Chain Key 供外部按业务键调用。'
+    : 'Sub Chain 为可复用的子流程，供其他 Root/Sub Chain 在连接中引用，无 Chain Key。';
   const btn = document.getElementById('orch-generate-btn');
   const isEdit = btn.dataset.edit === '1';
   if (type === 'sub') {
@@ -6127,7 +6427,19 @@ function loadRootChainToOrch(c) {
 // Utility
 // ============================================================
 function esc(s) { if (s === null || s === undefined) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// 安全取值：元素可能已被 UI 隐藏/移除，缺失时返回默认值
+function safeVal(id, def) { const el = document.getElementById(id); return el ? el.value.trim() : (def || ''); }
+function safeChecked(id) { const el = document.getElementById(id); return el ? el.checked : false; }
 function trunc(s, n) { if (!s) return '-'; return s.length > n ? s.substring(0, n) + '...' : s; }
+function formatDuration(ms) {
+  if (ms === undefined || ms === null || ms < 0) return '-';
+  if (ms < 1000) return ms + 'ms';
+  const sec = ms / 1000;
+  if (sec < 60) return sec.toFixed(2) + 's';
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return m + 'm' + s + 's';
+}
 function prettyJson(v) {
   if (!v || v === 'null') return '{}';
   try {
@@ -6319,7 +6631,7 @@ function argRenderArgInput(key, bind, argCtx) {
     const typ = bind.type || 'string';
     const ph = typ === 'formula'
       ? '公式，如 {{arguments.a}} + {{arguments.b}}'
-      : '手工配置（留空则用活动默认值）';
+      : '固定配置（留空则用活动默认值）';
     const typeSel = '<select class="arg-type" onchange="syncActivityConfig()" title="值类型" style="flex:0 0 70px;width:70px;padding:3px 4px;border:1px solid var(--border);border-radius:6px;font-size:.72rem">' +
       ['string', 'int64', 'float64', 'formula'].map(t =>
         '<option value="' + t + '"' + (t === typ ? ' selected' : '') + '>' + t + '</option>'
@@ -6362,7 +6674,7 @@ function argRenderArgBindRow(row, key, bind, argCtx) {
   const hasPrev = prevs.length > 0;
   const effSrc = (src === 'ref_act' && !hasPrev) ? 'value' : src;
   const srcOptions =
-    '<option value="value"' + (effSrc === 'value' ? ' selected' : '') + '>手工配置</option>' +
+    '<option value="value"' + (effSrc === 'value' ? ' selected' : '') + '>固定配置</option>' +
     (hasPrev ? '<option value="ref_act"' + (effSrc === 'ref_act' ? ' selected' : '') + '>引用前序</option>' : '') +
     '<option value="ref_node"' + (effSrc === 'ref_node' ? ' selected' : '') + '>引用节点</option>';
 
@@ -6457,7 +6769,7 @@ function switchTab(tab) {
 function applyInitialTab() {
   const tab = new URLSearchParams(location.search).get('tab');
   if (!tab) return;
-  const valid = ['activities', 'nodes', 'sub-chains', 'root-chains', 'orchestrate', 'execute'];
+  const valid = ['activities', 'nodes', 'sub-chains', 'root-chains', 'orchestrate'];
   if (valid.includes(tab)) switchTab(tab);
 }
 
@@ -6685,7 +6997,7 @@ async function orchLoadRootChainById(chainId) {
     loadOrchData().then(() => {
       applyOrchParamOverrides(c.node_param_overrides);
       const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
-      restoreOrchNodeInstances(nodeIds);
+      restoreOrchNodeInstances(nodeIds, c.dsl_json);
       const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
       document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => { cb.checked = subIds.includes(cb.value); });
       onOrchSelectionChange();

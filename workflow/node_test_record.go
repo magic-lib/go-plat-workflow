@@ -30,6 +30,8 @@ type NodeTestRecordDef struct {
 	Result string `json:"result,omitempty"`
 	// ErrorMsg 失败时的错误信息
 	ErrorMsg string `json:"error_msg,omitempty"`
+	// DurationMs 测试执行耗时（毫秒）
+	DurationMs int64 `json:"duration_ms"`
 	// CreatedAt 创建时间
 	CreatedAt time.Time `json:"created_at"`
 }

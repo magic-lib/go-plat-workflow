@@ -87,10 +87,10 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	actMetaData := new(rulegox.ActivityMetaData)
 	_ = conv.Unmarshal(metaDataMap, actMetaData)
 
-	nodeSpanId := id.NewUUID()
-
 	currNodeId := getNodeId(ctx)
 	nodeStr := string(currNodeId)
+
+	nodeSpanId := id.GetUUID(nodeStr)
 
 	condStr := x.getCondition()
 	if condStr == "" {
@@ -116,7 +116,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		boolResult, err := conv.Convert[bool](conResult)
 		if err != nil {
 			nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "fail", "error", types.Failure, allParams, nodeParams, err)
-			if cliErr == nil {
+			if cliErr == nil && x.nodeLogCli == nil {
 				x.nodeLogCli = nodeCli
 			}
 			ctx.TellFailure(msg, err)
@@ -128,7 +128,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		}
 
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", relationType, allParams, nodeParams, nil)
-		if cliErr == nil {
+		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
 		ctx.TellNext(msg, relationType)
@@ -136,7 +136,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	}
 	if relationTypeTemp, ok := conResult.(string); ok {
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", relationTypeTemp, allParams, nodeParams, nil)
-		if cliErr == nil {
+		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
 		ctx.TellNext(msg, relationTypeTemp)
@@ -146,7 +146,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	changeBool, err := conv.Convert[bool](conResult)
 	if err != nil {
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "fail", "error", conv.String(conResult), allParams, nodeParams, err)
-		if cliErr == nil {
+		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
 		// 如果出错，则采用转为字符串来进行处理
@@ -160,7 +160,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	}
 
 	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, "", "success", "info", relationType, allParams, nodeParams, nil)
-	if cliErr == nil {
+	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli
 	}
 	// 默认采用Success和Failure

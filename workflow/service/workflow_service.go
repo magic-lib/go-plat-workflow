@@ -14,18 +14,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	param "github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/builder"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/magic-lib/go-plat-workflow/workflow/models"
 	"github.com/magic-lib/go-plat-workflow/workflow/repo"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
+	"github.com/rulego/rulego/api/types"
 )
 
 // WorkflowService 工作流编排服务，整合节点管理、子链管理、DSL 组装和引擎执行。
@@ -503,6 +507,24 @@ func (s *WorkflowService) SaveRootChain(ctx context.Context, req *workflow.Build
 	return s.dslBuilder.Build(ctx, req)
 }
 
+// CreateRootChain 仅录入基本信息（chain_key/name/description/status），DSL 默认为空对象 "{}"。
+// 用于在编排前先建立一条 Root Chain 草稿记录，后续编排完成后再通过 SaveRootChain 更新 dsl_json。
+// 注意：MySQL 的 json 列不允许空字符串，故 DSLJSON 必须显式给 "{}" 而非 ""。
+func (s *WorkflowService) CreateRootChain(ctx context.Context, project, chainKey, name, description string, status int) (*workflow.RootChainDef, error) {
+	def := &workflow.RootChainDef{
+		Project:     project,
+		ChainKey:    chainKey,
+		Name:        name,
+		Description: description,
+		DSLJSON:     "{}",
+		Status:      int8(status),
+	}
+	if err := s.rootChainRepo.Create(ctx, def); err != nil {
+		return nil, err
+	}
+	return def, nil
+}
+
 // GetRootChain 获取指定项目下的单个根链（按 ChainID）。
 func (s *WorkflowService) GetRootChain(ctx context.Context, project, chainID string) (*workflow.RootChainDef, error) {
 	return s.rootChainRepo.GetByID(ctx, project, chainID)
@@ -719,9 +741,110 @@ func (s *WorkflowService) DeleteRootChainRelease(ctx context.Context, project, c
 	return nil
 }
 
+// executeRootChainByIDTimeout 流程同步执行的超时时间，避免长时间取不到结果导致调用方永久阻塞。
+const executeRootChainByIDTimeout = 300000 * time.Second
+
+// ExecuteRootChainByID 基于已解析的根链 DSL（ruleChain）同步执行流程。
+// 从根链 flow 节点提取子链 ID 并通过 project 查询子链 DSL，组装 ActivityFlowConfig 后
+// 调用 rulegox.StartActivityFlow 同步执行，返回 FlowContext 序列化结果。
+func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *types.RuleChain, jsonPayload map[string]any, project, envName, traceId string) (any, error) {
+	// 整体执行加超时，防止流程长时间不返回导致阻塞
+	execCtx, cancel := context.WithTimeout(ctx, executeRootChainByIDTimeout)
+	defer cancel()
+
+	rootChainID := ruleChain.RuleChain.ID
+
+	// 1. 从根链 flow 节点提取子链 ID（configuration.ruleChainId = "project:subChainID"）
+	subChainIDs := make(map[string]bool)
+	for _, node := range ruleChain.Metadata.Nodes {
+		if node == nil || node.Type != "flow" {
+			continue
+		}
+		if ref, ok := node.Configuration["ruleChainId"].(string); ok && ref != "" {
+			if idx := strings.LastIndex(ref, ":"); idx >= 0 {
+				ref = ref[idx+1:]
+			}
+			if ref != "" {
+				subChainIDs[ref] = true
+			}
+		}
+	}
+
+	// 2. 查询子链 DSL
+	var subChainDSL []*types.RuleChainBaseInfo
+	for subID := range subChainIDs {
+		subDef, err := s.subChainRepo.GetByID(execCtx, project, subID)
+		if err != nil {
+			return "", fmt.Errorf("get sub chain %s failed: %w", subID, err)
+		}
+		subChain := &types.RuleChain{}
+		if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
+			return "", fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
+		}
+		subChainDSL = append(subChainDSL, &subChain.RuleChain)
+	}
+
+	// 2.1 根据项目+环境解析 Redis 配置（按环境将运行数据打入对应 Redis）
+	redisCfg, err := s.GetRedisConnect(execCtx, project, envName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve redis config failed: %w", err)
+	}
+
+	// 3. 构造流程上下文：全局入参作为 arguments（供 DSL 中的 {{arguments.x}} 取值）
+	flowCtx := paramx.NewFlowContext(rootChainID, id.NewUUID(), jsonPayload)
+
+	// 4. 组装执行配置（同步执行：IsAsync=false）
+	actConfig := &rulegox.ActivityFlowConfig{
+		RootChainDSL: ruleChain,
+		SubChainDSL:  subChainDSL,
+		FlowContext:  flowCtx,
+		IsAsync:      false,
+		UseCache:     false,
+	}
+
+	// 5. 执行元数据：环境 + Redis 配置（按环境将运行数据打入对应 Redis）
+	metaData := rulegox.ActivityMetaData{
+		Env:         envName,
+		Project:     project,
+		RootChainID: rootChainID,
+		RedisConfig: redisCfg,
+		TraceId:     id.GetUUID(traceId),
+	}
+
+	// 6. 同步执行并捕获结果
+	var (
+		resultParam *paramx.FlowContext
+		resultErr   error
+		done        = make(chan struct{})
+	)
+	actConfig.EndFunc = func(ctx context.Context, relationType string, param *paramx.FlowContext, err error) {
+		resultParam = param
+		resultErr = err
+		close(done)
+	}
+	if err := rulegox.StartActivityFlow(execCtx, actConfig, &metaData); err != nil {
+		return "", err
+	}
+
+	// 等待执行结束或超时，避免长时间取不到结果导致永久阻塞
+	select {
+	case <-done:
+		if resultErr != nil {
+			return "", resultErr
+		}
+		if resultParam == nil {
+			return nil, fmt.Errorf("execute root chain %s: empty result", rootChainID)
+		}
+		return resultParam.Responses, nil
+	case <-execCtx.Done():
+		return nil, fmt.Errorf("execute root chain %s: timeout after %s: %w", rootChainID, executeRootChainByIDTimeout, execCtx.Err())
+	}
+}
+
 // ExecutePublishedRootChain 加载并执行生产环境当前发布版本。
 // 与草稿执行互不影响：使用发布时快照的 DSL。
-func (s *WorkflowService) ExecutePublishedRootChain(ctx context.Context, project, chainID, jsonPayload string) (string, error) {
+// envName / redisCfg 非空时，按环境将运行数据打入对应 Redis。
+func (s *WorkflowService) ExecutePublishedRootChain(ctx context.Context, project, chainID, jsonPayload, envName string, redisCfg *conn.Connect) (string, error) {
 	release, err := s.releaseRepo.GetCurrent(ctx, project, chainID)
 	if err != nil {
 		return "", err
@@ -729,7 +852,7 @@ func (s *WorkflowService) ExecutePublishedRootChain(ctx context.Context, project
 	if err := s.engine.LoadChainDSL(ctx, project, chainID, release.DSLJSON, release.SubChainIDs); err != nil {
 		return "", err
 	}
-	return s.engine.Execute(ctx, project, chainID, jsonPayload)
+	return s.engine.ExecuteWithEnv(ctx, project, chainID, jsonPayload, envName, redisCfg)
 }
 
 // ============================================================
@@ -774,7 +897,8 @@ func (s *WorkflowService) UnloadChain(ctx context.Context, project, chainID stri
 // ============================================================
 
 // BuildLoadAndExecute 一次性完成：组装 DSL → 加载到引擎池 → 执行流程。
-func (s *WorkflowService) BuildLoadAndExecute(ctx context.Context, req *workflow.BuildRequest, jsonPayload string) (string, error) {
+// envName / redisCfg 非空时，执行会按环境将运行数据（node 日志、Activity 结果）打入对应 Redis。
+func (s *WorkflowService) BuildLoadAndExecute(ctx context.Context, req *workflow.BuildRequest, jsonPayload string, envName string, redisCfg *conn.Connect) (string, error) {
 	// 1. 组装
 	def, err := s.dslBuilder.Build(ctx, req)
 	if err != nil {
@@ -786,8 +910,8 @@ func (s *WorkflowService) BuildLoadAndExecute(ctx context.Context, req *workflow
 		return "", err
 	}
 
-	// 3. 执行
-	return s.engine.Execute(ctx, def.Project, def.ChainID, jsonPayload)
+	// 3. 执行（按环境注入 Redis 元数据）
+	return s.engine.ExecuteWithEnv(ctx, def.Project, def.ChainID, jsonPayload, envName, redisCfg)
 }
 
 // ============================================================
@@ -820,6 +944,8 @@ type TestNodeResult struct {
 	RecordID string `json:"record_id,omitempty"`
 	// TraceID 本次测试的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
 	TraceID string `json:"trace_id,omitempty"`
+	// DurationMs 测试执行耗时（毫秒）
+	DurationMs int64 `json:"duration_ms"`
 }
 
 // TestNode 测试单个节点：
@@ -863,17 +989,20 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 
 	// 6. 整理结果
 	result := &TestNodeResult{}
+	var execMs int64
 	if err != nil {
 		result.Status = "fail"
 		result.ErrorMsg = err.Error()
 	} else {
 		result.Status = "success"
 		result.Result = extractResultData(resp)
-		// 提取本次测试的链路 ID，便于回查 activity 日志
+		// 提取本次测试的链路 ID 与节点真实执行耗时，便于回查与统计
 		if tnr, ok := resp.(*workflow.TestNodeResultData); ok {
 			result.TraceID = tnr.TraceID
+			execMs = tnr.DurationMs
 		}
 	}
+	result.DurationMs = execMs
 
 	// 7. 保存测试记录（除非显式关闭）
 	if req.SaveRecord {
@@ -889,6 +1018,7 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 			Status:      result.Status,
 			Result:      result.Result,
 			ErrorMsg:    result.ErrorMsg,
+			DurationMs:  execMs,
 		}
 		if err := s.CreateNodeTestRecord(ctx, record); err == nil {
 			result.RecordID = record.RecordID
@@ -960,6 +1090,30 @@ func (s *WorkflowService) getRedisConfig(ctx context.Context, project, envName s
 		return nil, fmt.Errorf("env config %q has no redis config (addr is empty)", envName)
 	}
 	return envDef.RedisConfig, nil
+}
+
+// GetRedisConnect 根据项目+环境名解析出 Redis 连接（conn.Connect），供执行引擎按环境打入对应 Redis。
+// 环境未配置或无 Redis 时返回明确错误。
+func (s *WorkflowService) GetRedisConnect(ctx context.Context, project, envName string) (*conn.Connect, error) {
+	redisCfg, err := s.getRedisConfig(ctx, project, envName)
+	if err != nil {
+		return nil, err
+	}
+	host := redisCfg.Addr
+	port := "6379"
+	// Addr 形如 host:port 或 host
+	if idx := strings.Index(host, ":"); idx >= 0 {
+		port = host[idx+1:]
+		host = host[:idx]
+	}
+	return &conn.Connect{
+		Driver:   "redis",
+		Host:     host,
+		Port:     port,
+		Username: redisCfg.Username,
+		Password: redisCfg.Password,
+		Database: fmt.Sprintf("%d", redisCfg.DB),
+	}, nil
 }
 
 // extractResultData 从 MQ 响应中提取 Data 字段并序列化为 JSON 字符串。
@@ -1433,39 +1587,6 @@ type ExecuteRootChainByMQRequest struct {
 	EnvName string `json:"env_name"`
 	// UseRelease 是否使用已发布版本
 	UseRelease bool `json:"use_release,omitempty"`
-}
-
-// ExecuteRootChainByMQ 通过 MQ 同步调用分布式 worker 执行某个 rootChain 并返回结果。
-func (s *WorkflowService) ExecuteRootChainByMQ(ctx context.Context, req *ExecuteRootChainByMQRequest) (string, error) {
-	if req.Project == "" || req.ChainID == "" {
-		return "", fmt.Errorf("project and chain_id are required")
-	}
-	redisCfg, err := s.getRedisConfig(ctx, req.Project, req.EnvName)
-	if err != nil {
-		return "", err
-	}
-
-	envVars := make(map[string]string)
-	if req.EnvName != "" {
-		if envDef, e := s.envConfigRepo.GetByName(ctx, req.Project, req.EnvName); e == nil && envDef != nil {
-			for _, v := range envDef.EnvVars {
-				envVars[v.Key] = v.Value
-			}
-		}
-	}
-
-	payload := &workflow.ExecuteRootChainPayload{
-		Project:    req.Project,
-		ChainID:    req.ChainID,
-		Payload:    req.Payload,
-		EnvVars:    envVars,
-		UseRelease: req.UseRelease,
-	}
-	resp, err := s.mqExecutor.ExecuteRootChain(ctx, payload, redisCfg)
-	if err != nil {
-		return "", err
-	}
-	return extractResultData(resp), nil
 }
 
 // ============================================================

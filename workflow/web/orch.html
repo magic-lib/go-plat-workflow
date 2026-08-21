@@ -6,8 +6,23 @@
   <title>Workflow Orchestrate</title>
   <link rel="stylesheet" href="/assets/common.css">
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <style>
+    /* orch 页面：拉开顶部菜单与下方编排内容的距离 */
+    body { padding-top: 0; }
+    .header { margin-bottom: 22px; }
+    .tabs { margin-bottom: 24px; }
+    #tab-orchestrate { padding-top: 4px; }
+  </style>
 </head>
 <body>
+<!-- 连线类型候选（datalist：支持下拉选择，也支持自由输入） -->
+<datalist id="conn-type-datalist">
+  <option value="Success"></option>
+  <option value="Failure"></option>
+  <option value="True"></option>
+  <option value="False"></option>
+  <option value="Stream"></option>
+</datalist>
 <div id="login-overlay" class="hidden">
   <div class="login-card">
     <h2>&#9881; 流程管理中心</h2>
@@ -52,16 +67,14 @@
   <button class="tab-btn active" data-tab="orchestrate">Orchestrate</button>
   <button class="tab-btn" data-tab="execute" onclick="location.href='/?tab=execute'">Execute</button>
 </div>
-  <div id="tab-orchestrate" class="tab-content">
+  <div id="tab-orchestrate" class="tab-content active">
     <div class="orch-layout">
       <!-- Left: Configuration Panel -->
       <div class="orch-panel orch-left">
         <!-- Target Toggle -->
         <div class="orch-section">
           <h3 id="orch-target-title">编排目标</h3>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-sm btn-primary" id="orch-target-root" onclick="setOrchTarget('root')" style="flex:1">Root Chain</button>
-          </div>
+          <p class="orch-target-hint" id="orch-target-hint"></p>
         </div>
 
         <!-- Chain Info -->
@@ -72,7 +85,7 @@
               <label>Chain ID</label>
               <input id="orch-chain-id" placeholder="R000001" readonly oninput="onOrchChange()">
             </div>
-            <div class="form-group" style="display:none">
+            <div class="form-group root-only">
               <label>Chain Key <span style="font-weight:400;color:var(--text-muted)">（业务键，自定义名称，全局唯一，可与 Chain ID 互换调用）</span></label>
               <input id="orch-chain-key" placeholder="如 order-flow-v1" oninput="onOrchChange()">
             </div>
@@ -104,6 +117,7 @@
           <div class="orch-select-list" id="orch-node-list">
             <div class="orch-select-empty">加载中...</div>
           </div>
+          <div class="orch-pager" id="orch-node-pager"></div>
           <button id="orch-selected-toggle" class="btn btn-outline" type="button" style="width:100%;margin-top:8px" onclick="openOrchSelectedModal()">已选择的 Nodes (0)</button>
         </div>
 
@@ -127,20 +141,6 @@
           </div>
         </div>
 
-        <!-- Upstream Output Hints -->
-        <div class="orch-section" id="orch-upstream-section" style="margin-top:12px">
-          <h3 style="display:flex;justify-content:space-between;align-items:center">
-            上游返回值提示
-            <span class="count" id="orch-upstream-count" style="font-weight:400;color:var(--text-muted);font-size:.78rem">0 个可引用值</span>
-          </h3>
-          <div id="orch-upstream-hints" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
-            <div id="orch-upstream-empty" style="text-align:center;padding:14px;color:var(--text-muted);font-size:.82rem">选中节点并配置连接后，这里会列出各节点可引用的上游返回值</div>
-          </div>
-          <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px;line-height:1.5">
-            提示：点击任一返回值可复制其引用路径（<code>{{steps.nodeId.arguments.key}}</code>），便于在下游节点的 Configuration 或下方"节点参数配置"中引用。若当前聚焦在"节点参数配置"的来源为"上游返回值"的输入框，点击会直接填入。
-          </div>
-        </div>
-
         <!-- Node Param Overrides -->
         <div class="orch-section" id="orch-param-section" style="margin-top:12px">
           <h3 style="display:flex;justify-content:space-between;align-items:center">
@@ -148,7 +148,7 @@
             <span class="count" id="orch-param-count" style="font-weight:400;color:var(--text-muted);font-size:.78rem">0 个节点</span>
           </h3>
           <div class="orch-param-help" style="font-size:.76rem;color:var(--text-muted);margin-bottom:8px;line-height:1.6">
-            为每个节点的每个参数指定值来源：<b>固定值</b>（手工填写）、<b>入口参数</b>（运行时由根链输入传入，引用 <code>{{参数名}}</code>）、<b>上游返回值</b>（引用前面节点输出，形如 <code>{{steps.N000004.arguments.name}}</code>）。点击上方"上游返回值提示"中的项可快速填入当前聚焦的参数框。
+            为每个节点的每个参数指定值来源：<b>固定值</b>（手工填写）、<b>入口参数</b>（运行时由根链输入传入，引用 <code>{{arguments.参数key}}</code>）、<b>上游返回值</b>（引用前面节点输出，形如 <code>{{steps.N000004.arguments.name}}</code>）。
           </div>
           <div id="orch-param-list" style="max-height:380px;overflow-y:auto">
             <div id="orch-param-empty" style="text-align:center;padding:14px;color:var(--text-muted);font-size:.82rem">选择节点并添加连接后，这里会列出各节点的参数供指定值来源</div>
@@ -742,10 +742,19 @@ window.addEventListener('DOMContentLoaded', async function () {
   // 未登录：登录遮罩已显示，跳过编排加载
   if (!currentUser) return;
   // bootstrapAuth 登录成功后异步 loadProjects，确保 project-select 已就绪
-  for (let i = 0; i < 20 && !document.getElementById('project-select').value; i++) {
+  for (let i = 0; i < 20 && !document.getElementById('project-select').options.length; i++) {
     await new Promise(r => setTimeout(r, 100));
   }
+  // URL 指定的 project 优先于 localStorage 默认选中项
   const params = new URLSearchParams(location.search);
+  const urlProject = params.get('project');
+  if (urlProject) {
+    const sel = document.getElementById('project-select');
+    if (Array.from(sel.options).some(o => o.value === urlProject)) {
+      sel.value = urlProject;
+      onProjectChange();
+    }
+  }
   const target = params.get('target') || 'root';
   const chainId = params.get('chain_id') || '';
   setOrchTarget(target);

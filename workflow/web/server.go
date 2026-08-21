@@ -5,8 +5,11 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,6 +18,7 @@ import (
 
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/service"
+	"github.com/rulego/rulego/api/types"
 )
 
 //go:embed index.html orch.html assets
@@ -109,9 +113,6 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("DELETE /api/node-test-records/{record_id}", ws.handleDeleteNodeTestRecord)
 	ws.mux.HandleFunc("DELETE /api/nodes/{node_id}/test-records", ws.handleClearNodeTestRecords)
 
-	// RootChain MQ 分布式执行
-	ws.mux.HandleFunc("POST /api/workflow/execute-mq", ws.handleExecuteWorkflowByMQ)
-
 	// SubChains API
 	ws.mux.HandleFunc("GET /api/sub-chains", ws.handleListSubChains)
 	ws.mux.HandleFunc("POST /api/sub-chains", ws.handleCreateSubChain)
@@ -126,6 +127,7 @@ func (ws *WebServer) registerRoutes() {
 	// RootChains API
 	ws.mux.HandleFunc("GET /api/root-chains", ws.handleListRootChains)
 	ws.mux.HandleFunc("POST /api/root-chains", ws.handleSaveRootChain)
+	ws.mux.HandleFunc("POST /api/root-chains/create", ws.handleCreateRootChain)
 	ws.mux.HandleFunc("DELETE /api/root-chains/{chain_id}", ws.handleDeleteRootChain)
 
 	// RootChains 发布与回滚
@@ -206,6 +208,8 @@ func (ws *WebServer) serveOrch(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveAssets 返回公共静态资源（assets 目录下的 css/js 等）
+// 开发期优先读取磁盘 assets/ 目录，便于改完前端无需重新编译即可热更新；
+// 找不到文件时回退到编译期嵌入的 webAssets（生产兜底）。
 func (ws *WebServer) serveAssets(w http.ResponseWriter, r *http.Request) {
 	// /assets/xxx -> assets/xxx
 	name := strings.TrimPrefix(r.URL.Path, "/assets/")
@@ -213,11 +217,28 @@ func (ws *WebServer) serveAssets(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data, err := fs.ReadFile(webAssets, "assets/"+name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
+
+	// 浏览器不缓存静态资源，避免强缓存导致前端改动不生效
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
+	var data []byte
+	var err error
+	// 优先磁盘（相对可执行文件的工作目录）
+	if d, e := os.ReadFile(filepath.Join("workflow", "web", "assets", name)); e == nil {
+		data = d
+	} else if d, e := os.ReadFile(filepath.Join("assets", name)); e == nil {
+		data = d
+	} else {
+		// 回退 embed
+		data, err = fs.ReadFile(webAssets, "assets/"+name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
 	}
+
 	switch {
 	case strings.HasSuffix(name, ".css"):
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
@@ -834,6 +855,45 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, def)
 }
 
+// handleCreateRootChain 仅录入 Root Chain 基本信息（dsl 留空），用于编排前先建草稿记录
+// POST /api/root-chains/create  body: { project, chain_key, name, description, status }
+func (ws *WebServer) handleCreateRootChain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Project     string `json:"project"`
+		ChainKey    string `json:"chain_key"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Status      int    `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	project := projectParam(r)
+	if project == "" {
+		project = strings.TrimSpace(req.Project)
+	}
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project required")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	def, err := ws.svc.CreateRootChain(r.Context(), project, strings.TrimSpace(req.ChainKey), strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.Status)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Info().Str("project", def.Project).Str("chain_id", def.ChainID).Msg("root chain created via web")
+	writeJSON(w, http.StatusOK, def)
+}
+
 // ============================================================
 // SubChains 编排构建
 // ============================================================
@@ -1058,11 +1118,13 @@ type executeRequest struct {
 	ChainKey           string                            `json:"chain_key"`
 	ChainName          string                            `json:"chain_name"`
 	NodeIDs            []string                          `json:"node_ids"`
+	TraceId            string                            `json:"trace_id"`
 	SubChainIDs        []string                          `json:"sub_chain_ids"`
 	Connections        []workflow.ConnectionDef          `json:"connections"`
 	Payload            string                            `json:"payload"`
 	DebugMode          bool                              `json:"debug_mode"`
 	UseRelease         bool                              `json:"use_release"`
+	EnvName            string                            `json:"env_name"`
 	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
 }
 
@@ -1083,6 +1145,16 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 	if req.Payload == "" {
 		req.Payload = "{}"
 	}
+	// 执行环境为必填：后台执行时按环境将数据打入对应的 Redis（节点日志、Activity 结果等）
+	if req.EnvName == "" {
+		writeError(w, http.StatusBadRequest, "env_name is required")
+		return
+	}
+	redisCfg, err := ws.svc.GetRedisConnect(r.Context(), req.Project, req.EnvName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "resolve redis config failed: "+err.Error())
+		return
+	}
 
 	// 若仅提供了 ChainKey，先解析出真实的 ChainID（ChainID 与 ChainKey 均可用于调用主链）
 	if req.ChainID == "" && req.ChainKey != "" {
@@ -1096,7 +1168,9 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 
 	// 生产模式：执行当前发布版本（忽略编排配置，使用发布快照）
 	if req.UseRelease {
-		result, err := ws.svc.ExecutePublishedRootChain(r.Context(), req.Project, req.ChainID, req.Payload)
+		//chainID 必须为release中chainId随机生成的那个，不然如果测试时，就会把正式的利用 ws.svc.UnloadChain 卸载掉。
+
+		result, err := ws.svc.ExecutePublishedRootChain(r.Context(), req.Project, req.ChainID, req.Payload, req.EnvName, redisCfg)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1107,34 +1181,43 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 			"chain_id":    req.ChainID,
 			"result":      result,
 			"use_release": true,
+			"env_name":    req.EnvName,
 		})
 		return
 	}
 
-	buildReq := &workflow.BuildRequest{
-		Project:            req.Project,
-		ChainID:            req.ChainID,
-		ChainName:          req.ChainName,
-		NodeIDs:            req.NodeIDs,
-		SubChainIDs:        req.SubChainIDs,
-		Connections:        req.Connections,
-		DebugMode:          req.DebugMode,
-		NodeParamOverrides: req.NodeParamOverrides,
+	// 草稿模式：按 ChainID 查 root chain DSL，解析后通过 ExecuteRootChainByID 执行
+	def, err := ws.svc.GetRootChain(r.Context(), req.Project, req.ChainID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "root chain not found: "+err.Error())
+		return
 	}
 
-	result, err := ws.svc.BuildLoadAndExecute(r.Context(), buildReq, req.Payload)
+	var ruleChain types.RuleChain
+	if err := json.Unmarshal([]byte(def.DSLJSON), &ruleChain); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse root chain dsl failed: "+err.Error())
+		return
+	}
+
+	var payloadMap map[string]any
+	if err := json.Unmarshal([]byte(req.Payload), &payloadMap); err != nil {
+		writeError(w, http.StatusBadRequest, "parse payload failed: "+err.Error())
+		return
+	}
+
+	req.TraceId = id.GetUUID(req.TraceId)
+	result, err := ws.svc.ExecuteRootChainByID(r.Context(), &ruleChain, payloadMap, req.Project, req.EnvName, req.TraceId)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// 执行完毕后卸载
-	_ = ws.svc.UnloadChain(r.Context(), req.Project, req.ChainID)
-
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"project":  req.Project,
 		"chain_id": req.ChainID,
+		"trace_id": req.TraceId,
 		"result":   result,
+		"env_name": req.EnvName,
 	})
 }
 
@@ -1438,44 +1521,6 @@ func (ws *WebServer) handleClearNodeTestRecords(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"message": "cleared", "deleted": deleted})
-}
-
-// ============================================================
-// RootChain MQ 分布式执行
-// ============================================================
-
-func (ws *WebServer) handleExecuteWorkflowByMQ(w http.ResponseWriter, r *http.Request) {
-	var req service.ExecuteRootChainByMQRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
-		return
-	}
-	if req.Project == "" {
-		req.Project = projectParam(r)
-	}
-	if req.Project == "" {
-		writeError(w, http.StatusBadRequest, "project is required")
-		return
-	}
-	if req.ChainID == "" {
-		writeError(w, http.StatusBadRequest, "chain_id is required")
-		return
-	}
-	if req.Payload == "" {
-		req.Payload = "{}"
-	}
-	result, err := ws.svc.ExecuteRootChainByMQ(r.Context(), &req)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"project":     req.Project,
-		"chain_id":    req.ChainID,
-		"use_release": req.UseRelease,
-		"result":      result,
-		"mode":        "mq",
-	})
 }
 
 // ============================================================

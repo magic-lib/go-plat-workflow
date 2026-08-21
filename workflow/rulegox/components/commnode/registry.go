@@ -17,9 +17,12 @@
 package commnode
 
 import (
+	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
+	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/rulego/rulego/api/types"
+	"strings"
 )
 
 type CommConfiguration struct {
@@ -32,6 +35,24 @@ type CommConfiguration struct {
 
 // NodeParams 根据传入的参数和节点配置，生成节点执行所需的参数映射
 func NodeParams(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTemplate map[string]any, arguments []*param.BindConfig) (map[string]any, error) {
+	if len(arguments) > 0 {
+		// 需要对value进行替换，如果含有变量的话
+		ruleExpr := templates.NewRuleExprEngine()
+		allMaps, _ := allParamCtx.ToMaps()
+		for _, arg := range arguments {
+			if arg == nil || arg.Value == "" {
+				continue
+			}
+			val := conv.String(arg.Value)
+			if strings.Contains(val, templates.DefaultPrefix) {
+				valTemp, err := ruleExpr.RunString(val, allMaps)
+				if err == nil {
+					arg.Value = valTemp
+				}
+			}
+		}
+	}
+
 	ret := allParamCtx.GetStepArguments(nodeId)
 	if len(argTemplate) > 0 {
 		for k, v := range argTemplate {
@@ -43,7 +64,8 @@ func NodeParams(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTempla
 		}
 		ret = retAny
 	}
-	return param.MergeArgumentsByBinding(ret, arguments), nil
+	retMap := param.MergeArgumentsByBinding(ret, arguments)
+	return retMap, nil
 }
 
 // NodeResponses 根据节点的返回值定义（Configuration.responses）生成该节点对外输出的返回值映射。

@@ -44,6 +44,7 @@ func (r *EnvConfigRepo) GetByName(ctx context.Context, project, envName string) 
 }
 
 // ListByProject 列出指定项目下所有环境配置，按环境名排序。
+// 按 env_name 去重（保留首个），避免数据库中存在重复环境名时前端展示重复项。
 func (r *EnvConfigRepo) ListByProject(ctx context.Context, project string) ([]*workflow.EnvConfigDef, error) {
 	var modelsList []models.EnvConfigModel
 	err := r.db.WithContext(ctx).
@@ -53,8 +54,14 @@ func (r *EnvConfigRepo) ListByProject(ctx context.Context, project string) ([]*w
 	if err != nil {
 		return nil, err
 	}
+	seen := make(map[string]bool, len(modelsList))
 	defs := make([]*workflow.EnvConfigDef, 0, len(modelsList))
 	for i := range modelsList {
+		name := modelsList[i].EnvName
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
 		defs = append(defs, modelsList[i].ToDef())
 	}
 	return defs, nil

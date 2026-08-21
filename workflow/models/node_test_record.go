@@ -21,6 +21,7 @@ type NodeTestRecordModel struct {
 	Status      string    `gorm:"column:status;type:varchar(16);not null" json:"status"`
 	Result      string    `gorm:"column:result;type:text" json:"result"`
 	ErrorMsg    string    `gorm:"column:error_msg;type:text" json:"error_msg"`
+	DurationMs  int64     `gorm:"column:duration_ms;type:bigint;default:0" json:"duration_ms"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -43,6 +44,7 @@ func (m *NodeTestRecordModel) ToDef() *workflow.NodeTestRecordDef {
 		Status:      m.Status,
 		Result:      m.Result,
 		ErrorMsg:    m.ErrorMsg,
+		DurationMs:  m.DurationMs,
 		CreatedAt:   m.CreatedAt,
 	}
 }
@@ -60,4 +62,5 @@ func (m *NodeTestRecordModel) FromDef(def *workflow.NodeTestRecordDef) {
 	m.Status = def.Status
 	m.Result = def.Result
 	m.ErrorMsg = def.ErrorMsg
+	m.DurationMs = def.DurationMs
 }

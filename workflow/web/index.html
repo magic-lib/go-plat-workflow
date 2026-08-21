@@ -30,7 +30,7 @@
 <div class="header">
   <div class="header-left">
     <h1>&#9881; 流程管理中心</h1>
-    <p>节点管理 &middot; 子链管理 &middot; 根链管理 &middot; 流程执行</p>
+    <p>节点管理 &middot; 子链管理 &middot; 根链管理</p>
   </div>
   <div class="header-right">
     <label for="project-select">Project:</label>
@@ -51,7 +51,6 @@
   <button class="tab-btn" data-tab="nodes">Nodes</button>
   <button class="tab-btn" data-tab="sub-chains">Sub Chains</button>
   <button class="tab-btn" data-tab="root-chains">Root Chains</button>
-  <button class="tab-btn" data-tab="execute">Execute</button>
 </div>
 
 <div class="container">
@@ -288,6 +287,7 @@
   <div id="tab-root-chains" class="tab-content">
     <div class="toolbar">
       <input class="search-box" placeholder="搜索根链..." oninput="filterTable('root-table', this.value)">
+      <button class="btn btn-primary" onclick="openCreateRootChainModal()">新增 Root Chain</button>
     </div>
     <div class="table-wrap">
       <table id="root-table">
@@ -297,96 +297,92 @@
     </div>
   </div>
 
-  <!-- Execute Tab -->
-  <div id="tab-execute" class="tab-content">
-    <!-- Datalists for autocomplete -->
-    <datalist id="conn-id-datalist"></datalist>
-    <datalist id="conn-type-datalist">
-      <option value="True"></option>
-      <option value="False"></option>
-      <option value="Success"></option>
-      <option value="Failure"></option>
-    </datalist>
-    <div class="exec-panel">
-      <div class="exec-card">
-        <h3>执行工作流</h3>
-        <!-- 测试用例管理 -->
-        <div class="form-group">
-          <label style="display:flex;justify-content:space-between;align-items:center">
-            <span>测试用例 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（挂载在当前 Chain ID 上，可复用/删除）</span></span>
-            <button class="btn btn-sm btn-outline" onclick="refreshTestCases()" type="button" title="刷新用例列表">&#8634; 刷新</button>
-          </label>
-          <div id="test-case-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc;margin-bottom:8px">
-            <div id="test-case-empty" style="text-align:center;padding:12px;color:var(--text-muted);font-size:.85rem">暂无测试用例，测试后可点击"保存测试用例"</div>
-          </div>
-          <div style="display:flex;gap:8px">
-            <input id="test-case-name" placeholder="用例名称，如：测试账号A" style="flex:1">
-            <button class="btn btn-sm btn-primary" onclick="saveTestCase()" type="button">&#128190; 保存测试用例</button>
-          </div>
-        </div>
-        <div class="form-group">
-          <label>Chain ID <span style="font-weight:400;color:var(--text-muted)">（测试用例将挂载在此 ID 上，前缀 R=root / S=sub 自动识别）</span></label>
-          <input id="exec-chain-id" placeholder="my_flow" value="web-test-flow" oninput="refreshTestCases()">
-        </div>
-
-        <div class="form-group">
-          <label>名称</label>
-          <input id="exec-chain-name" placeholder="测试流程" value="Web Test Flow">
-        </div>
-
-        <div class="form-group">
-          <label>Node IDs <span style="font-weight:400;color:var(--text-muted)">(逗号分隔，可从 connections 自动推导)</span></label>
-          <input id="exec-node-ids" placeholder="n1,n2" oninput="rebuildConnDatalist()">
-        </div>
-
-        <div class="form-group">
-          <label>Sub Chain IDs <span style="font-weight:400;color:var(--text-muted)">(逗号分隔，可从 connections 自动推导)</span></label>
-          <input id="exec-sub-ids" placeholder="sub1" oninput="rebuildConnDatalist()">
-        </div>
-
-        <div class="form-group">
-          <label style="display:flex;justify-content:space-between;align-items:center">
-            <span>Connections</span>
-            <button class="btn btn-sm btn-outline" onclick="addConnRow()" type="button">+ 添加连接</button>
-          </label>
-          <div id="exec-connections-container" style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
-            <div id="conn-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无连接，点击 "+ 添加连接" 开始</div>
-          </div>
-
-        </div>
-
-        <div class="form-group">
-          <label>Payload (JSON)</label>
-          <textarea id="exec-payload">{"input": "hello world"}</textarea>
-        </div>
-
-        <div class="form-group">
-          <label>
-            <input type="checkbox" id="exec-debug"> Debug Mode
-          </label>
-          <label style="margin-top:6px">
-            <input type="checkbox" id="exec-use-release"> 使用已发布版本执行 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（生产环境当前版本快照，忽略上方编排配置）</span>
-          </label>
-        </div>
-
-        <div style="display:flex;gap:10px;align-items:flex-end">
-          <div class="form-group" style="flex:1;margin:0">
-            <label>执行环境 <span style="font-weight:400;color:var(--text-muted);font-size:.78rem">（MQ 模式必选，决定 Redis 等依赖）</span></label>
-            <select id="exec-env">
-              <option value="">（本地执行无需环境）</option>
-            </select>
-          </div>
-        </div>
-
-        <div style="display:flex;gap:10px;margin-top:10px">
-          <button class="btn btn-primary" onclick="executeWorkflow()" style="flex:1">&#9654; 本地执行</button>
-          <button class="btn btn-outline" onclick="executeWorkflowByMQ()" style="flex:1">&#128640; MQ 分布式执行</button>
-        </div>
-
+  <!-- Execute 执行面板：独立模态框，仅通过 Root Chains / SubChains 列表的 Execute 按钮打开 -->
+  <div id="execute-modal-overlay" class="modal-overlay">
+    <div id="execute-modal" class="modal" style="max-width:900px;width:92%">
+      <div class="modal-header" style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:4px">
+        <button class="modal-close" onclick="closeExecuteModal()" title="关闭">&#10005;</button>
       </div>
-      <div class="exec-card">
-        <h3>执行结果</h3>
-        <div id="exec-result" class="result-box">点击执行按钮开始...</div>
+      <div class="modal-body">
+        <!-- Datalists for autocomplete -->
+        <datalist id="conn-id-datalist"></datalist>
+        <datalist id="conn-type-datalist">
+          <option value="Success"></option>
+          <option value="Failure"></option>
+          <option value="True"></option>
+          <option value="False"></option>
+          <option value="Stream"></option>
+        </datalist>
+        <div class="exec-panel">
+          <div class="exec-card">
+            <h3>执行工作流</h3>
+            <!-- 测试用例管理（已隐藏，保留 DOM 供 JS 逻辑兼容） -->
+            <div class="form-group" style="display:none">
+              <label style="display:flex;justify-content:space-between;align-items:center">
+                <span>测试用例 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（挂载在当前 Chain ID 上，可复用/删除）</span></span>
+                <button class="btn btn-sm btn-outline" onclick="refreshTestCases()" type="button" title="刷新用例列表">&#8634; 刷新</button>
+              </label>
+              <div id="test-case-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc;margin-bottom:8px">
+                <div id="test-case-empty" style="text-align:center;padding:12px;color:var(--text-muted);font-size:.85rem">暂无测试用例，测试后可点击"保存测试用例"</div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <input id="test-case-name" placeholder="用例名称，如：测试账号A" style="flex:1">
+                <button class="btn btn-sm btn-primary" onclick="saveTestCase()" type="button">&#128190; 保存测试用例</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Chain ID</label>
+              <input id="exec-chain-id" placeholder="my_flow" value="web-test-flow" oninput="refreshTestCases()" readonly>
+            </div>
+
+            <div class="form-group">
+              <label>名称</label>
+              <input id="exec-chain-name" placeholder="测试流程" value="Web Test Flow" readonly>
+            </div>
+
+            <div class="form-group">
+              <label>输入参数 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（该流程「调用传入」参数，自动列出，去重）</span></label>
+              <div id="exec-entry-params" style="border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc;min-height:40px;font-size:.82rem">暂无调用传入参数</div>
+            </div>
+
+            <div class="form-group" style="display:none">
+              <label>Node IDs <span style="font-weight:400;color:var(--text-muted)">(逗号分隔，可从 connections 自动推导)</span></label>
+              <input id="exec-node-ids" placeholder="n1,n2" oninput="rebuildConnDatalist()">
+            </div>
+
+            <div class="form-group" style="display:none">
+              <label>Sub Chain IDs <span style="font-weight:400;color:var(--text-muted)">(逗号分隔，可从 connections 自动推导)</span></label>
+              <input id="exec-sub-ids" placeholder="sub1" oninput="rebuildConnDatalist()">
+            </div>
+
+            <div class="form-group" style="display:none">
+              <label style="display:flex;justify-content:space-between;align-items:center">
+                <span>Connections</span>
+                <button class="btn btn-sm btn-outline" onclick="addConnRow()" type="button">+ 添加连接</button>
+              </label>
+              <div id="exec-connections-container" style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
+                <div id="conn-rows-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无连接，点击 "+ 添加连接" 开始</div>
+              </div>
+
+            </div>
+
+            <div style="display:flex;gap:10px;align-items:flex-end">
+              <div class="form-group" style="flex:1;margin:0">
+                <label>执行环境</label>
+                <select id="exec-env"></select>
+              </div>
+            </div>
+
+            <div style="display:flex;gap:10px;margin-top:10px">
+              <button class="btn btn-primary" onclick="executeWorkflowByMQ()" style="flex:1">&#128640; 立即执行</button>
+            </div>
+
+          </div>
+          <div class="exec-card">
+            <h3>执行结果</h3>
+            <div id="exec-result" class="result-box">点击执行按钮开始...</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1036,6 +1032,40 @@ function copyDslContent() {
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closePwdModal()">取消</button>
       <button class="btn btn-primary" onclick="doChangePwd()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新增 Root Chain 弹窗 -->
+<div class="modal-overlay" id="create-root-overlay">
+  <div class="modal" id="create-root-modal">
+    <h2>新增 Root Chain<button class="modal-close" onclick="closeCreateRootChainModal()" title="关闭">&times;</button></h2>
+    <p style="font-size:.8rem;color:var(--text-muted);margin:0 0 12px">先录入基本信息（DSL 为空），编排完成后保存时再写入 DSL。</p>
+    <div class="form-group">
+      <label>名称 *</label>
+      <input id="create-root-name" placeholder="例如：订单退款流程">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Chain Key（业务键，留空自动生成）</label>
+        <input id="create-root-key" placeholder="例如：order_refund">
+      </div>
+      <div class="form-group">
+        <label>状态</label>
+        <select id="create-root-status">
+          <option value="0">草稿</option>
+          <option value="1">启用</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>描述</label>
+      <input id="create-root-desc" placeholder="Root Chain 描述...">
+    </div>
+    <div id="create-root-error" style="color:#dc2626;font-size:.8rem;min-height:1.1em;margin-bottom:6px"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeCreateRootChainModal()">取消</button>
+      <button class="btn btn-primary" onclick="createRootChain()">创建</button>
     </div>
   </div>
 </div>

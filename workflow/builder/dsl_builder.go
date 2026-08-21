@@ -263,6 +263,16 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		frontendMap := make(map[string]any)
 		if nodeOverrides, ok := overrides[inst.instanceId]; ok {
 			for k, v := range nodeOverrides {
+				// 兼容两种格式：
+				//  - 新格式：{ "src": "fixed/upstream/entry", "value": "<最终值>" }（对象）
+				//  - 旧格式：直接是字符串值（纯值）
+				// 取其中的 value 作为写入节点 arguments 的最终值。
+				if m, ok := v.(map[string]any); ok {
+					if val, exists := m["value"]; exists {
+						frontendMap[k] = val
+						continue
+					}
+				}
 				frontendMap[k] = v
 			}
 		}
@@ -303,6 +313,25 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		addInfo := make(map[string]interface{})
 		if len(node.AdditionalInfo) > 0 {
 			_ = json.Unmarshal(node.AdditionalInfo, &addInfo)
+		}
+
+		// 将节点参数定义（含 label）注入 additionalInfo，供执行页展示「参数key（中文名）」。
+		// 节点参数定义格式：[{"key":"url","label":"请求URL","type":"string",...}]
+		if len(node.Params) > 0 {
+			var paramDefs []struct {
+				Key   string `json:"key"`
+				Label string `json:"label"`
+			}
+			if _ = json.Unmarshal(node.Params, &paramDefs); len(paramDefs) > 0 {
+				labelMap := make(map[string]string, len(paramDefs))
+				for _, p := range paramDefs {
+					if p.Key != "" {
+						labelMap[p.Key] = p.Label
+					}
+				}
+				labelJSON, _ := json.Marshal(labelMap)
+				addInfo["node_param_labels"] = string(labelJSON)
+			}
 		}
 
 		ruleNodes = append(ruleNodes, &types.RuleNode{

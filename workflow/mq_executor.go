@@ -132,6 +132,8 @@ type TestNodeResultData struct {
 	RelationType string `json:"relation_type"`
 	// TraceID 本次测试的分布式追踪 ID
 	TraceID string `json:"trace_id"`
+	// DurationMs 节点真实执行耗时（毫秒），即 rulegox.StartActivityFlow 调用本身的耗时
+	DurationMs int64 `json:"duration_ms"`
 }
 
 // TestNode 通过 MQ 同步调用分布式 worker 测试单个节点，返回 worker 执行结果。
@@ -317,7 +319,6 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 	}
 
 	var (
-		resultParam        *paramx.FlowContext
 		relationTypeString string
 		execErr            error
 	)
@@ -329,7 +330,6 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 		IsAsync:      false,
 		UseCache:     false,
 		EndFunc: func(_ context.Context, relationType string, param *paramx.FlowContext, err error) {
-			resultParam = param
 			relationTypeString = relationType
 			execErr = err
 		},
@@ -354,16 +354,19 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 		RedisConfig: redisConn,
 	}
 
+	execStart := time.Now()
 	if err := rulegox.StartActivityFlow(ctx, flowCfg, metaData); err != nil {
 		return nil, err
 	}
+	execMs := time.Since(execStart).Milliseconds()
 	if execErr != nil {
 		return nil, execErr
 	}
 	return &TestNodeResultData{
-		Data:         resultParam,
+		Data:         relationTypeString,
 		RelationType: relationTypeString,
 		TraceID:      metaData.TraceId,
+		DurationMs:   execMs,
 	}, nil
 }
 
@@ -444,9 +447,11 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		RedisConfig: redisConn,
 	}
 
+	execStart := time.Now()
 	if err = rulegox.StartActivityFlow(ctx, flowCfg, metaData); err != nil {
 		return nil, err
 	}
+	execMs := time.Since(execStart).Milliseconds()
 	if execErr != nil {
 		return nil, execErr
 	}
@@ -454,6 +459,7 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		Data:         resultParam,
 		RelationType: relationTypeString,
 		TraceID:      metaData.TraceId,
+		DurationMs:   execMs,
 	}, nil
 }
 
@@ -475,25 +481,6 @@ func (e *MQExecutor) getRedisConfig(ctx context.Context, project, env string) (*
 		return nil, fmt.Errorf("env config %q has no redis config (addr is empty)", env)
 	}
 	return envDef.RedisConfig, nil
-}
-
-// ExecuteRootChain 通过 MQ 同步调用分布式 worker 执行某个 rootChain，返回 worker 执行结果。
-func (e *MQExecutor) ExecuteRootChain(ctx context.Context, payload *ExecuteRootChainPayload, redisCfg *RedisConfig) (any, error) {
-	client, err := e.newMQClient(redisCfg)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-
-	event := &mq.Event{
-		Topic:   TopicExecuteRootChain,
-		Payload: payload,
-	}
-	resp, err := client.Request(ctx, event)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
 }
 
 // NewMQExecutor 创建 MQ 执行器，使用默认命名空间和超时。

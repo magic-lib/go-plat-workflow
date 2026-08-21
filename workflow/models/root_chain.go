@@ -16,7 +16,7 @@ type RootChainModel struct {
 	ChainKey           string         `gorm:"column:chain_key;type:varchar(128);uniqueIndex:uk_project_chain_key,priority:2;not null;default:''" json:"chain_key"`
 	Name               string         `gorm:"type:varchar(255);not null" json:"name"`
 	Description        string         `gorm:"type:varchar(512)" json:"description"`
-	DSLJSON            string         `gorm:"type:json;not null" json:"dsl_json"`
+	DSLJSON            string         `gorm:"type:json;not null;" json:"dsl_json"`
 	Status             int8           `gorm:"default:1;index" json:"status"`
 	NodeIDs            string         `gorm:"column:node_ids;type:text" json:"node_ids"`
 	SubChainIDs        string         `gorm:"column:sub_chain_ids;type:text" json:"sub_chain_ids"`

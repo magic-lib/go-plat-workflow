@@ -154,7 +154,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .override-node-header:hover { background: #e5e7eb; }
 .override-node-header .toggle-icon { transition: transform .2s; font-size: .7rem; }
 .override-node-header.collapsed .toggle-icon { transform: rotate(-90deg); }
-.override-node-body { padding: 10px 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.override-node-body { padding: 10px 14px; display: block; }
 .override-node-body.hidden { display: none; }
 .override-field {}
 .override-field label { display: block; font-size: .75rem; font-weight: 600; color: var(--text-muted); margin-bottom: 3px; }
@@ -164,6 +164,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .override-field input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(79,70,229,.1); }
 .override-field input.changed { border-color: var(--warning); background: #fffbeb; }
 .override-empty { text-align: center; padding: 16px; color: var(--text-muted); font-size: .85rem; }
+.param-call-hint { display: inline-flex; align-items: center; height: 30px; padding: 0 10px; color: var(--text-muted); font-size: .78rem; background: var(--bg-muted); border: 1px dashed var(--border); border-radius: 4px; }
 
 /* Activity 标签选择 chips */
 .tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 2px; }
@@ -173,7 +174,8 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .tag-chip .chip-tip { font-size: .65rem; opacity: .7; }
 
 /* Orchestrate Tab */
-.orch-layout { display: grid; grid-template-columns: 420px 1fr; gap: 24px; align-items: stretch; }
+.orch-layout { display: grid; grid-template-columns: 600px 1fr; gap: 24px; align-items: stretch; }
+.param-value-slot { flex-wrap: wrap; }
 .orch-panel { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); }
 .orch-left { padding: 20px; }
 .orch-right { padding: 20px; position: sticky; top: 24px; display: flex; flex-direction: column; }
@@ -194,6 +196,13 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .orch-select-item .node-type-tag { font-size: .65rem; color: var(--text-muted); flex-shrink: 0; }
 .node-out-badge { font-size: .65rem; color: #3730a3; background: #e0e7ff; padding: 1px 6px; border-radius: 10px; font-weight: 600; flex-shrink: 0; }
 .orch-select-empty { text-align: center; padding: 16px; color: var(--text-muted); font-size: .82rem; }
+.orch-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding: 0 2px; }
+.orch-pager .btn { font-size: .75rem; padding: 4px 12px; }
+.orch-pager .btn:disabled { opacity: .45; cursor: not-allowed; }
+.orch-pager-info { font-size: .72rem; color: var(--text-muted); white-space: nowrap; }
+/* 编排页 root/sub 模式内容区分：默认隐藏，由 setOrchTarget 控制显隐 */
+.root-only, .sub-only { display: none; }
+.orch-target-hint { font-size: .76rem; color: var(--text-muted); margin: 4px 0 0; line-height: 1.5; }
 .orch-chain-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .orch-chain-info .form-group { margin-bottom: 0; }
 .orch-chain-info .form-group.full { grid-column: 1 / -1; }
