@@ -67,6 +67,10 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 	// 全局配置
 	config := rulego.NewConfig()
 
+	if hasEndNode(actConfig.RootChainDSL.Metadata.Nodes) {
+		config.OnEndWithFailure = true
+	}
+
 	if len(actConfig.SubChainDSL) > 0 {
 		var subErr error
 
@@ -205,4 +209,15 @@ func getFirstNodeIndexByConnection(connections []types.NodeConnection, nodeList 
 		}
 	}
 	return -1
+}
+func hasEndNode(nodeList []*types.RuleNode) bool {
+	if len(nodeList) == 0 {
+		return false
+	}
+	for _, n := range nodeList {
+		if n != nil && n.Type == types.NodeTypeEnd {
+			return true
+		}
+	}
+	return false
 }

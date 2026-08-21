@@ -35,6 +35,19 @@ type CommConfiguration struct {
 
 // NodeParams 根据传入的参数和节点配置，生成节点执行所需的参数映射
 func NodeParams(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTemplate map[string]any, arguments []*param.BindConfig) (map[string]any, error) {
+	// 这里需要复制一下 arguments，因为 arguments 是引用传递，会导致后续的修改影响到原始的 arguments
+	if len(arguments) > 0 {
+		cloned := make([]*param.BindConfig, len(arguments))
+		for i, arg := range arguments {
+			if arg == nil {
+				continue
+			}
+			cp := *arg
+			cloned[i] = &cp
+		}
+		arguments = cloned
+	}
+
 	if len(arguments) > 0 {
 		// 需要对value进行替换，如果含有变量的话
 		ruleExpr := templates.NewRuleExprEngine()
@@ -64,8 +77,7 @@ func NodeParams(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTempla
 		}
 		ret = retAny
 	}
-	retMap := param.MergeArgumentsByBinding(ret, arguments)
-	return retMap, nil
+	return param.MergeArgumentsByBinding(ret, arguments), nil
 }
 
 // NodeResponses 根据节点的返回值定义（Configuration.responses）生成该节点对外输出的返回值映射。
