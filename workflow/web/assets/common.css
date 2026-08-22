@@ -360,3 +360,7 @@ g.node:hover > .orch-node-del { opacity: 1; }
 .chk-grid label { display: flex; align-items: center; gap: 6px; font-size: .82rem; font-weight: 400; }
 .user-only { display: none; }
 body.is-admin .user-only { display: inline-flex; }
+
+/* 项目级权限：只读（viewer）用户隐藏编辑类按钮；admin/editor 正常显示 */
+.edit-only { display: inline-flex; }
+body.is-project-viewer .edit-only { display: none !important; }

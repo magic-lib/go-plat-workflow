@@ -37,11 +37,13 @@ type UserSessionModel struct {
 func (UserSessionModel) TableName() string { return "wf_user_sessions" }
 
 // UserProjectModel 用户-项目授权关系表，对应 wf_user_projects。
-// 记录某用户可访问/管理的项目列表；admin 用户不在此表中体现（视为拥有全部项目）。
+// 记录某用户对某项目的权限级别；admin 用户不在此表中体现（视为拥有全部项目）。
+// role 字段区分项目级权限：viewer=只读（可查日志/执行单元测试），editor=管理（可编辑）。
 type UserProjectModel struct {
 	ID        uint           `gorm:"primaryKey;autoIncrement" json:"id"`
 	UserID    uint           `gorm:"column:user_id;type:bigint;not null;uniqueIndex:uk_user_project,priority:1" json:"user_id"`
 	Project   string         `gorm:"column:project;type:varchar(128);not null;uniqueIndex:uk_user_project,priority:2" json:"project"`
+	Role      string         `gorm:"column:role;type:varchar(32);default:viewer;index" json:"role"` // viewer=只读 editor=管理
 	CreatedAt time.Time      `json:"created_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }

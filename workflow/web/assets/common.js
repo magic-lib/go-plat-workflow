@@ -21,17 +21,33 @@ function getProject() {
   return document.getElementById('project-select').value;
 }
 
+// 根据当前用户对当前项目的角色，设置 body 权限标记：
+//   .is-project-editor：可编辑（admin 或该项目 editor 角色）
+//   .is-project-viewer：只读（该项目 viewer 角色，仅可查日志/单元测试）
+function updateProjectPermission() {
+  const p = getProject();
+  const u = currentUser;
+  let editable = false;
+  if (u) {
+    if (u.role === 'admin') editable = true;
+    else if (u.project_roles && u.project_roles[p] === 'editor') editable = true;
+  }
+  document.body.classList.toggle('is-project-editor', editable);
+  document.body.classList.toggle('is-project-viewer', !editable);
+}
+
 function onProjectChange() {
   const p = getProject();
   document.getElementById('project-badge').textContent = p || '-';
   // 持久化当前选择到 localStorage，刷新页面后自动恢复
   try { localStorage.setItem('wf_selected_project', p || ''); } catch (_) {}
+  updateProjectPermission();
   if (!p) return;
   // 刷新当前 tab 数据
   const activeTab = document.querySelector('.tab-btn.active');
   if (activeTab) {
     const tab = activeTab.dataset.tab;
-    if (tab === 'nodes') loadNodes();
+    if (tab === 'nodes') loadNodeEnvOptions();
     else if (tab === 'activities') { loadActivityEnvOptions(); }
     else if (tab === 'sub-chains') loadSubChains();
     else if (tab === 'root-chains') loadRootChains();
@@ -69,6 +85,8 @@ async function loadProjects() {
       sel.value = list[0].project;
       onProjectChange();
     }
+    // 确保权限标记与当前项目一致（含未触发 onProjectChange 的分支）
+    updateProjectPermission();
   } catch (e) { showToast('加载项目列表失败: ' + e.message, 'error'); }
 }
 
@@ -486,7 +504,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     const content = document.getElementById('tab-' + tab);
     if (!content) return; // 跳转类按钮（如 orch.html 菜单跳回 index）无本页 content
     content.classList.add('active');
-    if (tab === 'nodes') loadNodes();
+    if (tab === 'nodes') loadNodeEnvOptions();
     else if (tab === 'activities') { loadActivityEnvOptions(); }
     else if (tab === 'sub-chains') loadSubChains();
     else if (tab === 'root-chains') loadRootChains();
@@ -621,6 +639,34 @@ function onNodeTagFilterChange() {
   loadNodes();
 }
 
+// 读取 Nodes 列表上选择的环境（空字符串表示"全部环境"）
+function getNodeListEnv() {
+  const sel = document.getElementById('node-env-filter');
+  return sel ? (sel.value || '') : '';
+}
+
+// 环境筛选变化：持久化选择 + 重新加载列表（有环境才带心跳）
+function onNodeEnvFilterChange() {
+  try { localStorage.setItem('wf_node_env', document.getElementById('node-env-filter').value); } catch (_) {}
+  loadNodes();
+}
+
+// 初始化 Nodes 环境筛选下拉（复用环境配置列表），恢复上次选择，并加载列表
+async function loadNodeEnvOptions() {
+  const sel = document.getElementById('node-env-filter');
+  if (!sel) return;
+  try {
+    const envs = await api('/api/env-configs');
+    const savedEnv = (() => { try { return localStorage.getItem('wf_node_env') || ''; } catch (_) { return ''; } })();
+    const list = Array.isArray(envs) ? envs : [];
+    sel.innerHTML = '<option value="">全部环境</option>' + list.map(e =>
+      '<option value="' + esc(e.env_name || e.name || e) + '">' + esc(e.env_name || e.name || e) + '</option>'
+    ).join('');
+    sel.value = savedEnv;
+  } catch (e) { /* 环境列表可选，失败不影响节点列表 */ }
+  loadNodes();
+}
+
 // ============================================================
 // API helpers (project query param auto appended)
 // ============================================================
@@ -652,7 +698,7 @@ function escAttr(s) {
 // ============================================================
 async function loadNodes() {
   try {
-    const env = getActivityListEnv();
+    const env = getNodeListEnv();
     const nsFilter = document.getElementById('node-namespace-filter');
     const ns = nsFilter ? nsFilter.value : '';
     const tagFilter = document.getElementById('node-tag-filter');
@@ -684,10 +730,10 @@ async function loadNodes() {
         <td>${esc(n.version || '-')}</td>
         <td title="${esc(n.description||'')}">${esc(trunc(n.description, 30))}</td>
         <td class="actions">
-          <button class="btn btn-sm btn-outline" onclick="editNodeByIndex(${i})">编辑</button>
+          <button class="btn btn-sm btn-outline edit-only" onclick="editNodeByIndex(${i})">编辑</button>
           <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
           <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteNode('${esc(n.node_id)}')">删除</button>
+          <button class="btn btn-sm btn-danger edit-only" onclick="deleteNode('${esc(n.node_id)}')">删除</button>
         </td>
       </tr>`).join('');
   } catch (e) { showToast('加载节点失败: ' + e.message, 'error'); }
@@ -1915,11 +1961,11 @@ function renderActivityTable(list) {
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
       <td>${escHtml(a.created_at ? a.created_at.substring(0,10) : '-')}</td>
       <td><div class="actions">
-        <button class="btn btn-sm btn-outline" onclick="editActivity('${escHtml(a.activity_id)}')">编辑</button>
+        <button class="btn btn-sm btn-outline edit-only" onclick="editActivity('${escHtml(a.activity_id)}')">编辑</button>
         <button class="btn btn-sm btn-primary" onclick="openTestActivityModal('${escHtml(a.activity_id)}')">测试</button>
         <button class="btn btn-sm btn-outline" onclick="showActivityListenerCode('${escHtml(a.activity_id)}')">监听代码</button>
         <button class="btn btn-sm btn-outline" onclick="openActivityLogsModal('${escHtml(a.activity_id)}', '${escHtml(a.act_name)}')">日志</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteActivityById('${escHtml(a.activity_id)}')">删除</button>
+        <button class="btn btn-sm btn-danger edit-only" onclick="deleteActivityById('${escHtml(a.activity_id)}')">删除</button>
       </div></td>
     </tr>`;
   }).join('');
@@ -3328,7 +3374,7 @@ async function loadActivityTestRecords(activityId) {
       <div style="border:1px solid var(--border);border-radius:var(--radius);padding:8px;margin-bottom:6px;font-size:.78rem">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span><b>${esc(r.record_id)}</b> <span class="badge ${r.status==='success'?'badge-on':'badge-off'}">${r.status==='success'?'成功':'失败'}</span> ${r.env_name?('· 环境 '+esc(r.env_name)):''}</span>
-          <button class="btn btn-sm btn-danger" onclick="deleteActivityTestRecord('${esc(r.record_id)}','${esc(activityId)}')">删除</button>
+          <button class="btn btn-sm btn-danger edit-only" onclick="deleteActivityTestRecord('${esc(r.record_id)}','${esc(activityId)}')">删除</button>
         </div>
         <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}</div>
         <div><b>入参:</b> <code style="font-size:.72rem">${esc(trunc(r.input_params||'',200))}</code></div>
@@ -4127,9 +4173,9 @@ async function loadSubChains() {
         <td class="code-cell">${dslSize}</td>
         <td class="actions">
           <button class="btn btn-sm btn-primary" onclick="executeSubChain('${esc(c.chain_id)}')">Execute</button>
-          <button class="btn btn-sm btn-outline" onclick="orchOpenInPage('${esc(c.chain_id)}')">编排</button>
-          <button class="btn btn-sm btn-outline" onclick="editSubChainByIndex(${i})">编辑</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteSubChain('${esc(c.chain_id)}')">删除</button>
+          <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPage('${esc(c.chain_id)}')">编排</button>
+          <button class="btn btn-sm btn-outline edit-only" onclick="editSubChainByIndex(${i})">编辑</button>
+          <button class="btn btn-sm btn-danger edit-only" onclick="deleteSubChain('${esc(c.chain_id)}')">删除</button>
         </td>
       </tr>`;
     }).join('');
@@ -4240,12 +4286,12 @@ async function loadRootChains() {
         <td>${connCount} 条</td>
         <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
         <td class="actions">
-          <button class="btn btn-sm btn-outline" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
-          <button class="btn btn-sm btn-primary" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
+          <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
+          <button class="btn btn-sm btn-primary edit-only" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
           <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
           <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
           <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>
+          <button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>
         </td>
       </tr>`;
     }).join('');
@@ -4529,8 +4575,8 @@ function editRootChainByIndex(i) {
 // 注意：rulego DSL 的节点位于 metadata.nodes（而非 ruleChain.nodes），且
 // configuration / additionalInfo 可能为对象或字符串，这里做兼容解析。
 function extractEntryParams(dslJson) {
-  const result = [];        // [{key, label}]
-  const seen = {};          // key -> true 去重
+  const result = [];        // [{key, label, private, nodeId}]
+  const seen = {};          // 去重键：公共用 key，私有用 nodeId + '.' + key
   try {
     const root = JSON.parse(dslJson || '{}');
     // 优先 metadata.nodes（rulego 原生 DSL 结构），兼容 ruleChain.nodes 写法
@@ -4556,7 +4602,7 @@ function extractEntryParams(dslJson) {
         Object.keys(m).forEach(k => { if (!(k in labelMap)) labelMap[k] = m[k]; });
       }
     });
-    // 提取调用传入参数 key
+    // 提取调用传入参数 key（区分公共/私有）
     nodes.forEach(node => {
       if (!node) return;
       // configuration 可能为字符串，兼容解析
@@ -4569,10 +4615,22 @@ function extractEntryParams(dslJson) {
       args.forEach(a => {
         const val = (a && a.value != null) ? String(a.value) : '';
         const m = val.match(/^\{\{arguments\.([^}]+)\}\}$/);
-        if (m && m[1] && !seen[m[1]]) {
-          seen[m[1]] = true;
-          result.push({ key: m[1], label: labelMap[m[1]] || '' });
+        if (!m || !m[1]) return;
+        const path = m[1];
+        let key = path;
+        let privateFlag = false;
+        let nodeId = '';
+        // 二级结构 {{arguments.<nodeId>.<key>}} 视为私有参数
+        const dotIdx = path.indexOf('.');
+        if (dotIdx > 0) {
+          nodeId = path.slice(0, dotIdx);
+          key = path.slice(dotIdx + 1);
+          privateFlag = true;
         }
+        const dedupKey = privateFlag ? (nodeId + '.' + key) : key;
+        if (seen[dedupKey]) return;
+        seen[dedupKey] = true;
+        result.push({ key: key, label: labelMap[key] || '', private: privateFlag, nodeId: nodeId });
       });
     });
   } catch (e) { /* 解析失败则视为无参数 */ }
@@ -4581,6 +4639,7 @@ function extractEntryParams(dslJson) {
 
 // renderExecEntryParams 将调用传入参数渲染到"输入参数"区：
 // 每行展示「key（中文名）」+ 一个可输入文本框，供执行时直接填写。
+// 私有参数在 key 前加节点 id 前缀标识，data-node/data-private 供执行与接口说明使用。
 function renderExecEntryParams(params) {
   const box = document.getElementById('exec-entry-params');
   if (!box) return;
@@ -4590,15 +4649,42 @@ function renderExecEntryParams(params) {
   }
   box.innerHTML = params.map(p => {
     const labelHtml = p.label ? '（' + esc(p.label) + '）' : '';
+    const displayKey = p.private ? (p.nodeId + '.' + p.key) : p.key;
     return '<div style="margin:6px 0;display:flex;align-items:center">' +
              '<label style="white-space:nowrap;font-family:monospace;font-size:.8rem;color:var(--text);margin-right:8px">' +
-               esc(p.key) + '<span style="color:#2563eb">' + labelHtml + '</span>' +
+               esc(displayKey) + '<span style="color:#2563eb">' + labelHtml + '</span>' +
+               (p.private ? '<span style="color:#d97706;font-size:.7rem;margin-left:4px">(私有)</span>' : '') +
              '</label>' +
              '<input type="text" class="exec-entry-input" data-key="' + escAttr(p.key) + '" ' +
-               'placeholder="请输入 ' + escAttr(p.key) + '" ' +
+               'data-private="' + (p.private ? '1' : '0') + '" data-node="' + escAttr(p.nodeId || '') + '" ' +
+               'placeholder="请输入 ' + escAttr(displayKey) + '" ' +
                'style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem" />' +
            '</div>';
   }).join('');
+}
+
+// renderExecApiDoc 在执行结果上方展示接口说明：接口名 + POST 方法 + 参数 JSON 结构（代码界面）
+function renderExecApiDoc() {
+  const box = document.getElementById('exec-api-doc');
+  if (!box) return;
+  const chainIdEl = document.getElementById('exec-chain-id');
+  const chainId = chainIdEl ? chainIdEl.value.trim() : '';
+  const params = window._execEntryParams || [];
+  const payload = {};
+  params.forEach(p => {
+    const placeholder = '<' + (p.label || p.key) + '>';
+    // 私有参数用完整 key（nodeId.key）作为扁平键名，不转成嵌套对象
+    const fullKey = p.private ? (p.nodeId + '.' + p.key) : p.key;
+    payload[fullKey] = placeholder;
+  });
+  const bodyObj = {
+    project: '<项目名>',
+    chain_id: chainId || '<chain_id>',
+    env_name: 'test',
+    use_release: false,
+    payload: payload,
+  };
+  box.textContent = 'POST /api/workflow/execute\n\n请求体 (application/json)：\n' + JSON.stringify(bodyObj, null, 2);
 }
 
 function loadToExecute(c) {
@@ -4611,7 +4697,10 @@ function loadToExecute(c) {
   document.getElementById('exec-sub-ids').value = c.sub_chain_ids || '';
 
   // 列出该流程 DSL 中「调用传入」参数（去重，含中文名），展示在"输入参数"区供填写
-  renderExecEntryParams(extractEntryParams(c.dsl_json));
+  const entryParams = extractEntryParams(c.dsl_json);
+  window._execEntryParams = entryParams;
+  renderExecEntryParams(entryParams);
+  renderExecApiDoc();
 
   // 清除旧连接行并填充新连接
   clearAllConnRows();
@@ -4704,11 +4793,18 @@ async function executeWorkflowByMQ() {
   if (!envName) { showToast('请先选择执行环境', 'error'); return; }
 
   // 收集「输入参数」区中用户填写的调用传入参数，组装为 JSON 对象作为执行 payload。
-  // 这些参数对应 DSL 中的 {{arguments.x}}，rulego 在执行时会从消息 data 顶层字段取值。
+  // 私有参数用完整 key（nodeId.key）作为扁平键名，不转成嵌套对象。
   const args = {};
   document.querySelectorAll('#exec-entry-params .exec-entry-input').forEach(inp => {
     const k = inp.getAttribute('data-key');
-    if (k) args[k] = inp.value;
+    if (!k) return;
+    const isPrivate = inp.getAttribute('data-private') === '1';
+    if (isPrivate) {
+      const nodeId = inp.getAttribute('data-node') || '';
+      args[nodeId + '.' + k] = inp.value;
+    } else {
+      args[k] = inp.value;
+    }
   });
 
   const body = {
@@ -4734,7 +4830,7 @@ async function refreshExecEnvs() {
   const sel = document.getElementById('exec-env');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '';
+  sel.innerHTML = '<option value="">-- 选择环境 --</option>';
   if (!p) return;
   try {
     const envs = await api('/api/env-configs');
@@ -6537,7 +6633,7 @@ function prettyJson(v) {
 // 优先加载项目列表（即使 mermaid 等外部脚本失败也不影响主流程）
 loadProjects().then(() => {
   // 仅主页（index）存在 nodes-table 时才加载节点列表；编排独立页(orch.html)无此 DOM，避免崩溃
-  if (document.getElementById('nodes-table') && getProject()) loadNodes();
+  if (document.getElementById('nodes-table') && getProject()) loadNodeEnvOptions();
   if (document.getElementById('activity-env-select')) loadActivityEnvOptions();
 });
 
@@ -6834,7 +6930,7 @@ function switchTab(tab) {
   btn.classList.add('active');
   const content = document.getElementById('tab-' + tab);
   if (content) content.classList.add('active');
-  if (tab === 'nodes') loadNodes();
+  if (tab === 'nodes') loadNodeEnvOptions();
   else if (tab === 'activities') loadActivityEnvOptions();
   else if (tab === 'sub-chains') loadSubChains();
   else if (tab === 'root-chains') loadRootChains();
@@ -6974,13 +7070,13 @@ async function openUserEdit(id) {
     if (pr.ok) { const pd = await pr.json(); allProjects = (pd || []).map(p => p.project); }
   } catch (_) {}
   let user = null;
-  let authorized = [];
+  let authorizedRoles = {}; // project -> role
   if (id) {
     const res = await fetch('/api/users');
     if (res.ok) {
       const users = await res.json();
       user = users.find(x => x.id === id) || null;
-      if (user && user.projects !== 'all') authorized = user.projects || [];
+      if (user && user.projects !== 'all') authorizedRoles = user.project_roles || {};
     }
   }
   document.getElementById('user-edit-id').value = id || '';
@@ -6993,9 +7089,19 @@ async function openUserEdit(id) {
   document.getElementById('user-edit-role').value = user ? user.role : 'viewer';
   document.getElementById('user-edit-status').value = user ? String(user.status) : '1';
   const grid = document.getElementById('user-edit-projects');
-  grid.innerHTML = allProjects.map(p =>
-    '<label><input type="checkbox" value="' + escAttr(p) + '"' + (authorized.includes(p) ? ' checked' : '') + '> ' + escHtml(p) + '</label>'
-  ).join('') || '<span style="color:var(--text-muted)">暂无项目</span>';
+  grid.innerHTML = allProjects.map(p => {
+    const checked = p in authorizedRoles;
+    const role = authorizedRoles[p] || 'viewer';
+    return '<div class="user-proj-row" style="display:flex;align-items:center;gap:8px;margin:4px 0">' +
+      '<label style="flex:1;display:flex;align-items:center;gap:4px;cursor:pointer">' +
+        '<input type="checkbox" class="user-proj-check" value="' + escAttr(p) + '"' + (checked ? ' checked' : '') + '> ' + escHtml(p) +
+      '</label>' +
+      '<select class="user-proj-role" style="width:110px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.8rem">' +
+        '<option value="viewer"' + (role === 'editor' ? '' : ' selected') + '>只读</option>' +
+        '<option value="editor"' + (role === 'editor' ? ' selected' : '') + '>管理</option>' +
+      '</select>' +
+    '</div>';
+  }).join('') || '<span style="color:var(--text-muted)">暂无项目</span>';
   document.getElementById('user-edit-overlay').classList.add('show');
 }
 
@@ -7005,13 +7111,22 @@ function closeUserEdit() {
 
 async function saveUserEdit() {
   const id = document.getElementById('user-edit-id').value;
+  // 收集勾选项目的角色映射 { project: role }
+  const projects = {};
+  document.querySelectorAll('#user-edit-projects .user-proj-row').forEach(row => {
+    const check = row.querySelector('.user-proj-check');
+    if (check && check.checked) {
+      const roleSel = row.querySelector('.user-proj-role');
+      projects[check.value] = roleSel ? roleSel.value : 'viewer';
+    }
+  });
   const payload = {
     username: document.getElementById('user-edit-username').value.trim(),
     password: document.getElementById('user-edit-password').value,
     nickname: document.getElementById('user-edit-nickname').value.trim(),
     role: document.getElementById('user-edit-role').value,
     status: parseInt(document.getElementById('user-edit-status').value, 10),
-    projects: Array.from(document.querySelectorAll('#user-edit-projects input:checked')).map(c => c.value)
+    projects: projects
   };
   if (!payload.username) { showToast('用户名必填', 'error'); return; }
   if (!id && !payload.password) { showToast('新建用户密码必填', 'error'); return; }

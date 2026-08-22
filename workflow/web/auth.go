@@ -85,11 +85,13 @@ func (ws *WebServer) authMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ctxUserKey{}, u)
 
 		// 项目级权限：凡带 ?project= 的 API 请求，校验当前用户是否有权访问该项目。
-		// admin 拥有全部项目；viewer 需在其 wf_user_projects 授权列表中。
+		// admin 拥有全部项目；普通用户按 wf_user_projects 中的角色授权：
+		//   - viewer（只读）：可查日志、执行单元测试等，不可编辑；
+		//   - editor（管理）：可编辑该项目所有功能。
 		// 用户管理接口（/api/users*）不走项目授权。
 		if strings.HasPrefix(p, "/api/") && !strings.HasPrefix(p, "/api/users") {
 			if project := r.URL.Query().Get("project"); project != "" {
-				if !checkProjectAccess(ws, w, r.WithContext(ctx), project) {
+				if !checkProjectAccessForRequest(ws, w, r.WithContext(ctx), r, project) {
 					return
 				}
 			}
@@ -99,24 +101,55 @@ func (ws *WebServer) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// checkProjectAccess 校验当前用户是否可访问 project，不可访问时写 403 并返回 false。
-func checkProjectAccess(ws *WebServer, w http.ResponseWriter, r *http.Request, project string) bool {
-	u := currentUser(r)
-	if u.Role == "admin" {
+// isWriteRequest 判断请求是否为「编辑类」写操作（需 editor/admin）。
+// 执行/测试类 POST（如 /test、/execute、workflow/execute）对 viewer 放行（单元测试）。
+func isWriteRequest(r *http.Request) bool {
+	m := r.Method
+	if m == "PUT" || m == "DELETE" {
 		return true
 	}
-	projects, err := ws.svc.UserRepo().ListProjectsByUser(r.Context(), u.ID)
+	if m != "POST" {
+		return false
+	}
+	// 执行/测试类 POST 放行 viewer（单元测试只读权限可执行）
+	p := r.URL.Path
+	if p == "/api/workflow/execute" ||
+		strings.HasSuffix(p, "/test") ||
+		strings.HasSuffix(p, "/execute") {
+		return false
+	}
+	// 其余 POST 视为写操作
+	return true
+}
+
+// projectRoleOf 返回当前用户对 project 的角色：admin -> "admin"；普通用户查授权表，未授权返回空。
+func (ws *WebServer) projectRoleOf(r *http.Request, project string) (string, error) {
+	u := currentUser(r)
+	if u == nil {
+		return "", nil
+	}
+	if u.Role == "admin" {
+		return "admin", nil
+	}
+	return ws.svc.UserRepo().GetProjectRole(r.Context(), u.ID, project)
+}
+
+// checkProjectAccessForRequest 按请求类型校验项目权限：读操作 viewer 即可，写操作需 editor/admin。
+func checkProjectAccessForRequest(ws *WebServer, w http.ResponseWriter, r *http.Request, req *http.Request, project string) bool {
+	role, err := ws.projectRoleOf(req, project)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return false
 	}
-	for _, p := range projects {
-		if p == project {
-			return true
-		}
+	if role == "" {
+		writeError(w, http.StatusForbidden, "no permission for project: "+project)
+		return false
 	}
-	writeError(w, http.StatusForbidden, "no permission for project: "+project)
-	return false
+	if isWriteRequest(req) && role != "admin" && role != "editor" {
+		writeError(w, http.StatusForbidden, "viewer 只读权限，不可编辑该项目: "+project)
+		return false
+	}
+	return true
 }
 
 // requireAdmin 校验当前用户是否为 admin，否则返回 403。
@@ -277,7 +310,14 @@ func (ws *WebServer) handleMe(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// 项目 -> 项目级角色（viewer=只读 / editor=管理），前端据此控制编辑入口
+		roles, err := ws.svc.UserRepo().ListProjectRolesByUser(r.Context(), u.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		resp["projects"] = projects
+		resp["project_roles"] = roles
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -370,7 +410,9 @@ func (ws *WebServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if u.Role != "admin" {
 			projects, _ := ws.svc.UserRepo().ListProjectsByUser(r.Context(), u.ID)
+			roles, _ := ws.svc.UserRepo().ListProjectRolesByUser(r.Context(), u.ID)
 			item["projects"] = projects
+			item["project_roles"] = roles
 		} else {
 			item["projects"] = "all"
 		}
@@ -380,13 +422,14 @@ func (ws *WebServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 // userUpsertReq 创建/更新用户请求。
+// Projects 为项目名 -> 项目级角色（viewer=只读 / editor=管理）的映射。
 type userUpsertReq struct {
-	Username string   `json:"username"`
-	Password string   `json:"password"`
-	Nickname string   `json:"nickname"`
-	Role     string   `json:"role"`
-	Status   int8     `json:"status"`
-	Projects []string `json:"projects"`
+	Username string            `json:"username"`
+	Password string            `json:"password"`
+	Nickname string            `json:"nickname"`
+	Role     string            `json:"role"`
+	Status   int8              `json:"status"`
+	Projects map[string]string `json:"projects"`
 }
 
 func (ws *WebServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -431,9 +474,9 @@ func (ws *WebServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 授权项目绑定
-	for _, p := range req.Projects {
-		_ = ws.svc.UserRepo().BindProject(r.Context(), id, p)
+	// 授权项目绑定（project -> role）
+	for project, role := range req.Projects {
+		_ = ws.svc.UserRepo().BindProject(r.Context(), id, project, role)
 	}
 	log.Info().Str("admin", admin.Username).Str("username", req.Username).Msg("user created")
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "username": req.Username})
@@ -480,14 +523,14 @@ func (ws *WebServer) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 当传入 projects 字段时，重建授权关系（先解绑全部再绑定）
+	// 当传入 projects 字段时，重建授权关系（先解绑全部再按角色绑定）
 	if req.Projects != nil {
 		old, _ := ws.svc.UserRepo().ListProjectsByUser(r.Context(), uid)
 		for _, p := range old {
 			_ = ws.svc.UserRepo().UnbindProject(r.Context(), uid, p)
 		}
-		for _, p := range req.Projects {
-			_ = ws.svc.UserRepo().BindProject(r.Context(), uid, p)
+		for project, role := range req.Projects {
+			_ = ws.svc.UserRepo().BindProject(r.Context(), uid, project, role)
 		}
 	}
 	log.Info().Str("admin", admin.Username).Uint("user_id", uid).Msg("user updated")
@@ -529,6 +572,7 @@ func (ws *WebServer) handleBindUserProject(w http.ResponseWriter, r *http.Reques
 	}
 	var req struct {
 		Project string `json:"project"`
+		Role    string `json:"role"` // viewer=只读 editor=管理（绑定时生效）
 		Bind    bool   `json:"bind"` // true=绑定 false=解绑
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -540,7 +584,7 @@ func (ws *WebServer) handleBindUserProject(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if req.Bind {
-		if err := ws.svc.UserRepo().BindProject(r.Context(), uid, req.Project); err != nil {
+		if err := ws.svc.UserRepo().BindProject(r.Context(), uid, req.Project, req.Role); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

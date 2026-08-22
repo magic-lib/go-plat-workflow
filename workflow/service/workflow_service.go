@@ -849,11 +849,11 @@ func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayloa
 	nodeIdList := lo.Map(ruleChain.Metadata.Nodes, func(node *types.RuleNode, index int) string {
 		return node.Id
 	})
-	flowCtx := paramx.NewFlowContext(ruleChain.RuleChain.ID, id.NewUUID(), newJson, func(key string) bool {
+	flowCtx := paramx.NewFlowContext(ruleChain.RuleChain.ID, id.NewUUID(), newJson, func(key string, val any) (any, bool) {
 		if lo.Contains(nodeIdList, key) {
-			return true
+			return val, true
 		}
-		return false
+		return val, false
 	})
 	return flowCtx
 }

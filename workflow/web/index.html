@@ -49,7 +49,7 @@
 <div class="tabs">
   <button class="tab-btn active" data-tab="activities">Activities</button>
   <button class="tab-btn" data-tab="nodes">Nodes</button>
-  <button class="tab-btn" data-tab="sub-chains">Sub Chains</button>
+  <button class="tab-btn" data-tab="sub-chains" style="display:none;">Sub Chains</button>
   <button class="tab-btn" data-tab="root-chains">Root Chains</button>
 </div>
 
@@ -64,8 +64,8 @@
       <select id="act-tag-filter" onchange="onActivityTagFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
         <option value="">全部标签</option>
       </select>
-      <button class="btn btn-primary" onclick="openActivityModal()">新建 Activity</button>
-      <button class="btn btn-outline" onclick="openCopyActivityModal()">复制 Activity</button>
+      <button class="btn btn-primary edit-only" onclick="openActivityModal()">新建 Activity</button>
+      <button class="btn btn-outline edit-only" onclick="openCopyActivityModal()">复制 Activity</button>
     </div>
     <div class="table-wrap">
       <table>
@@ -255,7 +255,10 @@
       <select id="node-tag-filter" onchange="onNodeTagFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
         <option value="">全部标签</option>
       </select>
-      <button class="btn btn-primary" onclick="openNodeModal()">+ 新增 Node</button>
+      <select id="node-env-filter" onchange="onNodeEnvFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+        <option value="">全部环境</option>
+      </select>
+      <button class="btn btn-primary edit-only" onclick="openNodeModal()">+ 新增 Node</button>
       <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
     </div>
     <div class="table-wrap">
@@ -271,8 +274,8 @@
     <div class="toolbar">
       <input class="search-box" placeholder="搜索子链..." oninput="filterTable('sub-table', this.value)">
       <div style="display:flex;gap:8px">
-        <button class="btn btn-outline" onclick="newSubChainViaOrch()">&#128736; 编排新建</button>
-        <button class="btn btn-primary" onclick="openSubChainModal()">+ 新增 Sub Chain</button>
+        <button class="btn btn-outline edit-only" onclick="newSubChainViaOrch()">&#128736; 编排新建</button>
+        <button class="btn btn-primary edit-only" onclick="openSubChainModal()">+ 新增 Sub Chain</button>
       </div>
     </div>
     <div class="table-wrap">
@@ -287,7 +290,7 @@
   <div id="tab-root-chains" class="tab-content">
     <div class="toolbar">
       <input class="search-box" placeholder="搜索根链..." oninput="filterTable('root-table', this.value)">
-      <button class="btn btn-primary" onclick="openCreateRootChainModal()">新增 Root Chain</button>
+      <button class="btn btn-primary edit-only" onclick="openCreateRootChainModal()">新增 Root Chain</button>
     </div>
     <div class="table-wrap">
       <table id="root-table">
@@ -299,7 +302,7 @@
 
   <!-- Execute 执行面板：独立模态框，仅通过 Root Chains / SubChains 列表的 Execute 按钮打开 -->
   <div id="execute-modal-overlay" class="modal-overlay">
-    <div id="execute-modal" class="modal" style="max-width:900px;width:92%">
+    <div id="execute-modal" class="modal" style="max-width:1400px;width:96%;max-height:92vh">
       <div class="modal-header" style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:4px">
         <button class="modal-close" onclick="closeExecuteModal()" title="关闭">&#10005;</button>
       </div>
@@ -314,7 +317,7 @@
           <option value="Stream"></option>
         </datalist>
         <div class="exec-panel">
-          <div class="exec-card">
+          <div class="exec-card" style="grid-column:1/-1">
             <h3>执行工作流</h3>
             <!-- 测试用例管理（已隐藏，保留 DOM 供 JS 逻辑兼容） -->
             <div class="form-group" style="display:none">
@@ -369,7 +372,9 @@
             <div style="display:flex;gap:10px;align-items:flex-end">
               <div class="form-group" style="flex:1;margin:0">
                 <label>执行环境</label>
-                <select id="exec-env"></select>
+                <select id="exec-env">
+                  <option value="">-- 选择环境 --</option>
+                </select>
               </div>
             </div>
 
@@ -380,7 +385,11 @@
           </div>
           <div class="exec-card">
             <h3>执行结果</h3>
-            <div id="exec-result" class="result-box">点击执行按钮开始...</div>
+            <div id="exec-result" class="result-box" style="min-height:420px">点击执行按钮开始...</div>
+          </div>
+          <div class="exec-card">
+            <h3>执行接口说明</h3>
+            <div id="exec-api-doc" class="result-box" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;line-height:1.6;white-space:pre;overflow:auto;min-height:420px">加载中...</div>
           </div>
         </div>
       </div>

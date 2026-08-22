@@ -9,7 +9,6 @@
   <style>
     /* orch 页面：拉开顶部菜单与下方编排内容的距离 */
     body { padding-top: 0; }
-    .header { margin-bottom: 22px; }
     .tabs { margin-bottom: 24px; }
     #tab-orchestrate { padding-top: 4px; }
   </style>
@@ -43,7 +42,7 @@
 <div class="header">
   <div class="header-left">
     <h1>&#9881; 流程管理中心</h1>
-    <p>节点管理 &middot; 子链管理 &middot; 根链管理 &middot; 流程执行</p>
+    <p>节点管理 &middot; 根链管理 &middot; 流程执行</p>
   </div>
   <div class="header-right">
     <label for="project-select">Project:</label>
@@ -62,10 +61,9 @@
 <div class="tabs">
   <button class="tab-btn" data-tab="activities" onclick="location.href='/?tab=activities'">Activities</button>
   <button class="tab-btn" data-tab="nodes" onclick="location.href='/?tab=nodes'">Nodes</button>
-  <button class="tab-btn" data-tab="sub-chains" onclick="location.href='/?tab=sub-chains'">Sub Chains</button>
+  <button class="tab-btn" data-tab="sub-chains" onclick="location.href='/?tab=sub-chains'" style="display:none;">Sub Chains</button>
   <button class="tab-btn" data-tab="root-chains" onclick="location.href='/?tab=root-chains'">Root Chains</button>
   <button class="tab-btn active" data-tab="orchestrate">Orchestrate</button>
-  <button class="tab-btn" data-tab="execute" onclick="location.href='/?tab=execute'">Execute</button>
 </div>
   <div id="tab-orchestrate" class="tab-content active">
     <div class="orch-layout">
@@ -122,7 +120,7 @@
         </div>
 
         <!-- Sub-Chains Selection -->
-        <div class="orch-section" id="orch-sub-section">
+        <div class="orch-section" id="orch-sub-section" style="display:none;">
           <h3>Sub Chains <span class="count" id="orch-sub-count">0 selected</span></h3>
           <input class="search-box" placeholder="搜索子链..." oninput="filterOrchSubChains()" style="width:100%;margin-bottom:6px;padding:7px 10px;font-size:.8rem">
           <div class="orch-select-list" id="orch-sub-list">

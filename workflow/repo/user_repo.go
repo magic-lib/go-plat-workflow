@@ -122,18 +122,32 @@ func (r *UserRepo) DeleteExpiredSessions(ctx context.Context) error {
 // ============================================================
 
 // BindProject 绑定用户对某项目的访问权限（幂等 upsert）。
-func (r *UserRepo) BindProject(ctx context.Context, userID uint, project string) error {
-	var cnt int64
-	if err := r.db.WithContext(ctx).Model(&models.UserProjectModel{}).
-		Where("user_id = ? AND project = ?", userID, project).Count(&cnt).Error; err != nil {
-		return err
+// role 为项目级角色：viewer=只读，editor=管理；空值默认 viewer。
+// 注意：查询用 Unscoped 以兼容软删除记录（UnbindProject 为软删除），
+// 避免「先解绑再绑定」时因唯一索引被软删除记录占用而 Create 冲突。
+func (r *UserRepo) BindProject(ctx context.Context, userID uint, project string, role string) error {
+	if role == "" {
+		role = "viewer"
 	}
-	if cnt > 0 {
-		return nil
+	var existing models.UserProjectModel
+	err := r.db.WithContext(ctx).Unscoped().
+		Where("user_id = ? AND project = ?", userID, project).First(&existing).Error
+	if err == nil {
+		// 已存在（含软删除）：恢复并更新 role
+		updates := map[string]any{"role": role, "deleted_at": nil}
+		if existing.Role == role && existing.DeletedAt.Valid == false {
+			return nil
+		}
+		return r.db.WithContext(ctx).Unscoped().Model(&models.UserProjectModel{}).
+			Where("id = ?", existing.ID).Updates(updates).Error
+	}
+	if err != gorm.ErrRecordNotFound {
+		return err
 	}
 	return r.db.WithContext(ctx).Create(&models.UserProjectModel{
 		UserID:  userID,
 		Project: project,
+		Role:    role,
 	}).Error
 }
 
@@ -151,6 +165,34 @@ func (r *UserRepo) ListProjectsByUser(ctx context.Context, userID uint) ([]strin
 		return nil, err
 	}
 	return projects, nil
+}
+
+// GetProjectRole 返回用户对某项目的角色（viewer/editor）；未授权返回空字符串。
+func (r *UserRepo) GetProjectRole(ctx context.Context, userID uint, project string) (string, error) {
+	var m models.UserProjectModel
+	err := r.db.WithContext(ctx).
+		Where("user_id = ? AND project = ?", userID, project).First(&m).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return "", nil
+		}
+		return "", err
+	}
+	return m.Role, nil
+}
+
+// ListProjectRolesByUser 返回用户被授权项目及其角色映射（project -> role）。
+func (r *UserRepo) ListProjectRolesByUser(ctx context.Context, userID uint) (map[string]string, error) {
+	var list []models.UserProjectModel
+	if err := r.db.WithContext(ctx).
+		Where("user_id = ?", userID).Find(&list).Error; err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(list))
+	for _, it := range list {
+		m[it.Project] = it.Role
+	}
+	return m, nil
 }
 
 // ListUsersByProject 列出被授权访问某项目的用户 ID 列表。

@@ -318,8 +318,8 @@ func (ws *WebServer) handleCreateProject(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 创建者自动绑定到该项目（普通用户创建后立即可见，admin 绑不绑定都不影响全项目可见）。
-	if err := ws.svc.UserRepo().BindProject(r.Context(), u.ID, def.Project); err != nil {
+	// 创建者自动绑定到该项目（管理角色；admin 绑不绑定都不影响全项目可见）。
+	if err := ws.svc.UserRepo().BindProject(r.Context(), u.ID, def.Project, "editor"); err != nil {
 		writeError(w, http.StatusInternalServerError, "create project ok but bind owner failed: "+err.Error())
 		return
 	}
@@ -1231,16 +1231,25 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 	req.TraceId = id.GetUUID(req.TraceId)
 	result, err := ws.svc.ExecuteRootChainByID(r.Context(), &ruleChain, payloadMap, req.Project, req.EnvName, req.TraceId)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"http_status": http.StatusInternalServerError,
+			"project":     req.Project,
+			"chain_id":    req.ChainID,
+			"trace_id":    req.TraceId,
+			"result":      result,
+			"env_name":    req.EnvName,
+			"error":       err.Error(),
+		})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"project":  req.Project,
-		"chain_id": req.ChainID,
-		"trace_id": req.TraceId,
-		"result":   result,
-		"env_name": req.EnvName,
+		"http_status": http.StatusOK,
+		"project":     req.Project,
+		"chain_id":    req.ChainID,
+		"trace_id":    req.TraceId,
+		"result":      result,
+		"env_name":    req.EnvName,
 	})
 }
 
