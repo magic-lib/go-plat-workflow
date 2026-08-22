@@ -1273,16 +1273,23 @@ type invokeMetadata struct {
 
 func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request) {
 	var req invokeRequest
+	var resp = &httputil.CommResponse{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		resp.Code = http.StatusBadRequest
+		resp.Message = "invalid json: " + err.Error()
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	if req.Project == "" {
-		writeError(w, http.StatusBadRequest, "project is required")
+		resp.Code = http.StatusBadRequest
+		resp.Message = "project is required"
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	if req.ChainKey == "" {
-		writeError(w, http.StatusBadRequest, "chain_key is required")
+		resp.Code = http.StatusBadRequest
+		resp.Message = "chain_key is required"
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	if req.Payload == nil {
@@ -1297,34 +1304,26 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 
 	cost := time.Now().UnixMilli() - since
 
+	resp.Now = conv.String(time.Now())
+	resp.Env = req.Metadata.Env
+	resp.Time = cost
+	resp.LogId = ""
+	resp.TraceId = traceId
+	resp.Params = req
+	resp.Debug = nil
+	resp.Data = result
+
 	if err != nil {
-		writeJSON(w, http.StatusOK, &httputil.CommResponse{
-			Code:        http.StatusInternalServerError,
-			Message:     err.Error(),
-			InternalMsg: err.Error(),
-			Now:         conv.String(time.Now()),
-			Env:         req.Metadata.Env,
-			Time:        cost,
-			LogId:       "",
-			TraceId:     traceId,
-			Params:      req,
-			Debug:       nil,
-			Data:        nil,
-		})
+		resp.Code = http.StatusInternalServerError
+		resp.Message = err.Error()
+		resp.InternalMsg = err.Error()
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, &httputil.CommResponse{
-		Code:    0,
-		Now:     conv.String(time.Now()),
-		Env:     req.Metadata.Env,
-		Time:    cost,
-		LogId:   "",
-		TraceId: traceId,
-		Params:  req,
-		Debug:   nil,
-		Data:    result,
-	})
+	resp.Code = 0
+	resp.Message = "success"
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ============================================================
