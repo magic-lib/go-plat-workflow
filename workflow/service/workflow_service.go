@@ -74,6 +74,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		&models.UserModel{},
 		&models.UserSessionModel{},
 		&models.UserProjectModel{},
+		&models.ProjectSecretModel{},
 	); err != nil {
 		return nil, err
 	}
@@ -198,6 +199,7 @@ func (s *WorkflowService) CreateProjectSecret(ctx context.Context, project, secr
 	if secretKey == "" {
 		return fmt.Errorf("secret_key is required")
 	}
+	secretKey = id.GetUUID(secretKey)
 	secretRepo := s.projectRepo.SecretRepo()
 	if secretRepo == nil {
 		return fmt.Errorf("secret repo not initialized")

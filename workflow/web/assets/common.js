@@ -352,7 +352,7 @@ function addEnvVarRow(key, value, desc) {
     <div class="form-group"><input class="env-var-key" placeholder="KEY" value="${esc(key||'')}"></div>
     <div class="form-group"><input class="env-var-value" placeholder="VALUE" value="${esc(value||'')}"></div>
     <div class="form-group"><input class="env-var-desc" placeholder="说明(可选)" value="${esc(desc||'')}"></div>
-    <button class="btn btn-sm btn-danger" onclick="this.closest('.env-var-row').remove()">×</button>`;
+    <button type="button" title="删除" onclick="this.closest('.env-var-row').remove()" style="flex:0 0 auto;width:26px;height:26px;padding:0;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;font-size:14px;line-height:1;cursor:pointer">×</button>`;
   list.appendChild(row);
 }
 
