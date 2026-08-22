@@ -1121,11 +1121,36 @@ type executeRequest struct {
 	TraceId            string                            `json:"trace_id"`
 	SubChainIDs        []string                          `json:"sub_chain_ids"`
 	Connections        []workflow.ConnectionDef          `json:"connections"`
-	Payload            string                            `json:"payload"`
+	Payload            json.RawMessage                   `json:"payload"`
 	DebugMode          bool                              `json:"debug_mode"`
 	UseRelease         bool                              `json:"use_release"`
 	EnvName            string                            `json:"env_name"`
 	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
+}
+
+// parsePayload 将请求中的 payload 解析为 map。
+// 兼容两种格式：JSON 对象（新）与 JSON 字符串包裹的 JSON 对象（旧）。
+func parsePayload(raw json.RawMessage) (map[string]any, error) {
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == `""` {
+		return map[string]any{}, nil
+	}
+	// 先尝试直接解析为对象
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err == nil {
+		return m, nil
+	}
+	// 兼容旧格式：payload 是 JSON 字符串，先解出字符串再解析
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, err
+	}
+	if s == "" {
+		return map[string]any{}, nil
+	}
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -1142,8 +1167,11 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "chain_id or chain_key is required")
 		return
 	}
-	if req.Payload == "" {
-		req.Payload = "{}"
+	// 解析 payload（兼容 JSON 对象与旧版 JSON 字符串两种格式）
+	payloadMap, err := parsePayload(req.Payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "parse payload failed: "+err.Error())
+		return
 	}
 	// 执行环境为必填：后台执行时按环境将数据打入对应的 Redis（节点日志、Activity 结果等）
 	if req.EnvName == "" {
@@ -1170,7 +1198,8 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 	if req.UseRelease {
 		//chainID 必须为release中chainId随机生成的那个，不然如果测试时，就会把正式的利用 ws.svc.UnloadChain 卸载掉。
 
-		result, err := ws.svc.ExecutePublishedRootChain(r.Context(), req.Project, req.ChainID, req.Payload, req.EnvName, redisCfg)
+		payloadStr, _ := json.Marshal(payloadMap)
+		result, err := ws.svc.ExecutePublishedRootChain(r.Context(), req.Project, req.ChainID, string(payloadStr), req.EnvName, redisCfg)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1196,12 +1225,6 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 	var ruleChain types.RuleChain
 	if err := json.Unmarshal([]byte(def.DSLJSON), &ruleChain); err != nil {
 		writeError(w, http.StatusInternalServerError, "parse root chain dsl failed: "+err.Error())
-		return
-	}
-
-	var payloadMap map[string]any
-	if err := json.Unmarshal([]byte(req.Payload), &payloadMap); err != nil {
-		writeError(w, http.StatusBadRequest, "parse payload failed: "+err.Error())
 		return
 	}
 

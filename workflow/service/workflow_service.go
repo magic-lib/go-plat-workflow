@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/samber/lo"
 	"io"
 	"net/http"
 	"os"
@@ -495,15 +496,14 @@ func (s *WorkflowService) BuildRootChain(ctx context.Context, req *workflow.Buil
 	return s.dslBuilder.Build(ctx, req)
 }
 
-// SaveRootChain 保存根链草稿（先物理删除旧记录再重建，幂等操作）。
+// SaveRootChain 保存根链草稿（按 project+chain_id 查询，存在则更新、不存在则创建，幂等操作）。
+// 不再物理删除重建，避免自增主键 id 持续增长。
 // 仅影响测试环境草稿，已发布的版本快照不受影响。
 func (s *WorkflowService) SaveRootChain(ctx context.Context, req *workflow.BuildRequest) (*workflow.RootChainDef, error) {
 	if err := s.ensureRootChainIDs(ctx, req); err != nil {
 		return nil, err
 	}
-	// 先删除旧记录（忽略不存在的情况）
-	_ = s.rootChainRepo.Delete(ctx, req.Project, req.ChainID)
-	// 重新构建并创建
+	// 构建 DSL 并 upsert（Build 内部先更新、不存在则创建）
 	return s.dslBuilder.Build(ctx, req)
 }
 
@@ -791,7 +791,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	}
 
 	// 3. 构造流程上下文：全局入参作为 arguments（供 DSL 中的 {{arguments.x}} 取值）
-	flowCtx := paramx.NewFlowContext(rootChainID, id.NewUUID(), jsonPayload)
+	flowCtx := s.getParamContext(ruleChain, jsonPayload)
 
 	// 4. 组装执行配置（同步执行：IsAsync=false）
 	actConfig := &rulegox.ActivityFlowConfig{
@@ -839,6 +839,23 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	case <-execCtx.Done():
 		return nil, fmt.Errorf("execute root chain %s: timeout after %s: %w", rootChainID, executeRootChainByIDTimeout, execCtx.Err())
 	}
+}
+
+func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayload map[string]any) *paramx.FlowContext {
+	newJson := conv.MapFromKeyList(jsonPayload)
+	for k, v := range jsonPayload {
+		newJson[k] = v
+	}
+	nodeIdList := lo.Map(ruleChain.Metadata.Nodes, func(node *types.RuleNode, index int) string {
+		return node.Id
+	})
+	flowCtx := paramx.NewFlowContext(ruleChain.RuleChain.ID, id.NewUUID(), newJson, func(key string) bool {
+		if lo.Contains(nodeIdList, key) {
+			return true
+		}
+		return false
+	})
+	return flowCtx
 }
 
 // ExecutePublishedRootChain 加载并执行生产环境当前发布版本。

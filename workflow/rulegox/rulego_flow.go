@@ -67,6 +67,7 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 	// 全局配置
 	config := rulego.NewConfig()
 
+	// 如果有结束节点，则开启默认失败回调
 	if hasEndNode(actConfig.RootChainDSL.Metadata.Nodes) {
 		config.OnEndWithFailure = true
 	}

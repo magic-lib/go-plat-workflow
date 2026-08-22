@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -96,8 +97,17 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		ConnectionsData:    string(connectionsJSON),
 		NodeParamOverrides: string(nodeParamOverridesJSON),
 	}
-	if err := b.rootChainStore.Create(ctx, def); err != nil {
-		return nil, fmt.Errorf("%w: save root chain: %v", workflow.ErrDSLBuildFailed, err)
+	// 先尝试更新（按 project+chain_id），不存在再创建。
+	// 避免每次保存都物理删除重建导致自增主键 id 持续增长。
+	if err := b.rootChainStore.Update(ctx, def); err != nil {
+		if errors.Is(err, workflow.ErrRootChainNotFound) {
+			// 不存在则创建
+			if err := b.rootChainStore.Create(ctx, def); err != nil {
+				return nil, fmt.Errorf("%w: save root chain: %v", workflow.ErrDSLBuildFailed, err)
+			}
+		} else {
+			return nil, fmt.Errorf("%w: update root chain: %v", workflow.ErrDSLBuildFailed, err)
+		}
 	}
 
 	log.Ctx(ctx).Info().
@@ -261,6 +271,7 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 
 		// 构建用户传入参数（frontend），override key 使用实例 ID 以区分同一节点的多次添加
 		frontendMap := make(map[string]any)
+		privateKeys := make([]string, 0) // 私有参数 key 列表（需从入参二级结构取值）
 		if nodeOverrides, ok := overrides[inst.instanceId]; ok {
 			for k, v := range nodeOverrides {
 				// 兼容两种格式：
@@ -270,6 +281,10 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 				if m, ok := v.(map[string]any); ok {
 					if val, exists := m["value"]; exists {
 						frontendMap[k] = val
+						// 记录私有参数 key，供 DSL 持久化
+						if pv, ok := m["private"].(bool); ok && pv {
+							privateKeys = append(privateKeys, k)
+						}
 						continue
 					}
 				}
@@ -332,6 +347,12 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 				labelJSON, _ := json.Marshal(labelMap)
 				addInfo["node_param_labels"] = string(labelJSON)
 			}
+		}
+
+		// 将私有参数 key 注入 additionalInfo，随 DSL 持久化，便于编排回显时恢复「是否私有」状态
+		if len(privateKeys) > 0 {
+			privJSON, _ := json.Marshal(privateKeys)
+			addInfo["node_private_params"] = string(privJSON)
 		}
 
 		ruleNodes = append(ruleNodes, &types.RuleNode{

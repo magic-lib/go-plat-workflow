@@ -61,6 +61,7 @@ func NodeParams(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTempla
 				valTemp, err := ruleExpr.RunString(val, allMaps)
 				if err == nil {
 					arg.Value = valTemp
+					// 然后需要将最外层的同名的去掉，不然会覆盖掉
 				}
 			}
 		}

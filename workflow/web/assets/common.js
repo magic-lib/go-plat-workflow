@@ -4710,12 +4710,11 @@ async function executeWorkflowByMQ() {
     const k = inp.getAttribute('data-key');
     if (k) args[k] = inp.value;
   });
-  const payload = JSON.stringify(args);
 
   const body = {
     project: getProject(),
     chain_id: document.getElementById('exec-chain-id').value.trim(),
-    payload: payload,
+    payload: args,
     env_name: envName,
     use_release: safeChecked('exec-use-release'),
   };
@@ -5140,14 +5139,20 @@ function genOrchInstanceId(nodeId) {
 // 添加节点实例到编排（同一节点可多次添加，实例 ID 形如 nodeId__<随机段>，全局唯一且不依赖序号）
 function addOrchNodeInstance(nodeId) {
   if (!window._orchNodeInstances) window._orchNodeInstances = [];
+  const n = (_orchNodes || []).find(x => x.node_id === nodeId);
+  const nodeType = n ? n.type : '';
+  // end 节点只能添加一个，避免多个不好控制
+  if (nodeType === 'end' && window._orchNodeInstances.some(i => i.type === 'end')) {
+    showToast('end 节点只能添加一个，如需调整请先删除已添加的 end 节点', 'error');
+    return;
+  }
   // 用随机短码代替序号，避免删除导致空洞、跨子链序号碰撞
   const instanceId = genOrchInstanceId(nodeId);
-  const n = (_orchNodes || []).find(x => x.node_id === nodeId);
   window._orchNodeInstances.push({
     instanceId: instanceId,
     nodeId: nodeId,
     name: n ? (n.name || n.node_id) : nodeId,
-    type: n ? n.type : '',
+    type: nodeType,
     kind: n ? (n.kind || 'action') : 'action',
     outputs: n ? (n.outputs || []) : [],
   });
@@ -5217,14 +5222,25 @@ function closeOrchSelectedModal() {
 function restoreOrchNodeInstances(nodeIds, dslJson) {
   // 解析 DSL 中各实例节点的 arguments（配置后的值），用于重新编辑时自动回显 select
   const overrideByInst = {};
+  const privateByInst = {}; // { instanceId: [privateKey, ...] } 从 DSL 恢复私有参数标志
   if (dslJson) {
     try {
       const dsl = typeof dslJson === 'string' ? JSON.parse(dslJson) : dslJson;
-      const nodes = (((dsl || {}).ruleChain || {}).nodes) || [];
+      // rulego DSL 节点位于 metadata.nodes（兼容 ruleChain.nodes 写法）
+      let nodes = (((dsl || {}).metadata || {}).nodes) || [];
+      if (!nodes.length) nodes = (((dsl || {}).ruleChain || {}).nodes) || [];
       nodes.forEach(nd => {
         const cfg = (nd.configuration || {});
         const args = cfg.arguments || cfg.Arguments || [];
         if (Array.isArray(args) && args.length) overrideByInst[nd.id] = args;
+        // 从 additionalInfo.node_private_params 恢复私有参数 key 列表
+        let addInfo = nd.additionalInfo;
+        if (typeof addInfo === 'string') { try { addInfo = JSON.parse(addInfo); } catch (e) { addInfo = null; } }
+        if (addInfo && addInfo.node_private_params) {
+          let pv = addInfo.node_private_params;
+          if (typeof pv === 'string') { try { pv = JSON.parse(pv); } catch (e) { pv = null; } }
+          if (Array.isArray(pv) && pv.length) privateByInst[nd.id] = pv;
+        }
       });
     } catch (e) { /* ignore */ }
   }
@@ -5240,6 +5256,7 @@ function restoreOrchNodeInstances(nodeIds, dslJson) {
       kind: n ? (n.kind || 'action') : 'action',
       outputs: n ? (n.outputs || []) : [],
       override: overrideByInst[raw] || [],
+      privateKeys: privateByInst[raw] || [],
       _seq: seq,
     };
   });
@@ -5692,7 +5709,7 @@ function renderOrchParamOverrides() {
     params.forEach(p => {
       const required = p.required ? ' <span class="param-required-star">*</span>' : '';
       const typeTag = p.type ? `<span class="param-type-tag">(${esc(p.type)})</span>` : '';
-      html += `<div class="override-field param-row" data-node="${esc(inst.instanceId)}" data-key="${esc(p.key)}">
+      html += `<div class="override-field param-row" data-node="${esc(inst.instanceId)}" data-key="${esc(p.key)}" style="flex-wrap:wrap">
         <input class="param-key" value="${esc(p.key)}" readonly title="参数英文名" style="flex:0 1 130px;min-width:110px;background:var(--bg-muted)">
         <input class="param-label" value="${esc(p.label || '')}" readonly title="显示名" style="flex:1 1 120px;min-width:90px;background:var(--bg-muted)">
         <select class="param-type" disabled style="flex:0 1 92px;min-width:80px">
@@ -5707,8 +5724,13 @@ function renderOrchParamOverrides() {
           <option value="ref_act">引用节点</option>
           <option value="ref_node">调用传入</option>
         </select>
-        <span class="param-value-slot" style="flex:1.4;display:flex;gap:4px;align-items:center;min-width:0"></span>
-        <label class="param-required" style="flex:0 0 auto">${p.required ? '<span class="param-required-star">*</span>必填' : ''}</label>
+        <div class="param-extra-row" style="flex:1 1 100%;display:flex;gap:6px;align-items:center;min-width:0">
+          <span class="param-value-slot" style="flex:0 0 320px;display:flex;gap:4px;align-items:center;min-width:0;overflow:hidden"></span>
+          <label class="param-private" style="flex:0 0 auto;display:none;align-items:center;gap:4px;font-size:.72rem;color:var(--text-muted);cursor:pointer;white-space:nowrap" title="勾选后该参数属于此节点私有，调用时需放在该节点 id 的二级结构下，避免同名 key 冲突">
+            <input type="checkbox" class="param-private-check" onchange="onParamPrivateChange(this)"> 私有
+          </label>
+          <label class="param-required" style="flex:0 0 auto;white-space:nowrap">${p.required ? '<span class="param-required-star">*</span>必填' : ''}</label>
+        </div>
       </div>`;
     });
     html += `</div></div>`;
@@ -5730,10 +5752,17 @@ function renderOrchParamOverrides() {
         const bc = inst.override.find(b => (b.Key || b.key) === key);
         if (bc && bc.Value != null && bc.Value !== '') {
           preset = inferOrchParamPreset(bc.Value);
+          // 从 DSL 恢复私有标志
+          if (preset && Array.isArray(inst.privateKeys) && inst.privateKeys.includes(key)) {
+            preset.private = true;
+          }
         }
       }
     }
     initParamValueControl(field, preset);
+    // 回显"私有"勾选状态
+    const privCheck = field.querySelector('.param-private-check');
+    if (privCheck) privCheck.checked = !!(preset && preset.private);
   });
 }
 
@@ -5755,11 +5784,12 @@ function onParamSrcChange(sel) {
   } else if (src === PARAM_SRC_REF_NODE) {
     preset.src = PARAM_SRC_ENTRY;
     preset.value = '';
-    renderCallInputHint(slot, key);
+    renderCallInputHint(slot, key, nodeId, !!preset.private);
   } else {
     preset.src = PARAM_SRC_FIXED;
     renderFixedInput(slot, preset.value, '填写固定值');
   }
+  updateParamPrivateVisibility(field);
   storeParamPreset();
 }
 
@@ -5769,25 +5799,65 @@ function initParamValueControl(field, preset) {
   if (!preset) {
     sel.value = PARAM_SRC_VALUE;
     renderFixedInput(slot, '', '填写固定值');
+    updateParamPrivateVisibility(field);
     return;
   }
   sel.value = orchParamSrcToDisplay(preset.src) || PARAM_SRC_VALUE;
   if (preset.src === PARAM_SRC_UPSTREAM) {
     renderOrchRefNodeControl(slot, field.getAttribute('data-node'), preset.value);
   } else if (preset.src === PARAM_SRC_ENTRY) {
-    renderCallInputHint(slot, field.getAttribute('data-key'), preset.value);
+    renderCallInputHint(slot, field.getAttribute('data-key'), field.getAttribute('data-node'), !!preset.private);
   } else {
     renderFixedInput(slot, preset.value, '填写固定值');
   }
+  updateParamPrivateVisibility(field);
 }
 
 // 调用传入：无需输入框，由调用方在接口调用时传入
-// 保留隐藏 input 记录外部参数名（默认参数英文名），以便保存并回显为「调用传入」
-function renderCallInputHint(slot, paramKey, paramName) {
+// 显示「参数名」根据是否私有动态变化：
+//  - 私有：{{arguments.<nodeId>.<key>}}（二级结构，避免同名 key 冲突）
+//  - 公共：{{arguments.<key>}}（一级结构）
+// 隐藏 input 记录裸 key（paramKey），避免 value 累积 nodeId 前缀
+function renderCallInputHint(slot, paramKey, nodeId, isPrivate) {
   slot.style.flex = '';
   slot.style.flexWrap = '';
-  slot.innerHTML = `<span class="param-call-hint">调用接口时由用户传入（参数名：${esc(paramName || paramKey || '')}）</span>` +
-    `<input class="param-value-input" type="hidden" value="${esc(paramName || paramKey || '')}">`;
+  const displayRef = isPrivate
+    ? '{{arguments.' + nodeId + '.' + paramKey + '}}'
+    : '{{arguments.' + paramKey + '}}';
+  // 参数名固定最大宽度 + 省略号截断，鼠标悬停显示完整名称（title）。
+  // 整体不换行，保证数据变化（勾选私有后变长）时不会导致换行。
+  slot.innerHTML =
+    `<span class="param-call-hint" style="display:inline-flex;align-items:center;max-width:100%;white-space:nowrap">` +
+      `<span style="white-space:nowrap;flex:0 0 auto">调用接口时由用户传入（参数名：</span>` +
+      `<span class="param-call-ref" style="display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom" title="${esc(displayRef)}">${esc(displayRef)}</span>` +
+      `<span style="white-space:nowrap;flex:0 0 auto">）</span>` +
+    `</span>` +
+    `<input class="param-value-input" type="hidden" value="${esc(paramKey || '')}">`;
+}
+
+// 私有复选框切换：保存状态后，若当前来源是「调用传入」，动态刷新参数名显示
+function onParamPrivateChange(checkbox) {
+  const field = checkbox.closest('.override-field');
+  if (!field) return;
+  storeParamPreset(); // 先持久化 private 状态到 _orchParamPreset
+  const sel = field.querySelector('.param-src-select');
+  if (sel && sel.value === PARAM_SRC_REF_NODE) {
+    const nodeId = field.getAttribute('data-node');
+    const key = field.getAttribute('data-key');
+    const slot = field.querySelector('.param-value-slot');
+    const preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || {};
+    renderCallInputHint(slot, key, nodeId, !!preset.private);
+  }
+}
+
+// 私有复选框仅在来源为「调用传入」时显示，其它来源隐藏（该值对其它来源无效）
+function updateParamPrivateVisibility(field) {
+  if (!field) return;
+  const sel = field.querySelector('.param-src-select');
+  const privLabel = field.querySelector('.param-private');
+  if (!privLabel) return;
+  const isEntry = sel && sel.value === PARAM_SRC_REF_NODE;
+  privLabel.style.display = isEntry ? 'flex' : 'none';
 }
 
 // 解析 {{steps.<id>.arguments.<key>}} / {{steps.<id>.responses.<key>}}
@@ -5908,8 +5978,10 @@ function storeParamPreset() {
     const src = orchParamSrcToInternal(field.querySelector('.param-src-select').value);
     const valEl = field.querySelector('.param-value-input');
     const value = valEl ? valEl.value : '';
+    const privEl = field.querySelector('.param-private-check');
+    const isPrivate = privEl ? !!privEl.checked : false;
     if (!_orchParamPreset[nodeId]) _orchParamPreset[nodeId] = {};
-    _orchParamPreset[nodeId][key] = { src, value };
+    _orchParamPreset[nodeId][key] = { src, value, private: isPrivate };
   });
 }
 
@@ -5922,7 +5994,7 @@ function collectOrchParamOverrides() {
   Object.keys(_orchParamPreset).forEach(nodeId => {
     const keys = _orchParamPreset[nodeId];
     Object.keys(keys).forEach(key => {
-      const { src, value } = keys[key];
+      const { src, value, private: isPrivate } = keys[key];
       if (!value || !value.trim()) return; // 空值不覆盖
       let finalVal = value.trim();
       let finalSrc = src; // _orchParamPreset 已存内部来源(fixed/upstream/entry)，无需再转换
@@ -5935,9 +6007,19 @@ function collectOrchParamOverrides() {
           while (k.startsWith('arguments.')) k = k.slice('arguments.'.length);
           finalVal = '{{arguments.' + k + '}}';
         }
+        // 私有参数：从该节点 id 的二级结构取值 {{arguments.<nodeId>.<key>}}，
+        // 避免多个 node 同名 key 取值冲突，调用者按 { nodeId: { key: value } } 传参
+        if (isPrivate) {
+          // 提取 arguments. 后的完整路径（可能是裸 key，也可能是回显时已带 nodeId 前缀、甚至历史脏数据多级前缀）
+          const path = finalVal.replace(/^\{\{arguments\./, '').replace(/\}\}$/, '');
+          // 裸 key 取最后一个 '.' 之后的部分，忽略所有前导的 nodeId 前缀，避免 nodeId 重复拼接
+          const lastDot = path.lastIndexOf('.');
+          const bareKey = lastDot >= 0 ? path.slice(lastDot + 1) : path;
+          finalVal = '{{arguments.' + nodeId + '.' + bareKey + '}}';
+        }
       }
       if (!result[nodeId]) result[nodeId] = {};
-      result[nodeId][key] = { src: finalSrc, value: finalVal };
+      result[nodeId][key] = { src: finalSrc, value: finalVal, private: !!isPrivate };
     });
   });
   return result;
@@ -5958,10 +6040,10 @@ function applyOrchParamOverrides(saved) {
         if (raw == null) return;
         if (!_orchParamPreset[nodeId]) _orchParamPreset[nodeId] = {};
         if (typeof raw === 'object') {
-          // 新格式：明确携带 src 与 value
+          // 新格式：明确携带 src、value 与 private
           const src = raw.src || PARAM_SRC_FIXED;
           const value = raw.value != null ? String(raw.value) : '';
-          _orchParamPreset[nodeId][key] = { src, value };
+          _orchParamPreset[nodeId][key] = { src, value, private: !!raw.private };
         } else {
           // 旧格式：纯值，按格式推断
           const s = String(raw);
