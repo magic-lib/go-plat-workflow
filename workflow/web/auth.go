@@ -57,6 +57,11 @@ func (ws *WebServer) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// 对外工作流调用：POST /api/workflow/invoke 由外部系统按 project + chain_key 调用，放行
+		if r.Method == "POST" && p == "/api/workflow/invoke" {
+			next.ServeHTTP(w, r)
+			return
+		}
 
 		c, err := r.Cookie(sessionCookieName)
 		if err != nil || c.Value == "" {

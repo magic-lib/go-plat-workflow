@@ -140,6 +140,8 @@ func (ws *WebServer) registerRoutes() {
 
 	// 工作流执行
 	ws.mux.HandleFunc("POST /api/workflow/execute", ws.handleExecuteWorkflow)
+	// 对外调用：按 project + chain_key 执行发布在线的根链
+	ws.mux.HandleFunc("POST /api/workflow/invoke", ws.handleInvokeWorkflow)
 
 	// TestCase API（测试用例：保存/加载/删除执行配置，挂载在 root/sub 上）
 	ws.mux.HandleFunc("GET /api/test-cases", ws.handleListTestCases)
@@ -1250,6 +1252,56 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		"trace_id":    req.TraceId,
 		"result":      result,
 		"env_name":    req.EnvName,
+	})
+}
+
+// invokeRequest 对外调用接口入参：通过 project + chain_key 执行发布在线的根链。
+type invokeRequest struct {
+	Project  string         `json:"project"`
+	ChainKey string         `json:"chain_key"`
+	Metadata invokeMetadata `json:"metadata"`
+	Payload  map[string]any `json:"payload"`
+}
+
+type invokeMetadata struct {
+	Env     string `json:"env"`
+	TraceID string `json:"trace_id"`
+}
+
+func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request) {
+	var req invokeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	if req.Project == "" {
+		writeError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	if req.ChainKey == "" {
+		writeError(w, http.StatusBadRequest, "chain_key is required")
+		return
+	}
+	if req.Payload == nil {
+		req.Payload = map[string]any{}
+	}
+
+	result, err := ws.svc.InvokeRootChain(r.Context(), req.Project, req.ChainKey, req.Metadata.Env, req.Metadata.TraceID, req.Payload)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"http_status": http.StatusInternalServerError,
+			"project":     req.Project,
+			"chain_key":   req.ChainKey,
+			"error":       err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"http_status": http.StatusOK,
+		"project":     req.Project,
+		"chain_key":   req.ChainKey,
+		"result":      result,
 	})
 }
 

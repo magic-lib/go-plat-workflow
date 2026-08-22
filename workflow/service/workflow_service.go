@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/conn"
@@ -53,6 +54,11 @@ type WorkflowService struct {
 	mqExecutor             *workflow.MQExecutor
 	dslBuilder             *builder.DSLBuilder
 	engine                 *engine.WorkflowEngine
+
+	// invokeRootChainCache 缓存「发布在线」的根链 DSL（key = 确定性 ID，value = 解析后的 RuleChain）。
+	// key 由 project + chain_key 经 id.GetUUID 确定性生成，相同入参直接命中缓存，避免重复查库。
+	invokeRootChainCache   map[string]*types.RuleChain
+	invokeRootChainCacheMu sync.RWMutex
 }
 
 // NewWorkflowService 创建工作流服务实例，自动建表。
@@ -147,6 +153,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		mqExecutor:             workflow.NewMQExecutorWithLogAndEnv(activityLogRepo, envConfigRepo),
 		dslBuilder:             builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
 		engine:                 engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
+		invokeRootChainCache:   make(map[string]*types.RuleChain),
 	}
 
 	log.Info().Msg("WorkflowService initialized, tables migrated")
@@ -858,6 +865,46 @@ func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayloa
 		return val, false
 	})
 	return flowCtx
+}
+
+// InvokeRootChain 通过 project + chain_key 定位「发布在线」的根链 DSL 并同步执行。
+// 缓存：map[cacheKey]*types.RuleChain，cacheKey = id.GetUUID(project+"-"+chain_key)（确定性），
+// 命中缓存直接复用已解析的 DSL，跳过查询 wf_root_chains 与 wf_root_chain_releases。
+func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey, envName, traceId string, payload map[string]any) (any, error) {
+	cacheKey := id.GetUUID(project + "-" + chainKey)
+
+	// 1. 先查缓存
+	s.invokeRootChainCacheMu.RLock()
+	ruleChain := s.invokeRootChainCache[cacheKey]
+	s.invokeRootChainCacheMu.RUnlock()
+
+	// 2. 未命中：查库并解析 DSL，再写入缓存
+	if ruleChain == nil {
+		// 2.1 通过 project + chain_key 查根链（得到 chain_id）
+		rootDef, err := s.rootChainRepo.GetByKey(ctx, project, chainKey)
+		if err != nil {
+			return nil, fmt.Errorf("get root chain by key failed: %w", err)
+		}
+		// 2.2 查询发布在线版本（is_current）
+		release, err := s.releaseRepo.GetCurrent(ctx, project, rootDef.ChainID)
+		if err != nil {
+			return nil, fmt.Errorf("get current release failed: %w", err)
+		}
+		// 2.3 解析 DSL
+		rc := &types.RuleChain{}
+		if err := json.Unmarshal([]byte(release.DSLJSON), rc); err != nil {
+			return nil, fmt.Errorf("parse root chain dsl failed: %w", err)
+		}
+		rc.RuleChain.ID = cacheKey
+		// 2.4 写入缓存
+		s.invokeRootChainCacheMu.Lock()
+		s.invokeRootChainCache[cacheKey] = rc
+		s.invokeRootChainCacheMu.Unlock()
+		ruleChain = rc
+	}
+
+	// 3. 执行
+	return s.ExecuteRootChainByID(ctx, ruleChain, payload, project, envName, traceId)
 }
 
 // ExecutePublishedRootChain 加载并执行生产环境当前发布版本。

@@ -35,7 +35,7 @@ func (r *RootChainRepo) Create(ctx context.Context, def *workflow.RootChainDef) 
 		def.ChainID = next
 	}
 	if def.ChainKey == "" {
-		def.ChainKey = def.ChainID
+		def.ChainKey = fmt.Sprintf("%s-%s", def.ChainID, utils.RandomString(5))
 	}
 	var m models.RootChainModel
 	m.FromDef(def)
