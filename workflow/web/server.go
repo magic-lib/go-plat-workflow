@@ -5,13 +5,16 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -1286,22 +1289,41 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 		req.Payload = map[string]any{}
 	}
 
-	result, err := ws.svc.InvokeRootChain(r.Context(), req.Project, req.ChainKey, req.Metadata.Env, req.Metadata.TraceID, req.Payload)
+	traceId := id.GetUUID(req.Metadata.TraceID)
+
+	since := time.Now().UnixMilli()
+
+	result, err := ws.svc.InvokeRootChain(r.Context(), req.Project, req.ChainKey, req.Metadata.Env, traceId, req.Payload)
+
+	cost := time.Now().UnixMilli() - since
+
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"http_status": http.StatusInternalServerError,
-			"project":     req.Project,
-			"chain_key":   req.ChainKey,
-			"error":       err.Error(),
+		writeJSON(w, http.StatusOK, &httputil.CommResponse{
+			Code:        http.StatusInternalServerError,
+			Message:     err.Error(),
+			InternalMsg: err.Error(),
+			Now:         conv.String(time.Now()),
+			Env:         req.Metadata.Env,
+			Time:        cost,
+			LogId:       "",
+			TraceId:     traceId,
+			Params:      req,
+			Debug:       nil,
+			Data:        nil,
 		})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"http_status": http.StatusOK,
-		"project":     req.Project,
-		"chain_key":   req.ChainKey,
-		"result":      result,
+	writeJSON(w, http.StatusOK, &httputil.CommResponse{
+		Code:    0,
+		Now:     conv.String(time.Now()),
+		Env:     req.Metadata.Env,
+		Time:    cost,
+		LogId:   "",
+		TraceId: traceId,
+		Params:  req,
+		Debug:   nil,
+		Data:    result,
 	})
 }
 
