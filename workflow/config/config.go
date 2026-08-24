@@ -22,8 +22,15 @@ const (
 	hostPortKey = "host_port"
 )
 
-// defaultConfigPath 默认配置文件路径：相对于可执行文件所在目录的 config/app.yaml。
-const defaultConfigPath = "workflow/etc/app.yaml"
+// candidateConfigPaths 默认配置文件候选路径（按顺序尝试，存在即用）。
+// 1) 可执行文件同级的 config/app.yaml
+// 2) 可执行文件同级的 workflow/etc/app.yaml
+// 3) 当前工作目录下的 config/app.yaml
+// 4) 当前工作目录下的 workflow/etc/app.yaml
+var candidateConfigPaths = []string{
+	"config/app.yaml",
+	"workflow/etc/app.yaml",
+}
 
 // AppConfig 应用启动配置，从 startupcfg 解析结果中提取。
 type AppConfig struct {
@@ -111,6 +118,7 @@ func hostPortToAddr(hp interface{}) string {
 }
 
 // resolvePath 解析配置文件的真实路径。
+// 优先级：显式 path > CONFIG_PATH 环境变量 > 多个候选默认路径（存在即用）。
 func resolvePath(path ...string) (string, error) {
 	if len(path) > 0 && path[0] != "" {
 		return path[0], nil
@@ -119,15 +127,22 @@ func resolvePath(path ...string) (string, error) {
 	if p := os.Getenv("CONFIG_PATH"); p != "" {
 		return p, nil
 	}
-	// 2. 可执行文件同级的 config/app.yaml
+	// 2. 依次尝试候选路径：可执行文件同级 与 当前工作目录下各候选目录
+	var bases []string
 	if exe, err := os.Executable(); err == nil {
-		exeFilePath := filepath.Dir(exe)
-
-		p := filepath.Join(exeFilePath, defaultConfigPath)
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
+		bases = append(bases, filepath.Dir(exe))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		bases = append(bases, wd)
+	}
+	for _, base := range bases {
+		for _, rel := range candidateConfigPaths {
+			p := filepath.Join(base, rel)
+			if _, err := os.Stat(p); err == nil {
+				return p, nil
+			}
 		}
 	}
-	// 3. 当前工作目录下的 config/app.yaml
-	return defaultConfigPath, nil
+	// 3. 都不存在时返回首个候选（相对当前工作目录），由调用方报错
+	return candidateConfigPaths[0], nil
 }

@@ -3,7 +3,7 @@ mysql: # mysql 地域/环境/变量名
   mysql_connect:
     address: 127.0.0.1:3306
     username: root
-    pwEncoded: root
+    pwEncoded: 2b772944fc4533d636a03d5793dc2ef0 #root
     database: rule-workflow
     charset: utf8mb4
     parseTime: True

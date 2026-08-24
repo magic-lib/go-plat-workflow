@@ -225,7 +225,7 @@ function renderProjectSecrets() {
   }
   box.innerHTML = _projectSecrets.map((s, i) => `
     <div class="secret-item">
-      <code class="secret-mask">${esc(maskSecret(s.secret_key))}</code>
+      <code class="secret-mask">${esc(maskSecret(s.key))}</code>
       <span class="secret-remark">${esc(s.remark || '')}</span>
       <button class="btn btn-sm btn-danger" onclick="deleteProjectSecret(${i})">删除</button>
     </div>`).join('');
@@ -265,7 +265,7 @@ async function deleteProjectSecret(idx) {
   try {
     const res = await fetch('/api/projects/' + encodeURIComponent(project) + '/secrets', {
       method: 'DELETE', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ secret_key: s.secret_key })
+      body: JSON.stringify({ secret_key: s.key })
     });
     if (!res.ok) { const t = await res.json().catch(()=>({})); throw new Error(t.error || ('HTTP '+res.status)); }
     showToast('密钥已删除', 'success');

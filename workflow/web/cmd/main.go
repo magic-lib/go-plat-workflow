@@ -7,16 +7,22 @@
 //
 //	go run ./workflow/web/cmd/
 //
+// 命令行参数:
+//
+//	-dsn   MySQL 连接串（默认空，回退到环境变量/配置文件/内置默认值）
+//	-addr  HTTP 监听地址（默认空，回退到环境变量/配置文件/内置默认值）
+//	-f     配置文件路径（最高优先级，覆盖 CONFIG_PATH 与默认候选路径）
+//
 // 环境变量:
 //
 //	DB_DSN            MySQL 连接串，默认: root:root@tcp(127.0.0.1:3306)/workflow?charset=utf8mb4&parseTime=True&loc=Local
 //	LISTEN_ADDR       监听地址，默认: :8080
-//	CONFIG_PATH       配置文件路径（可选），默认: config/app.yaml
+//	CONFIG_PATH       配置文件路径（可选），默认候选: config/app.yaml 或 workflow/etc/app.yaml
 //	CONFIG_SECRET_KEY 配置文件敏感信息解密 key（可选），为空时使用空 key
 //
 // 配置优先级（从高到低）:
 //
-//	命令行 flag (-dsn / -addr) > 环境变量 (DB_DSN / LISTEN_ADDR) > 配置文件 config/app.yaml > 内置默认值
+//	命令行 flag (-f 指定文件 > -dsn / -addr) > 环境变量 (DB_DSN / LISTEN_ADDR / CONFIG_PATH) > 默认候选路径 > 内置默认值
 //
 // 配置文件通过 github.com/magic-lib/go-plat-startupcfg/startupcfg 加载，
 // 格式见 config/app.yaml（mysql 段生成 DSN，custom.normal.host_port 生成监听地址）。
@@ -51,10 +57,21 @@ func main() {
 	var (
 		dbDSN      string
 		listenAddr string
+		configPath string
 	)
 	flag.StringVar(&dbDSN, "dsn", "", "MySQL DSN（优先级：命令行 > 环境变量 DB_DSN > 配置文件 > 默认值）")
 	flag.StringVar(&listenAddr, "addr", "", "HTTP 监听地址（优先级：命令行 > 环境变量 LISTEN_ADDR > 配置文件 > 默认值）")
+	flag.StringVar(&configPath, "f", "", "配置文件路径（最高优先级，覆盖 CONFIG_PATH 与默认候选路径）")
 	flag.Parse()
+
+	// 记录 -f 指定的配置文件路径，供 loadAppConfig 使用
+	if configPath != "" {
+		userConfigPath = configPath
+		log.Info().Msg("config file:" + userConfigPath)
+	}
+
+	// 启动时打印构建时写入的 git commit id（由 Dockerfile 生成 /app/git_commit_id）
+	printGitCommitID()
 
 	// 按优先级兜底解析 dbDSN 与 listenAddr：
 	// 命令行 flag 已显式传入则不再覆盖；否则依次回退到环境变量、配置文件、内置默认值。
@@ -67,7 +84,8 @@ func main() {
 		Logger: gormlog.Default.LogMode(gormlog.Warn),
 	})
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to connect to MySQL")
+		log.Error().Err(err).Msg("failed to connect to MySQL")
+		return
 	}
 
 	sqlDB, _ := db.DB()
@@ -84,7 +102,8 @@ func main() {
 	// 创建 Web 服务（内部会自动建表；并启动按环境配置自动发现 Redis 的日志/心跳收集器）
 	ws, err := web.NewWebServer(db)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to create web server")
+		log.Error().Err(err).Msg("failed to create web server")
+		return
 	}
 
 	// 优雅退出
@@ -130,12 +149,24 @@ const defaultListenAddr = ":8080"
 var (
 	appConfigOnce   sync.Once
 	appConfigCached *config.AppConfig
+	// userConfigPath 由 -f 命令行参数指定的配置文件路径（最高优先级）。
+	userConfigPath string
 )
 
 // loadAppConfig 加载配置文件（config/app.yaml），失败时返回 nil（不阻断启动，走默认值兜底）。
+// 若指定了 -f 参数，则优先加载该路径。
 func loadAppConfig() *config.AppConfig {
 	appConfigOnce.Do(func() {
-		if cfg, err := config.Load(); err == nil {
+		var (
+			cfg *config.AppConfig
+			err error
+		)
+		if userConfigPath != "" {
+			cfg, err = config.Load(userConfigPath)
+		} else {
+			cfg, err = config.Load()
+		}
+		if err == nil {
 			appConfigCached = cfg
 		}
 	})
@@ -176,6 +207,23 @@ func maskDSN(dsn string) string {
 		return "***@***" + dsn[idx+4:]
 	}
 	return dsn
+}
+
+// gitCommitIDFile 构建时由 Dockerfile 生成的 commit id 文件路径。
+const gitCommitIDFile = "/app/git_commit_id"
+
+// printGitCommitID 读取构建时写入的 git commit id 并打印到控制台。
+// 文件不存在（本地开发）时静默跳过。
+func printGitCommitID() {
+	data, err := os.ReadFile(gitCommitIDFile)
+	if err != nil {
+		return
+	}
+	commitID := strings.TrimSpace(string(data))
+	if commitID == "" {
+		return
+	}
+	log.Info().Str("git_commit_id", commitID).Msg("build info")
 }
 
 func initMysqlLogger(db *sql.DB) (logs.ILogger, error) {

@@ -1,6 +1,8 @@
 # 排除无关文件，减小构建上下文体积
 **/.git
 **/.gitignore
+# 但构建时需要根目录 .git 读取当前 commit id
+!.git
 **/_demo
 **/node_modules
 **/*.md
