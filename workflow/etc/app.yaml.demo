@@ -13,4 +13,4 @@ custom: # 自定义配置
   normal: # 非加密普通配置
     host_port:
       host: 0.0.0.0
-      port: 8080
+      port: 8686

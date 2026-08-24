@@ -143,10 +143,12 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("DELETE /api/root-chains/{chain_id}/releases/{version}", ws.handleDeleteRootChainRelease)
 	ws.mux.HandleFunc("GET /api/releases/current", ws.handleListCurrentReleases)
 
-	// 工作流执行
 	ws.mux.HandleFunc("POST /api/workflow/execute", ws.handleExecuteWorkflow)
+
 	// 对外调用：按 project + chain_key 执行发布在线的根链
-	ws.mux.HandleFunc("POST /api/workflow/invoke", ws.handleInvokeWorkflow)
+	ws.mux.HandleFunc("POST /api/project/{project}/env/{env}/workflow/invoke", ws.handleInvokeWorkflow)
+	// 对外 Redis 配置查询（需传入项目密钥 + 环境名，返回该环境 Redis 配置）
+	ws.mux.HandleFunc("POST /api/project/{project}/env/{env}/redis-config", ws.handleGetProjectRedisConfig)
 
 	// TestCase API（测试用例：保存/加载/删除执行配置，挂载在 root/sub 上）
 	ws.mux.HandleFunc("GET /api/test-cases", ws.handleListTestCases)
@@ -368,10 +370,12 @@ func (ws *WebServer) handleDeleteProject(w http.ResponseWriter, r *http.Request)
 
 // handleGetProjectConfig 对外配置查询：需传入正确的项目密钥，
 // 返回项目下的环境配置与可执行的 RootChains 概要列表（不含 DSL 等敏感内容）。
+// 鉴权支持两种：直接传 secret_key（旧）；或传 token + timestamp 时间戳签名（推荐）。
 func (ws *WebServer) handleGetProjectConfig(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
 	var req struct {
-		SecretKey string `json:"secret_key"`
+		Key       string `json:"key"`
+		Timestamp int64  `json:"timestamp"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
@@ -381,12 +385,59 @@ func (ws *WebServer) handleGetProjectConfig(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
 	}
-	cfg, err := ws.svc.GetProjectConfig(r.Context(), project, req.SecretKey)
+	if req.Key == "" {
+		writeError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	cfg, err := ws.svc.GetProjectConfig(r.Context(), project, req.Key, req.Timestamp)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, cfg)
+}
+
+// handleGetProjectRedisConfig 对外接口：按项目 + 环境名查询该环境的 Redis 配置。
+// 使用 secret_key 鉴权（与 /config 一致），返回 EnvConfig.RedisConfig。
+func (ws *WebServer) handleGetProjectRedisConfig(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	envName := r.PathValue("env")
+	var req struct {
+		Key       string `json:"key"`
+		Timestamp int64  `json:"timestamp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusOK, &httputil.CommResponse{
+			Code:    http.StatusBadRequest,
+			Message: "invalid json: " + err.Error(),
+		})
+		return
+	}
+	if project == "" || envName == "" {
+		writeJSON(w, http.StatusOK, &httputil.CommResponse{
+			Code:    http.StatusBadRequest,
+			Message: "project or env is required",
+		})
+		return
+	}
+	if req.Key == "" {
+		writeJSON(w, http.StatusOK, &httputil.CommResponse{
+			Code:    http.StatusBadRequest,
+			Message: "key is required",
+		})
+		return
+	}
+	cfg, err := ws.svc.GetProjectRedisConfig(r.Context(), project, envName, req.Key, req.Timestamp)
+	if err != nil {
+		writeJSON(w, http.StatusOK, &httputil.CommResponse{
+			Code:    http.StatusUnauthorized,
+			Message: err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, &httputil.CommResponse{
+		Data: cfg,
+	})
 }
 
 // requireAdmin 已在 auth.go 中定义（返回 *models.UserModel，nil 表示校验失败并已写出错误响应）。
@@ -1312,6 +1363,9 @@ type invokeMetadata struct {
 }
 
 func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	envName := r.PathValue("env")
+
 	var req invokeRequest
 	var resp = &httputil.CommResponse{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1320,6 +1374,9 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
+	req.Project = project
+	req.Metadata.Env = envName
+
 	if req.Project == "" {
 		resp.Code = http.StatusBadRequest
 		resp.Message = "project is required"

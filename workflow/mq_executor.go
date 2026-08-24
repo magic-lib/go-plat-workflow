@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/magic-lib/go-plat-curl/curl"
+	"github.com/magic-lib/go-plat-utils/crypto"
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"log"
 	"net/http"
@@ -28,6 +31,8 @@ const (
 	TopicTestNode = "workflow:test_node"
 	// TopicExecuteRootChain 执行某个 rootChain 的 topic。
 	TopicExecuteRootChain = "workflow:execute_root_chain"
+
+	ProjectRedisCfgPath = "/api/project/:project/env/:env/redis-config"
 )
 
 // TestNodePayload 测试单个节点时投递到 MQ 的 payload。
@@ -75,8 +80,8 @@ type MQExecutor struct {
 	envConfigStore EnvConfigStore
 }
 
-// buildConnect 根据 EnvConfigDef 的 Redis 配置构建 conn.Connect。
-func buildConnect(redisCfg *RedisConfig) (*conn.Connect, error) {
+// Redis2Connect 根据 EnvConfigDef 的 Redis 配置构建 conn.Connect。
+func Redis2Connect(redisCfg *RedisConfig) (*conn.Connect, error) {
 	if redisCfg == nil || redisCfg.Addr == "" {
 		return nil, fmt.Errorf("redis config (addr) is required for MQ execution")
 	}
@@ -108,7 +113,7 @@ func indexByte(s string, b byte) int {
 
 // newMQClient 根据 Redis 配置创建 asynq MQ 客户端。
 func (e *MQExecutor) newMQClient(redisCfg *RedisConfig) (*mq.AsynqMessageQueue, error) {
-	c, err := buildConnect(redisCfg)
+	c, err := Redis2Connect(redisCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +273,7 @@ func toLogString(v any) string {
 }
 
 func (e *MQExecutor) BuildWorker(env string, projectName string, redisCfg *RedisConfig) (*rulegox.MQWorker, error) {
-	c, err := buildConnect(redisCfg)
+	c, err := Redis2Connect(redisCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +346,7 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 	if err != nil {
 		return nil, err
 	}
-	redisConn, err := buildConnect(redisDef)
+	redisConn, err := Redis2Connect(redisDef)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +439,7 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	if err != nil {
 		return nil, err
 	}
-	redisConn, err := buildConnect(redisDef)
+	redisConn, err := Redis2Connect(redisDef)
 	if err != nil {
 		return nil, err
 	}
@@ -520,4 +525,60 @@ func NewMQExecutorWithLogAndEnv(logStore ActivityLogStore, envConfigStore EnvCon
 		logStore:       logStore,
 		envConfigStore: envConfigStore,
 	}
+}
+
+// NewWfWorkerFromRedisConfigAPI 通过配置中心接口（domain + 项目 + 环境）获取 Redis 配置，并据此创建 WfWorker。
+func NewWfWorkerFromRedisConfigAPI(ctx context.Context, project, env string, domain string, apiToken string) (*WfWorker, error) {
+	if project == "" || env == "" {
+		return nil, fmt.Errorf("project, env is empty")
+	}
+	if domain == "" || apiToken == "" {
+		return nil, fmt.Errorf("domain, apiToken is empty")
+	}
+
+	jsonMapTemp := templates.NewJsonMapTemplate(":", "")
+	newUrl, err := jsonMapTemp.ReplacePath(ProjectRedisCfgPath, map[string]any{
+		"project": project,
+		"env":     env,
+	})
+	if err != nil {
+		return nil, err
+	}
+	newUrl = fmt.Sprintf("%s%s", domain, newUrl)
+	timestamp := time.Now().Unix()
+	key := crypto.Md5(fmt.Sprintf("%d%s", timestamp, apiToken))
+	resp := curl.NewClient().NewRequest(&curl.Request{
+		Url: newUrl,
+		Data: map[string]any{
+			"key":       key,
+			"timestamp": timestamp,
+		},
+		Method: http.MethodPost,
+	}).Submit(ctx)
+	if resp.Error != nil {
+		return nil, err
+	}
+	respData := new(httputil.CommResponse)
+	err = conv.Unmarshal(resp.Response, respData)
+	if err != nil {
+		return nil, err
+	}
+
+	if respData.Code != 0 {
+		return nil, fmt.Errorf(respData.Message)
+	}
+	redisCfg := new(RedisConfig)
+	err = conv.Unmarshal(respData.Data, redisCfg)
+	if err != nil {
+		return nil, err
+	}
+	redisConnCfg, err := Redis2Connect(redisCfg)
+	if err != nil {
+		return nil, err
+	}
+	w, err := NewWfWorker(project, env, redisConnCfg)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
 }

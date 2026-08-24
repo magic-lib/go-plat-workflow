@@ -76,6 +76,10 @@ func main() {
 	// 按优先级兜底解析 dbDSN 与 listenAddr：
 	// 命令行 flag 已显式传入则不再覆盖；否则依次回退到环境变量、配置文件、内置默认值。
 	dbDSN = resolveDBDSN(dbDSN)
+	if dbDSN == "" {
+		log.Error().Msg("dbDSN is empty,failed to connect to MySQL")
+		return
+	}
 	listenAddr = resolveListenAddr(listenAddr)
 
 	// 连接 MySQL
@@ -124,23 +128,17 @@ func main() {
 	}()
 
 	log.Info().Str("addr", listenAddr).Msg("workflow web server starting")
-	log.Info().Msgf("=> Open http://localhost%s in your browser", listenAddr)
+	listenAddrList := strings.Split(listenAddr, ":")
+	if len(listenAddrList) == 2 {
+		log.Info().Msgf("=> Open http://localhost:%s in your browser", listenAddrList[1])
+	} else {
+		log.Info().Msgf("=> Open http://%s in your browser", listenAddr)
+	}
 
 	if err := ws.ListenAndServe(listenAddr); err != nil {
 		log.Fatal().Err(err).Msg("server failed")
 	}
 }
-
-// getEnv 获取环境变量，不存在则返回默认值。
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// defaultDBDSN 内置默认 MySQL DSN（当命令行、环境变量、配置文件均未提供时兜底）。
-const defaultDBDSN = "root:root@tcp(127.0.0.1:3306)/workflow?charset=utf8mb4&parseTime=True&loc=Local"
 
 // defaultListenAddr 内置默认监听地址。
 const defaultListenAddr = ":8080"
@@ -184,7 +182,7 @@ func resolveDBDSN(flagVal string) string {
 	if cfg := loadAppConfig(); cfg != nil && cfg.DBDsn != "" {
 		return cfg.DBDsn
 	}
-	return defaultDBDSN
+	return ""
 }
 
 // resolveListenAddr 按优先级解析监听地址：命令行 > 环境变量 LISTEN_ADDR > 配置文件 > 默认值。

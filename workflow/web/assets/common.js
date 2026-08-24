@@ -225,7 +225,7 @@ function renderProjectSecrets() {
   }
   box.innerHTML = _projectSecrets.map((s, i) => `
     <div class="secret-item">
-      <code class="secret-mask">${esc(maskSecret(s.key))}</code>
+      <code class="secret-mask copyable" title="点击复制" data-secret="${esc(s.key)}" onclick="copySecret(this)">${esc(s.key)}</code>
       <span class="secret-remark">${esc(s.remark || '')}</span>
       <button class="btn btn-sm btn-danger" onclick="deleteProjectSecret(${i})">删除</button>
     </div>`).join('');
@@ -271,6 +271,29 @@ async function deleteProjectSecret(idx) {
     showToast('密钥已删除', 'success');
     await loadProjectSecrets(project);
   } catch (e) { showToast('删除密钥失败: ' + e.message, 'error'); }
+}
+
+// copySecret 点击密钥文本即复制到剪贴板（带降级方案）
+function copySecret(el) {
+  const text = el.getAttribute('data-secret') || '';
+  if (!text) return;
+  const done = () => showToast('密钥已复制到剪贴板', 'success');
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); }
+    catch (e) { showToast('复制失败，请手动复制', 'error'); }
+    document.body.removeChild(ta);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
 }
 
 async function queryProjectConfig() {

@@ -3,7 +3,9 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
@@ -134,7 +136,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	userRepo := repo.NewUserRepo(db)
 
 	// 幂等种子：若 wf_users 为空，则根据环境变量创建一个 bootstrap 管理员账号。
-	if err := ensureBootstrapAdmin(db, userRepo); err != nil {
+	if err := ensureBootstrapAdmin(userRepo); err != nil {
 		return nil, err
 	}
 
@@ -232,32 +234,61 @@ func (s *WorkflowService) DeleteProjectSecret(ctx context.Context, project, secr
 	return secretRepo.DeleteByKey(ctx, project, secretKey)
 }
 
-// GetProjectConfig 对外配置查询：根据项目密钥鉴权后，
-// 返回项目下的环境配置信息，以及可执行的 RootChains 概要列表（不含 DSL 等敏感内容）。
-// 密钥不匹配时返回错误。
-func (s *WorkflowService) GetProjectConfig(ctx context.Context, project, secretKey string) (*workflow.ProjectConfigResponse, error) {
+// authProjectSecret 校验项目密钥（API_TOKEN）。
+// 支持两种鉴权方式：
+//  1. 带 timestamp（推荐）：token = MD5(fmt.Sprint(timestamp) + 存储密钥)，校验时间戳 ±5 分钟内且 MD5 恒定时间比对一致。
+//     其中"存储密钥"为列表接口返回的哈希串（id.GetUUID 结果），对外当作明文密钥使用，避免用户录入弱口令被暴力破解。
+//  2. 不带 timestamp（兼容旧调用）：直接恒定时间比对存储密钥与传入值。
+//
+// 匹配返回 nil，否则返回错误。
+func (s *WorkflowService) authProjectSecret(ctx context.Context, project, key string, timestamp int64) error {
 	if project == "" {
-		return nil, fmt.Errorf("project is required")
+		return fmt.Errorf("project is required")
 	}
-	if secretKey == "" {
-		return nil, fmt.Errorf("secret_key is required")
+	if key == "" {
+		return fmt.Errorf("token is required")
 	}
+
 	storedKeys, err := s.projectRepo.GetSecrets(ctx, project)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if len(storedKeys) == 0 {
-		return nil, fmt.Errorf("project has no secret_key configured, please set it first")
+		return fmt.Errorf("project has no secret_key configured, please set it first")
 	}
-	matched := false
+
+	// 时间戳签名模式：校验时效并比对 MD5(timestamp + 密钥)
+	if timestamp > 0 {
+		now := time.Now().Unix()
+		if diff := now - timestamp; diff > 300 || diff < -300 {
+			return fmt.Errorf("timestamp expired or invalid (allowed ±5min)")
+		}
+		prefix := fmt.Sprint(timestamp)
+		for _, k := range storedKeys {
+			sum := md5.Sum([]byte(prefix + k))
+			expected := hex.EncodeToString(sum[:])
+			if subtle.ConstantTimeCompare([]byte(expected), []byte(key)) == 1 {
+				return nil
+			}
+		}
+		return fmt.Errorf("token mismatch")
+	}
+
+	// 兼容旧模式：直接比对存储密钥
 	for _, k := range storedKeys {
-		if subtle.ConstantTimeCompare([]byte(k), []byte(secretKey)) == 1 {
-			matched = true
-			break
+		if subtle.ConstantTimeCompare([]byte(k), []byte(key)) == 1 {
+			return nil
 		}
 	}
-	if !matched {
-		return nil, fmt.Errorf("secret_key mismatch")
+	return fmt.Errorf("secret_key mismatch")
+}
+
+// GetProjectConfig 对外配置查询：根据项目密钥鉴权后，
+// 返回项目下的环境配置信息，以及可执行的 RootChains 概要列表（不含 DSL 等敏感内容）。
+// 密钥不匹配时返回错误。token 可由 timestamp 参与签名（推荐），也可直接传密钥（兼容）。
+func (s *WorkflowService) GetProjectConfig(ctx context.Context, project, key string, timestamp int64) (*workflow.ProjectConfigResponse, error) {
+	if err := s.authProjectSecret(ctx, project, key, timestamp); err != nil {
+		return nil, err
 	}
 
 	// 项目基本信息
@@ -296,6 +327,18 @@ func (s *WorkflowService) GetProjectConfig(ctx context.Context, project, secretK
 		EnvConfigs:  envConfigs,
 		RootChains:  summaries,
 	}, nil
+}
+
+// GetProjectRedisConfig 对外配置查询：校验项目密钥后，按项目 + 环境名返回该环境的 Redis 配置。
+// 与 GetProjectConfig 共用 secret_key 鉴权；环境未配置或无 Redis 时返回明确错误。
+func (s *WorkflowService) GetProjectRedisConfig(ctx context.Context, project, envName, key string, timestamp int64) (*workflow.RedisConfig, error) {
+	if err := s.authProjectSecret(ctx, project, key, timestamp); err != nil {
+		return nil, err
+	}
+	if envName == "" {
+		return nil, fmt.Errorf("env_name is required")
+	}
+	return s.getRedisConfig(ctx, project, envName)
 }
 
 // ============================================================
@@ -1554,7 +1597,7 @@ func (s *WorkflowService) UserRepo() *repo.UserRepo {
 }
 
 // ensureBootstrapAdmin 在 wf_users 为空时，按环境变量创建一个管理员账号（幂等）。
-func ensureBootstrapAdmin(db *gorm.DB, userRepo *repo.UserRepo) error {
+func ensureBootstrapAdmin(userRepo *repo.UserRepo) error {
 	ctx := context.Background()
 	cnt, err := userRepo.CountUsers(ctx)
 	if err != nil {
@@ -1579,7 +1622,7 @@ func ensureBootstrapAdmin(db *gorm.DB, userRepo *repo.UserRepo) error {
 	if err != nil {
 		return err
 	}
-	log.Info().Msgf("bootstrap admin user created: %s", username)
+	log.Info().Msgf("bootstrap admin user created: %s", username, " password:", rawPwd)
 	return nil
 }
 
