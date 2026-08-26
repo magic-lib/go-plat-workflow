@@ -31,8 +31,11 @@ const (
 	TopicTestNode = "workflow:test_node"
 	// TopicExecuteRootChain 执行某个 rootChain 的 topic。
 	TopicExecuteRootChain = "workflow:execute_root_chain"
+)
 
-	ProjectRedisCfgPath = "/api/project/:project/env/:env/redis-config"
+const (
+	ProjectWorkflowInvoke = "/api/project/{project}/env/{env}/workflow/invoke"
+	ProjectRedisCfgPath   = "/api/project/{project}/env/{env}/redis-config"
 )
 
 // TestNodePayload 测试单个节点时投递到 MQ 的 payload。
@@ -536,7 +539,7 @@ func NewWfWorkerFromRedisConfigAPI(ctx context.Context, project, env string, dom
 		return nil, fmt.Errorf("domain, apiToken is empty")
 	}
 
-	jsonMapTemp := templates.NewJsonMapTemplate(":", "")
+	jsonMapTemp := templates.NewJsonMapTemplate("{", "}")
 	newUrl, err := jsonMapTemp.ReplacePath(ProjectRedisCfgPath, map[string]any{
 		"project": project,
 		"env":     env,

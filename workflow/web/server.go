@@ -146,9 +146,9 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("POST /api/workflow/execute", ws.handleExecuteWorkflow)
 
 	// 对外调用：按 project + chain_key 执行发布在线的根链
-	ws.mux.HandleFunc("POST /api/project/{project}/env/{env}/workflow/invoke", ws.handleInvokeWorkflow)
+	ws.mux.HandleFunc("POST "+workflow.ProjectWorkflowInvoke, ws.handleInvokeWorkflow)
 	// 对外 Redis 配置查询（需传入项目密钥 + 环境名，返回该环境 Redis 配置）
-	ws.mux.HandleFunc("POST /api/project/{project}/env/{env}/redis-config", ws.handleGetProjectRedisConfig)
+	ws.mux.HandleFunc("POST "+workflow.ProjectRedisCfgPath, ws.handleGetProjectRedisConfig)
 
 	// TestCase API（测试用例：保存/加载/删除执行配置，挂载在 root/sub 上）
 	ws.mux.HandleFunc("GET /api/test-cases", ws.handleListTestCases)
