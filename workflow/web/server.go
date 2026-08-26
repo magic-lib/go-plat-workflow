@@ -1348,25 +1348,11 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// invokeRequest 对外调用接口入参：通过 project + chain_key 执行发布在线的根链。
-type invokeRequest struct {
-	Project  string         `json:"project"`
-	ChainKey string         `json:"chain_key"`
-	Metadata invokeMetadata `json:"metadata"`
-	Payload  map[string]any `json:"payload"`
-}
-
-type invokeMetadata struct {
-	Env     string `json:"env"`
-	TraceID string `json:"trace_id"`
-	IsAsync bool   `json:"is_async"`
-}
-
 func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
 	envName := r.PathValue("env")
 
-	var req invokeRequest
+	var req workflow.InvokeRequest
 	var resp = &httputil.CommResponse{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		resp.Code = http.StatusBadRequest
@@ -1374,10 +1360,7 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	req.Project = project
-	req.Metadata.Env = envName
-
-	if req.Project == "" {
+	if project == "" {
 		resp.Code = http.StatusBadRequest
 		resp.Message = "project is required"
 		writeJSON(w, http.StatusOK, resp)
@@ -1397,12 +1380,12 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 
 	startTime := time.Now().UnixMilli()
 
-	result, err := ws.svc.InvokeRootChain(r.Context(), req.Project, req.ChainKey, req.Metadata.Env, traceId, req.Payload, req.Metadata.IsAsync)
+	result, err := ws.svc.InvokeRootChain(r.Context(), project, req.ChainKey, envName, traceId, req.Payload, req.Metadata.IsAsync)
 
 	cost := time.Now().UnixMilli() - startTime
 
 	resp.Now = conv.String(time.Now())
-	resp.Env = req.Metadata.Env
+	resp.Env = envName
 	resp.Time = cost
 	resp.LogId = ""
 	resp.TraceId = traceId
@@ -1411,9 +1394,9 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 	resp.Data = result
 
 	logData := map[string]any{
-		"project":       req.Project,
+		"project":       project,
 		"chain_key":     req.ChainKey,
-		"env":           req.Metadata.Env,
+		"env":           envName,
 		"trace_id":      traceId,
 		"cost_duration": cost,
 		"request":       req,

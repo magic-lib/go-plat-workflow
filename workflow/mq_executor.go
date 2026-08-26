@@ -491,35 +491,6 @@ func (e *MQExecutor) getRedisConfig(ctx context.Context, project, env string) (*
 	return envDef.RedisConfig, nil
 }
 
-// NewMQExecutor 创建 MQ 执行器，使用默认命名空间和超时。
-// 不注入日志仓储，执行日志降级跳过（不影响主流程返回）。
-func NewMQExecutor() *MQExecutor {
-	return &MQExecutor{
-		Namespace: "workflow",
-		Timeout:   30 * time.Second,
-	}
-}
-
-// NewMQExecutorWithLog 创建 MQ 执行器并注入 activity 日志仓储，
-// 执行 Activity 后会直接异步落库到 wf_activity_logs。
-func NewMQExecutorWithLog(logStore ActivityLogStore) *MQExecutor {
-	return &MQExecutor{
-		Namespace: "workflow",
-		Timeout:   30 * time.Second,
-		logStore:  logStore,
-	}
-}
-
-// NewMQExecutorWithEnv 创建 MQ 执行器并注入环境配置仓储，
-// 使 getRedisConfig 能按 project+env 解析出 Redis 配置（供本地执行/测试节点使用）。
-func NewMQExecutorWithEnv(envConfigStore EnvConfigStore) *MQExecutor {
-	return &MQExecutor{
-		Namespace:      "workflow",
-		Timeout:        30 * time.Second,
-		envConfigStore: envConfigStore,
-	}
-}
-
 // NewMQExecutorWithLogAndEnv 同时注入日志仓储与环境配置仓储。
 func NewMQExecutorWithLogAndEnv(logStore ActivityLogStore, envConfigStore EnvConfigStore) *MQExecutor {
 	return &MQExecutor{
@@ -568,7 +539,7 @@ func NewWfWorkerFromRedisConfigAPI(ctx context.Context, project, env string, dom
 	}
 
 	if respData.Code != 0 {
-		return nil, fmt.Errorf(respData.Message)
+		return nil, fmt.Errorf("%s", respData.Message)
 	}
 	redisCfg := new(RedisConfig)
 	err = conv.Unmarshal(respData.Data, redisCfg)
@@ -584,4 +555,67 @@ func NewWfWorkerFromRedisConfigAPI(ctx context.Context, project, env string, dom
 		return nil, err
 	}
 	return w, nil
+}
+
+// InvokeRequest 对外调用接口入参：通过 project + chain_key 执行发布在线的根链。
+type InvokeRequest struct {
+	ChainKey string         `json:"chain_key"`
+	Metadata InvokeMetadata `json:"metadata"`
+	Payload  map[string]any `json:"payload"`
+}
+
+type InvokeMetadata struct {
+	TraceID string `json:"trace_id"`
+	IsAsync bool   `json:"is_async"`
+}
+
+// InvokeWorkerFlowAPI 直接执行流程
+func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string, apiToken string, invokeRequest *InvokeRequest) (any, error) {
+	if project == "" || env == "" {
+		return nil, fmt.Errorf("project, env is empty")
+	}
+	if domain == "" || apiToken == "" {
+		return nil, fmt.Errorf("domain, apiToken is empty")
+	}
+	if invokeRequest == nil {
+		return nil, fmt.Errorf("invokeRequest is nil")
+	}
+
+	jsonMapTemp := templates.NewJsonMapTemplate("{", "}")
+	newUrl, err := jsonMapTemp.ReplacePath(ProjectWorkflowInvoke, map[string]any{
+		"project": project,
+		"env":     env,
+	})
+	if err != nil {
+		return nil, err
+	}
+	newUrl = fmt.Sprintf("%s%s", domain, newUrl)
+	timestamp := time.Now().Unix()
+	key := crypto.Md5(fmt.Sprintf("%d%s", timestamp, apiToken))
+
+	postData := map[string]any{}
+	err = conv.Unmarshal(invokeRequest, &postData)
+	if err != nil {
+		return nil, err
+	}
+	postData["key"] = key
+	postData["timestamp"] = timestamp
+
+	resp := curl.NewClient().NewRequest(&curl.Request{
+		Url:    newUrl,
+		Data:   postData,
+		Method: http.MethodPost,
+	}).Submit(ctx)
+	if resp.Error != nil {
+		return nil, err
+	}
+	respData := new(httputil.CommResponse)
+	err = conv.Unmarshal(resp.Response, respData)
+	if err != nil {
+		return nil, err
+	}
+	if respData.Code != 0 {
+		return nil, fmt.Errorf("%s", respData.Message)
+	}
+	return respData.Data, nil
 }

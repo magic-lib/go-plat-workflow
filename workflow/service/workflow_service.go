@@ -768,7 +768,7 @@ const executeRootChainByIDTimeout = 300000 * time.Second
 // ExecuteRootChainByID 基于已解析的根链 DSL（ruleChain）同步执行流程。
 // 从根链 flow 节点提取子链 ID 并通过 project 查询子链 DSL，组装 ActivityFlowConfig 后
 // 调用 rulegox.StartActivityFlow 同步执行，返回 FlowContext 序列化结果。
-func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *types.RuleChain, jsonPayload map[string]any, project, envName, traceId string, activityFlowConfig *rulegox.ActivityFlowConfig) (any, error) {
+func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *types.RuleChain, jsonPayload map[string]any, project, envName, traceId string, activityFlowConfig *rulegox.ActivityFlowConfig) (*paramx.FlowContext, error) {
 	// 整体执行加超时，防止流程长时间不返回导致阻塞
 	execCtx, cancel := context.WithTimeout(ctx, executeRootChainByIDTimeout)
 	defer cancel()
@@ -796,11 +796,11 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	for subID := range subChainIDs {
 		subDef, err := s.subChainRepo.GetByID(execCtx, project, subID)
 		if err != nil {
-			return "", fmt.Errorf("get sub chain %s failed: %w", subID, err)
+			return nil, fmt.Errorf("get sub chain %s failed: %w", subID, err)
 		}
 		subChain := &types.RuleChain{}
 		if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
-			return "", fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
+			return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
 		}
 		subChainDSL = append(subChainDSL, &subChain.RuleChain)
 	}
@@ -843,19 +843,19 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		close(done)
 	}
 	if err := rulegox.StartActivityFlow(execCtx, actConfig, &metaData); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// 等待执行结束或超时，避免长时间取不到结果导致永久阻塞
 	select {
 	case <-done:
 		if resultErr != nil {
-			return "", resultErr
+			return nil, resultErr
 		}
 		if resultParam == nil {
 			return nil, fmt.Errorf("execute root chain %s: empty result", rootChainID)
 		}
-		return resultParam.Responses, nil
+		return resultParam, nil
 	case <-execCtx.Done():
 		return nil, fmt.Errorf("execute root chain %s: timeout after %s: %w", rootChainID, executeRootChainByIDTimeout, execCtx.Err())
 	}

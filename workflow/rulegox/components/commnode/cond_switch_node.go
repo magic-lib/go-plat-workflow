@@ -182,22 +182,6 @@ func (x *CondSwitchNode) Desc() string {
 	return "Routes to True/False. Variables: id, ts, data, msg, metadata, type, dataType"
 }
 
-// boolResultRelation 将布尔结果映射为 rulego 往下传递的 relationType。
-func boolResultRelation(b bool) string {
-	if b {
-		return "True"
-	}
-	return "False"
-}
-
-// defaultRelation 将默认分支的布尔结果映射为 relationType（true→Success，false→Failure）。
-func defaultRelation(b bool) string {
-	if b {
-		return "Success"
-	}
-	return "Failure"
-}
-
 // Destroy 清理资源
 // Destroy cleans up resources.
 func (x *CondSwitchNode) Destroy() {

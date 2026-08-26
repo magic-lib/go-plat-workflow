@@ -68,8 +68,10 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 	config := rulego.NewConfig()
 
 	// 如果有结束节点，则开启默认失败回调
+	hasEndNodeTag := false
 	if hasEndNode(actConfig.RootChainDSL.Metadata.Nodes) {
 		config.OnEndWithFailure = true
+		hasEndNodeTag = true
 	}
 
 	if len(actConfig.SubChainDSL) > 0 {
@@ -156,19 +158,52 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 	msg.SetType(actConfig.MsgType)
 	msg.SetMetadata(newMetadata)
 
-	endOption := types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
-		var resultParam = new(paramx.FlowContext)
-		_ = conv.Unmarshal(msg.GetData(), resultParam)
-		if err != nil {
-			actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, err)
-			return
-		}
-		actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, nil)
-	})
-	if actConfig.IsAsync {
-		engineIns.OnMsg(msg, endOption, types.WithContext(ctx))
+	var endOption, endCompletedOption types.RuleContextOption
+	if hasEndNodeTag {
+		var ruleCompleteCtx context.Context
+		var ruleCompleteMsg types.RuleMsg
+		var ruleCompleteErr error
+		var ruleRelationType string
+
+		endOption = types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
+			ruleCompleteCtx = ruleCtx.GetContext()
+			ruleCompleteMsg = msg
+			ruleCompleteErr = err
+			ruleRelationType = relationType
+		})
+		endCompletedOption = types.WithOnAllNodeCompleted(func() {
+			var resultParam = new(paramx.FlowContext)
+			_ = conv.Unmarshal(ruleCompleteMsg.GetData(), resultParam)
+			if ruleCompleteErr != nil {
+				actConfig.EndFunc(ruleCompleteCtx, ruleRelationType, resultParam, ruleCompleteErr)
+				return
+			}
+			actConfig.EndFunc(ruleCompleteCtx, ruleRelationType, resultParam, nil)
+		})
 	} else {
-		engineIns.OnMsgAndWait(msg, endOption, types.WithContext(ctx))
+		endOption = types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
+			var resultParam = new(paramx.FlowContext)
+			_ = conv.Unmarshal(msg.GetData(), resultParam)
+			if err != nil {
+				actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, err)
+				return
+			}
+			actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, nil)
+		})
+	}
+
+	if actConfig.IsAsync {
+		if hasEndNodeTag {
+			engineIns.OnMsg(msg, endOption, endCompletedOption, types.WithContext(ctx))
+		} else {
+			engineIns.OnMsg(msg, endOption, types.WithContext(ctx))
+		}
+	} else {
+		if hasEndNodeTag {
+			engineIns.OnMsgAndWait(msg, endOption, endCompletedOption, types.WithContext(ctx))
+		} else {
+			engineIns.OnMsgAndWait(msg, endOption, types.WithContext(ctx))
+		}
 	}
 	return nil
 }
