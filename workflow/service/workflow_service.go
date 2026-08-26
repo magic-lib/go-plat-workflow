@@ -774,6 +774,12 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 
 	rootChainID := ruleChain.RuleChain.ID
 
+	// 对传进来的参数进行检查，避免后面执行缺少参数
+	err := s.checkAllNodesArguments(ruleChain.Metadata.Nodes, jsonPayload)
+	if err != nil {
+		return nil, err
+	}
+
 	// 1. 从根链 flow 节点提取子链 ID（configuration.ruleChainId = "project:subChainID"）
 	subChainIDs := make(map[string]bool)
 	for _, node := range ruleChain.Metadata.Nodes {
@@ -877,6 +883,56 @@ func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayloa
 	return flowCtx
 }
 
+// checkAllNodesArguments 校验 CondSwitch / Activity 节点 configuration.arguments 中
+// 形如 {{arguments.xxx}} 的前端入参占位符，是否都在 jsonPayload 中存在；缺失则报错，
+// 避免后续执行时因缺少入参而失败。
+func (s *WorkflowService) checkAllNodesArguments(nodes []*types.RuleNode, jsonPayload map[string]any) error {
+	// 仅校验需要前端入参的节点类型
+	const (
+		typeActivity   = "custom/Activity"
+		typeCondSwitch = "custom/CondSwitch"
+	)
+	// 匹配 {{arguments.xxx}}（xxx 为前端入参名，仅允许字母数字下划线，不含点号）
+	argTplRe := regexp.MustCompile(`\{\{arguments\.([A-Za-z0-9_]+)}}`)
+
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		if node.Type != typeActivity && node.Type != typeCondSwitch {
+			continue
+		}
+		rawArgs, ok := node.Configuration["arguments"]
+		if !ok || rawArgs == nil {
+			continue
+		}
+		argsList, ok := rawArgs.([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range argsList {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			val, ok := m["value"]
+			if !ok {
+				continue
+			}
+			valStr, ok := val.(string)
+			if !ok {
+				continue
+			}
+			for _, matched := range argTplRe.FindAllStringSubmatch(valStr, -1) {
+				name := matched[1]
+				if _, exist := jsonPayload[name]; !exist {
+					return fmt.Errorf("node %q requires argument %q but it is not provided in payload", node.Id, name)
+				}
+			}
+		}
+	}
+	return nil
+}
 func (s *WorkflowService) ClearChainRootByKey(project, chainKey string) {
 	cacheKey := id.GetUUID(project + "-" + chainKey)
 	s.invokeRootChainMapCache.Remove(cacheKey)
