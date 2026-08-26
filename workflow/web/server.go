@@ -1056,6 +1056,14 @@ func (ws *WebServer) handlePublishRootChain(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// 发布成功，需要清理缓存更新
+	oneRoot, err := ws.svc.GetRootChain(r.Context(), chainID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ws.svc.ClearChainRootByKey(project, oneRoot.ChainKey)
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", release.Version).Msg("root chain published via web")
 	writeJSON(w, http.StatusOK, release)
 }

@@ -10,13 +10,13 @@ import (
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/logs"
+	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/samber/lo"
 	"io"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/conn"
@@ -60,10 +60,9 @@ type WorkflowService struct {
 	dslBuilder             *builder.DSLBuilder
 	engine                 *engine.WorkflowEngine
 
-	// invokeRootChainCache 缓存「发布在线」的根链 DSL（key = 确定性 ID，value = 解析后的 RuleChain）。
+	// invokeRootChainMapCache 缓存「发布在线」的根链 DSL（key = 确定性 ID，value = 解析后的 RuleChain）。
 	// key 由 project + chain_key 经 id.GetUUID 确定性生成，相同入参直接命中缓存，避免重复查库。
-	invokeRootChainCache   map[string]*types.RuleChain
-	invokeRootChainCacheMu sync.RWMutex
+	invokeRootChainMapCache cmap.ConcurrentMap[string, *types.RuleChain]
 }
 
 // NewWorkflowService 创建工作流服务实例，自动建表。
@@ -141,24 +140,24 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	}
 
 	s := &WorkflowService{
-		db:                     db,
-		projectRepo:            projectRepo,
-		nodeRepo:               nodeRepo,
-		subChainRepo:           subChainRepo,
-		rootChainRepo:          rootChainRepo,
-		releaseRepo:            releaseRepo,
-		testCaseRepo:           testCaseRepo,
-		envConfigRepo:          envConfigRepo,
-		nodeTestRecordRepo:     nodeTestRecordRepo,
-		activityRepo:           activityRepo,
-		activityTestRecordRepo: activityTestRecordRepo,
-		activityLogRepo:        activityLogRepo,
-		nodeLogRepo:            nodeLogRepo,
-		userRepo:               userRepo,
-		mqExecutor:             workflow.NewMQExecutorWithLogAndEnv(activityLogRepo, envConfigRepo),
-		dslBuilder:             builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
-		engine:                 engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
-		invokeRootChainCache:   make(map[string]*types.RuleChain),
+		db:                      db,
+		projectRepo:             projectRepo,
+		nodeRepo:                nodeRepo,
+		subChainRepo:            subChainRepo,
+		rootChainRepo:           rootChainRepo,
+		releaseRepo:             releaseRepo,
+		testCaseRepo:            testCaseRepo,
+		envConfigRepo:           envConfigRepo,
+		nodeTestRecordRepo:      nodeTestRecordRepo,
+		activityRepo:            activityRepo,
+		activityTestRecordRepo:  activityTestRecordRepo,
+		activityLogRepo:         activityLogRepo,
+		nodeLogRepo:             nodeLogRepo,
+		userRepo:                userRepo,
+		mqExecutor:              workflow.NewMQExecutorWithLogAndEnv(activityLogRepo, envConfigRepo),
+		dslBuilder:              builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
+		engine:                  engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
+		invokeRootChainMapCache: cmap.New[*types.RuleChain](),
 	}
 
 	log.Info().Msg("WorkflowService initialized, tables migrated")
@@ -878,6 +877,11 @@ func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayloa
 	return flowCtx
 }
 
+func (s *WorkflowService) ClearChainRootByKey(project, chainKey string) {
+	cacheKey := id.GetUUID(project + "-" + chainKey)
+	s.invokeRootChainMapCache.Remove(cacheKey)
+}
+
 // InvokeRootChain 通过 project + chain_key 定位「发布在线」的根链 DSL 并同步执行。
 // 缓存：map[cacheKey]*types.RuleChain，cacheKey = id.GetUUID(project+"-"+chain_key)（确定性），
 // 命中缓存直接复用已解析的 DSL，跳过查询 wf_root_chains 与 wf_root_chain_releases。
@@ -885,12 +889,9 @@ func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey
 	cacheKey := id.GetUUID(project + "-" + chainKey)
 
 	// 1. 先查缓存
-	s.invokeRootChainCacheMu.RLock()
-	ruleChain := s.invokeRootChainCache[cacheKey]
-	s.invokeRootChainCacheMu.RUnlock()
-
+	ruleChain, ok := s.invokeRootChainMapCache.Get(cacheKey)
 	// 2. 未命中：查库并解析 DSL，再写入缓存
-	if ruleChain == nil {
+	if !ok || ruleChain == nil {
 		// 2.1 通过 project + chain_key 查根链（得到 chain_id）
 		rootDef, err := s.rootChainRepo.GetByKey(ctx, project, chainKey)
 		if err != nil {
@@ -908,9 +909,7 @@ func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey
 		}
 		rc.RuleChain.ID = cacheKey
 		// 2.4 写入缓存
-		s.invokeRootChainCacheMu.Lock()
-		s.invokeRootChainCache[cacheKey] = rc
-		s.invokeRootChainCacheMu.Unlock()
+		s.invokeRootChainMapCache.Set(cacheKey, rc)
 		ruleChain = rc
 	}
 
