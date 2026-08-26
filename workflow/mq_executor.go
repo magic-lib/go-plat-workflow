@@ -165,13 +165,13 @@ func (e *MQExecutor) TestNode(ctx context.Context, payload *TestNodePayload) (an
 //   - topic 为 activity/{actNamespace}/{actName}，与分布式 worker 端 SubscribeActivity 订阅的 topic 一致
 //
 // 流程：根据环境 Redis 配置构建连接 -> 创建 MQWorker -> 调用 RequestActivity 同步等待远程监听程序执行。
-func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWorker, actDef *ActivityDef, params any, logInfo *ActivityLogValue) (*httputil.CommResponse, error) {
+func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWorker, actDef *ActivityDef, params map[string]any, logInfo *ActivityLogValue) (*httputil.CommResponse, map[string]any, error) {
 	if actDef.ActNamespace == "" || actDef.ActName == "" {
-		return nil, fmt.Errorf("act_namespace and act_name are required")
+		return nil, params, fmt.Errorf("act_namespace and act_name are required")
 	}
 	wfWorker, err := NewWfWorkerWithMQWorker(worker)
 	if err != nil {
-		return nil, err
+		return nil, params, err
 	}
 	start := time.Now()
 	var headers http.Header
@@ -184,7 +184,7 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 		headers = metaData.ToHeader(headers)
 	}
 
-	resp, err := wfWorker.RequestActivity(ctx, actDef, params, headers)
+	resp, params, err := wfWorker.RequestActivity(ctx, actDef, params, headers)
 	durationMs := time.Since(start).Milliseconds()
 
 	// 执行后异步记录 activity 日志（入参 + 结果/错误），由服务端 ActivityCollector 从 redis list 消费落库。
@@ -207,9 +207,9 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 		level, start.Unix(), durationMs, params, resp, errMsg, rootChainID, traceID, spanID, attributes)
 
 	if err != nil {
-		return nil, err
+		return nil, params, err
 	}
-	return resp, nil
+	return resp, params, nil
 }
 
 // asyncPushLog 异步将一条 activity 执行日志直接落库到 wf_activity_logs（不阻塞调用方）。

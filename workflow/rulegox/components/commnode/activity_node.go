@@ -476,11 +476,15 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 }
 
 func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
+	return GetActivityParam(x.ruleObj, allParam, bindConfig)
+}
+
+func GetActivityParam(ruleEngine *templates.RuleExprEngine, allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
 	actParam := make(map[string]any)
 	for _, item := range bindConfig {
 		exp := conv.String(item.Value)
 		if item.Type == "formula" {
-			expAny, err := x.ruleObj.RunString(exp, allParam)
+			expAny, err := ruleEngine.RunString(exp, allParam)
 			if err == nil {
 				log.Printf("activityNode getActivityParam: RunString err: %v", err)
 				actParam[item.Key] = expAny

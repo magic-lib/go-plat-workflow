@@ -6,9 +6,13 @@ import (
 	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/plugins/activity"
+	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
+	"github.com/samber/lo"
 	"net/http"
 	"strings"
 )
@@ -38,9 +42,9 @@ func NewWfWorkerWithMQWorker(mqWorker *rulegox.MQWorker) (*WfWorker, error) {
 }
 
 // RequestActivity 订阅指定 topic 并注册处理函数。
-func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, params any, headers http.Header) (*httputil.CommResponse, error) {
+func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, params map[string]any, headers http.Header) (*httputil.CommResponse, map[string]any, error) {
 	if w.MQWorker == nil {
-		return nil, fmt.Errorf("mq worker is nil")
+		return nil, params, fmt.Errorf("mq worker is nil")
 	}
 	retMap := map[string]any{}
 	if len(actDef.Responses) > 0 {
@@ -50,13 +54,29 @@ func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 		}
 		_ = conv.Unmarshal(retString, &retMap)
 	}
-	return w.MQWorker.RequestActivity(ctx, &activity.Activity{
+
+	if len(actDef.Arguments) > 0 {
+		var bindConfig = make([]*param.BindConfig, 0)
+		err := conv.Unmarshal(string(actDef.Arguments), &bindConfig)
+		if err == nil && len(bindConfig) > 0 {
+			ruleObj := templates.NewRuleExprEngine()
+			lo.ForEach(bindConfig, func(item *param.BindConfig, index int) {
+				if conv.String(item.Value) == "" {
+					item.Value = params[item.Key]
+				}
+			})
+			params = commnode.GetActivityParam(ruleObj, params, bindConfig)
+		}
+	}
+	resp, err := w.MQWorker.RequestActivity(ctx, &activity.Activity{
 		ActivityType: actDef.ActivityType,
 		ActNamespace: actDef.ActNamespace,
 		ActName:      actDef.ActName,
 		ArgTemplate:  actDef.ArgTemplate,
 		Responses:    retMap,
 	}, params, headers)
+
+	return resp, params, err
 }
 func (w *WfWorker) SubscribeActivity(actNamespace, actName string, handler utils.ContextAnyHandler) error {
 	if w.MQWorker == nil {

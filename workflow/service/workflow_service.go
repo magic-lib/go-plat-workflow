@@ -1337,7 +1337,7 @@ type TestActivityRequest struct {
 	// EnvName 测试使用的环境名（决定 Redis 等依赖配置）
 	EnvName string `json:"env_name"`
 	// InputParams 测试传入的参数（key=参数名，value=参数值）
-	InputParams map[string]interface{} `json:"input_params"`
+	InputParams map[string]any `json:"input_params"`
 	// SaveRecord 是否保存测试记录（默认 true）
 	SaveRecord bool `json:"save_record"`
 }
@@ -1405,7 +1405,7 @@ func (s *WorkflowService) TestActivity(ctx context.Context, req *TestActivityReq
 	//    - topic 为 activity/{actNamespace}/{actName}，与远程 worker 端 SubscribeActivity 订阅一致
 	traceId := id.NewUUID()
 	spanId := req.ActivityID
-	resp, err := s.mqExecutor.RequestActivity(ctx, worker, actDef, req.InputParams, &workflow.ActivityLogValue{
+	resp, params, err := s.mqExecutor.RequestActivity(ctx, worker, actDef, req.InputParams, &workflow.ActivityLogValue{
 		RootChainID: "TestActivity",
 		TraceID:     traceId,
 		SpanID:      spanId,
@@ -1420,6 +1420,8 @@ func (s *WorkflowService) TestActivity(ctx context.Context, req *TestActivityReq
 			"span_id":            spanId,
 		},
 	})
+
+	req.InputParams = params
 
 	// 6. 整理结果
 	result := &TestActivityResult{}

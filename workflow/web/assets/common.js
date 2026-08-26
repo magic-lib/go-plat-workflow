@@ -3557,6 +3557,8 @@ function addParamRow(key, label, type, required, defaultValue, description, poli
       <option value="int64" ${type==='int64'?'selected':''}>int64</option>
       <option value="float64" ${type==='float64'?'selected':''}>float64</option>
       <option value="bool" ${type==='bool'?'selected':''}>bool</option>
+      <option value="slice" ${type==='slice'?'selected':''}>slice</option>
+      <option value="map" ${type==='map'?'selected':''}>map</option>
       <option value="formula" ${type==='formula'?'selected':''}>formula</option>
     </select>
     <label class="param-required"><input type="checkbox" ${reqChecked}>必填</label>
@@ -4121,6 +4123,8 @@ function addActParamRow(key, label, type, required, value, description, policy) 
       <option value="int64" ${type==='int64'?'selected':''}>int64</option>
       <option value="float64" ${type==='float64'?'selected':''}>float64</option>
       <option value="bool" ${type==='bool'?'selected':''}>bool</option>
+      <option value="slice" ${type==='slice'?'selected':''}>slice</option>
+      <option value="map" ${type==='map'?'selected':''}>map</option>
       <option value="formula" ${type==='formula'?'selected':''}>formula</option>
     </select>
     <label class="param-required"><input type="checkbox" ${reqChecked}>必填</label>
@@ -5986,6 +5990,8 @@ function renderOrchParamOverrides() {
           <option value="int64" ${p.type==='int64'?'selected':''}>int64</option>
           <option value="float64" ${p.type==='float64'?'selected':''}>float64</option>
           <option value="bool" ${p.type==='bool'?'selected':''}>bool</option>
+          <option value="slice" ${p.type==='slice'?'selected':''}>slice</option>
+          <option value="map" ${p.type==='map'?'selected':''}>map</option>
           <option value="formula" ${p.type==='formula'?'selected':''}>formula</option>
         </select>
         <select class="param-src-select" style="flex:0 1 110px;min-width:96px" onchange="onParamSrcChange(this)">
