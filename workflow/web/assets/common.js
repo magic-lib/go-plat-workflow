@@ -1066,9 +1066,12 @@ function addActivityStage(stageActs) {
     '</div>' +
     '<div class="stage-acts" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>' +
     '<div style="display:flex;align-items:center;gap:6px">' +
-      '<select class="stage-act-select" onchange="onActivityAddToStage(this)" style="flex:1;min-width:0;padding:5px 8px;font-size:.8rem">' +
-        '<option value="">+ 添加 Activity 到本阶段（并行）</option>' +
-      '</select>' +
+      '<div class="stage-act-combobox" style="flex:1;min-width:0;position:relative">' +
+        '<input class="stage-act-filter" type="text" autocomplete="off" placeholder="+ 添加 Activity 到本阶段（并行）" ' +
+          'onfocus="openStageCombobox(this)" oninput="filterStageCombobox(this)" ' +
+          'style="width:100%;padding:5px 8px;font-size:.8rem;border:1px solid var(--border);border-radius:6px">' +
+        '<ul class="stage-act-list" style="display:none;position:absolute;z-index:50;top:100%;left:0;right:0;max-height:220px;overflow:auto;margin:2px 0 0;padding:4px;list-style:none;background:#fff;border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.12)"></ul>' +
+      '</div>' +
     '</div>';
   root.appendChild(stage);
   // 渲染该阶段内的活动
@@ -1107,46 +1110,116 @@ function refreshStageIndex() {
   });
 }
 
-// 填充某个阶段内的"添加 Activity"下拉（允许同一 activity 重复添加，不做去重禁用）
+// 填充某个阶段内的"添加 Activity"可过滤下拉（允许同一 activity 重复添加，不做去重禁用）
 function populateStageSelect(stage) {
-  const sel = stage.querySelector('.stage-act-select');
-  if (!sel) return;
+  const cb = stage.querySelector('.stage-act-combobox');
+  if (!cb) return;
+  const list = cb.querySelector('.stage-act-list');
+  const input = cb.querySelector('.stage-act-filter');
+  if (!list) return;
   const acts = window._activityCache || [];
-  sel.innerHTML = '<option value="">+ 添加 Activity 到本阶段（并行）</option>';
-  acts.forEach(a => {
-    const val = a.act_namespace + '|' + a.act_name;
-    const label = a.name + ' (' + a.act_namespace + '/' + a.act_name + ')';
-    sel.innerHTML += '<option value="' + escHtml(val) + '">' + escHtml(label) + '</option>';
-  });
-  sel.value = '';
+  if (acts.length === 0) {
+    list.innerHTML = '<li style="padding:6px 8px;color:var(--text-muted);font-size:.78rem">无可用 Activity</li>';
+  } else {
+    list.innerHTML = acts.map(a => {
+      const val = a.act_namespace + '|' + a.act_name;
+      const label = a.name + ' (' + a.act_namespace + '/' + a.act_name + ')';
+      return '<li class="stage-act-opt" data-ns="' + escAttr(a.act_namespace || '') + '" data-name="' + escAttr(a.act_name || '') +
+        '" data-val="' + escAttr(val) + '" data-text="' + escAttr(label) + '" ' +
+        'style="padding:6px 8px;font-size:.78rem;cursor:pointer;border-radius:4px" onclick="pickStageActivity(this)">' + escHtml(label) + '</li>';
+    }).join('');
+  }
+  if (input) input.value = '';
+  list.style.display = 'none';
 }
 
-// 从某阶段的下拉选择 activity，追加到该阶段（并行）。支持同一 activity 重复添加（各自独立 id/参数）。
-function onActivityAddToStage(sel) {
-  const stage = sel.closest('.stage');
-  if (!stage || !sel.value) return;
-  const parts = sel.value.split('|');
-  const ns = parts[0] || '';
-  const name = parts[1] || '';
+// 打开可过滤下拉（聚焦时），确保用最新缓存填充
+function openStageCombobox(input) {
+  const cb = input.closest('.stage-act-combobox');
+  if (!cb) return;
+  const stage = cb.closest('.stage');
+  if (stage) populateStageSelect(stage);
+  const list = cb.querySelector('.stage-act-list');
+  if (list) { filterStageCombobox(input); list.style.display = ''; }
+}
+
+// 输入过滤：按文本包含（不区分大小写）实时筛选选项
+function filterStageCombobox(input) {
+  const cb = input.closest('.stage-act-combobox');
+  if (!cb) return;
+  const list = cb.querySelector('.stage-act-list');
+  if (!list) return;
+  const kw = (input.value || '').trim().toLowerCase();
+  let visible = 0;
+  list.querySelectorAll('.stage-act-opt').forEach(li => {
+    const txt = (li.getAttribute('data-text') || '').toLowerCase();
+    const hit = !kw || txt.indexOf(kw) >= 0;
+    li.style.display = hit ? '' : 'none';
+    if (hit) visible++;
+  });
+  let emptyEl = list.querySelector('.stage-act-empty');
+  if (visible === 0) {
+    if (!emptyEl) {
+      emptyEl = document.createElement('li');
+      emptyEl.className = 'stage-act-empty';
+      emptyEl.style.cssText = 'padding:6px 8px;color:var(--text-muted);font-size:.78rem';
+      emptyEl.textContent = '无匹配 Activity';
+      list.appendChild(emptyEl);
+    }
+  } else if (emptyEl) {
+    emptyEl.remove();
+  }
+}
+
+// 点击选项：按 ns/name 追加到该阶段（并行），支持同一 activity 重复添加
+function pickStageActivity(li) {
+  const cb = li.closest('.stage-act-combobox');
+  const stage = cb ? cb.closest('.stage') : null;
+  if (!stage) return;
+  const ns = li.getAttribute('data-ns') || '';
+  const name = li.getAttribute('data-name') || '';
   const act = (window._activityCache || []).find(a => a.act_namespace === ns && a.act_name === name);
   const dispName = act ? act.name : (ns + '/' + name);
   addActivityItemRow({ act_namespace: ns, act_name: name, id: '', name: dispName, args: {} }, stage);
-  // 重新填充所有阶段下拉（同一 activity 可重复添加，无需去重）
+  // 关闭并清空输入框；同一 activity 可重复添加，无需去重，仅重填所有阶段下拉
+  if (cb) {
+    const input = cb.querySelector('.stage-act-filter');
+    const list = cb.querySelector('.stage-act-list');
+    if (input) input.value = '';
+    if (list) list.style.display = 'none';
+  }
   document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
   syncActivityConfig();
 }
 
+// 点击页面其它区域时关闭所有打开的阶段下拉
+document.addEventListener('click', function(e) {
+  if (!e.target.closest || !e.target.closest('.stage-act-combobox')) {
+    document.querySelectorAll('#node-activity-stages .stage-act-list').forEach(l => { l.style.display = 'none'; });
+  }
+});
+
+// 生成 5 位 base36 随机串（小写字母+数字），用于实例 ID 后缀
+function randomSuffix5() {
+  return Math.random().toString(36).slice(2, 7);
+}
+
 // 生成全局唯一的 activity 实例 id（当未显式指定时）。
 // 同一 activity 可在 node 内重复添加多次（参数不同效果不同），必须有唯一 id 作为后端 stepId/引用标识。
+// 格式与 node 实例一致：<activity_id>__<5位随机串>，如 A000015__sfdfd。
+// 用 "__" 双下划线分隔（"-" 在变量引用路径中不可用）；前缀优先取 activity 模板 id（形如 A000015，简短好记），
+// 查不到模板 id 时回退到 act_name。
 function genUniqueActivityId(ns, name) {
-  const base = (ns && name) ? (ns + '_' + name) : (name || 'act');
-  const exist = new Set(collectAllActivities().map(it => it.id).filter(Boolean));
-  let i = 1;
+  let base = (name && String(name).trim()) ? name.trim() : ((ns && String(ns).trim()) ? ns.trim() : 'act');
+  const act = (window._activityCache || []).find(a => a.act_namespace === (ns || '') && a.act_name === (name || ''));
+  if (act && act.activity_id) base = act.activity_id;
+  const exist = new Set(collectAllActivities().map(it => String(it.id || '').trim()).filter(Boolean));
   let cand;
+  let guard = 0;
   do {
-    cand = base + '_' + i;
-    i++;
-  } while (exist.has(cand) && i < 10000);
+    cand = base + '__' + randomSuffix5();
+    guard++;
+  } while (exist.has(cand) && guard < 100);
   return cand;
 }
 
@@ -1175,10 +1248,12 @@ function addActivityItemRow(item, stage) {
   try { rvList = cacheAct && cacheAct.return_values ? (typeof cacheAct.return_values === 'string' ? JSON.parse(cacheAct.return_values) : cacheAct.return_values) : []; } catch(e) { rvList = []; }
   if (Array.isArray(rvList) && rvList.length > 0) {
     rvHtml = rvList.map(rv => {
-      const nm = escHtml(rv.label || rv.name || '');
-      const ky = rv.key ? (' ← ' + escHtml(rv.key)) : '';
+      // 字段名 = name（引用路径字段名）；中文名 = label（Activity 修改后的名字）；类型 = type
+      const fieldName = escHtml(rv.name || '');
+      const cnName = escHtml(rv.label || '');
+      const namePart = cnName && cnName !== fieldName ? (fieldName + ': ' + cnName) : fieldName;
       const tp = rv.type ? (' <span style="color:var(--text-muted)">(' + escHtml(rv.type) + ')</span>') : '';
-      return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:1px 7px;border:1px solid var(--border);border-radius:10px;background:#eef6ff;color:#0e7490;font-family:monospace;font-size:.72rem">' + nm + ky + tp + '</span>';
+      return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:1px 7px;border:1px solid var(--border);border-radius:10px;background:#eef6ff;color:#0e7490;font-family:monospace;font-size:.72rem">' + namePart + tp + '</span>';
     }).join('');
   }
   row.innerHTML =
@@ -3883,15 +3958,22 @@ function outputRenderRefFieldSlot(prevs, prevId, type, selectedField) {
       // return_value 的 key 为空表示返回活动返回的全部内容：选中后等价「返回值整体」，
       // 选项 value 置空，拼路径时回退为 {{id.responses}}（与返回全部数据完全一致）
       const val = rvKey === '' ? '' : rvName;
-      const label = rvName + (rvKey ? ' (' + rvKey + ')' : '');
+      // 选项文本括号里展示经 Activity 修改后的中文名（label/name），而非数据原始返回的 key
+      const dispName = rv.label || rv.name || '';
+      const label = rvName + (dispName ? ' (' + dispName + ')' : '');
       return '<option value="' + escAttr(val) + '"' + (val === selectedField ? ' selected' : '') + '>' + escHtml(label) + '</option>';
     }).join('');
     return '<select class="arg-refield" onchange="onOutputRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
         '<option value="">— 选择返回值字段 —</option>' + opts + '</select>';
   }
-  const keys = (prev.params || []).map(pp => pp.key || '').filter(Boolean);
-  if (keys.length === 0) return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">该 Activity 无参数定义</span>';
-  const opts = keys.map(k => '<option value="' + escAttr(k) + '"' + (k === selectedField ? ' selected' : '') + '>' + escHtml(k) + '</option>').join('');
+  const params = (prev.params || []).filter(pp => (pp.key || '').trim());
+  if (params.length === 0) return '<span style="flex:1;color:var(--text-muted);font-size:.78rem">该 Activity 无参数定义</span>';
+  const opts = params.map(pp => {
+    const pk = pp.key || '';
+    const pLabel = pp.label || '';
+    const label = pk + (pLabel ? ' (' + pLabel + ')' : '');
+    return '<option value="' + escAttr(pk) + '"' + (pk === selectedField ? ' selected' : '') + '>' + escHtml(label) + '</option>';
+  }).join('');
   return '<select class="arg-refield" onchange="onOutputRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
       '<option value="">— 选择参数 key —</option>' + opts + '</select>';
 }
@@ -4078,6 +4160,37 @@ function onOutputRefChange(sel) {
   const fInput = wrap.querySelector('.arg-refield');
   if (pSel && tSel) {
     finalInput.value = outputBuildRefPath(pSel.value, tSel.value, fInput ? fInput.value : '');
+  }
+  // 自动补全 key/label（仅当为空）：选择 Activity 或具体返回值字段后，用对应字段名/中文名填充
+  const autoPrevSel = wrap.querySelector('.arg-ref');
+  if (autoPrevSel && autoPrevSel.value) {
+    const autoPrevs = outputAllActivities();
+    const autoCur = autoPrevs.find(p => p.id === autoPrevSel.value) || null;
+    if (autoCur) {
+      const autoKeyInp = wrap.querySelector('.output-key');
+      const autoLabelInp = wrap.querySelector('.output-label');
+      if (autoKeyInp || autoLabelInp) {
+        const autoF = fInput ? (fInput.value || '') : '';
+        const autoType = tSel ? (tSel.value || '') : '';
+        // 仅选了具体字段（返回值.字段 / 参数值.字段）才自动填充；选「返回值整体」不填充
+        if (!autoF) return;
+        let fk = '', fl = '';
+        if (autoType === 'arguments') {
+          const pp = (autoCur.params || []).find(p => (p.key || '') === autoF);
+          if (!pp) return;
+          fk = pp.key || '';
+          fl = pp.label || '';
+        } else {
+          // 默认值（未显式类型时按返回值字段处理）
+          const rv = (autoCur.returnValues || []).find(r => (r.name || '') === autoF);
+          if (!rv) return;
+          fk = rv.name || '';
+          fl = rv.label || rv.name || '';
+        }
+        if (autoKeyInp && !autoKeyInp.value.trim()) autoKeyInp.value = fk;
+        if (autoLabelInp && !autoLabelInp.value.trim()) autoLabelInp.value = fl;
+      }
+    }
   }
 }
 
@@ -6983,7 +7096,9 @@ function argRenderRefFieldSlot(prevs, prevId, type, selectedField) {
       // return_value 的 key 为空表示返回活动返回的全部内容：选中后等价「返回值整体」，
       // 选项 value 置空，拼路径时回退为 {{id.responses}}（与返回全部数据完全一致）
       const val = rvKey === '' ? '' : rvName;
-      const label = rvName + (rvKey ? ' (' + rvKey + ')' : '');
+      // 选项文本括号里展示经 Activity 修改后的中文名（label/name），而非数据原始返回的 key
+      const dispName = rv.label || rv.name || '';
+      const label = rvName + (dispName ? ' (' + dispName + ')' : '');
       return '<option value="' + escAttr(val) + '"' + (val === selectedField ? ' selected' : '') + '>' + escHtml(label) + '</option>';
     }).join('');
     return '<select class="arg-refield" onchange="onRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
