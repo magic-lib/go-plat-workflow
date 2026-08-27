@@ -18,6 +18,7 @@ package commnode
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/magic-lib/go-plat-utils/plugins/activity"
 )
@@ -67,4 +68,34 @@ var defaultActivityMQExecutor ActivityMQExecutor
 // 传入 nil 可清除（回退到本地执行）。
 func SetActivityMQExecutor(executor ActivityMQExecutor) {
 	defaultActivityMQExecutor = executor
+}
+
+// ActivityStoreFetcher 获取 Activity 模板定义的能力抽象。
+// 定义在 commnode 包内（而非 workflow 包），以避免 commnode -> workflow(repo) 的循环依赖：
+// commnode 仅依赖此接口与自身轻量结构，真正的实现由 workflow.ActivityStore（repo.ActivityRepo）
+// 经 workflow 包适配后注入。
+// 由于节点编排里的 activity.Activity.Id 不能稳定对应 ActivityDef.ID，
+// 这里使用 ActNamespace + ActName（对应 activity 模板唯一键 uk_project_ns_name）来定位模板，
+// 从而拿到 return_values 以构造 RequestActivity 所需的 returnBindConfig。
+type ActivityStoreFetcher interface {
+	// GetByNamespaceName 按项目 + act_namespace + act_name 查询 activity 模板（唯一键定位）。
+	GetByNamespaceName(ctx context.Context, project, actNamespace, actName string) (*ActivityTemplateDef, error)
+}
+
+// ActivityTemplateDef commnode 仅需关心的 activity 模板片段：返回值映射配置。
+// 用 commnode 包内结构而非 workflow.ActivityDef，避免 commnode 反向依赖 workflow 包。
+type ActivityTemplateDef struct {
+	// ReturnValues 返回值设置列表（每一项从活动返回值 map 中提取指定 key 重命名输出），JSON 原始串。
+	ReturnValues json.RawMessage `json:"return_values"`
+}
+
+// defaultActivityStore 包级默认的 activity 模板仓储（由 workflow 包在初始化时注入）。
+var defaultActivityStore ActivityStoreFetcher
+
+// SetActivityStore 注入（或清空）包级默认 activity 模板仓储。
+// workflow 包在构造 WorkflowService（持有 ActivityRepo）时应调用此方法，
+// 使 ActivityNode 在执行单个 Activity 时能查到模板的 return_values 并传入 RequestActivity。
+// 传入 nil 可清除（此时 returnBindConfig 回退为 nil）。
+func SetActivityStore(store ActivityStoreFetcher) {
+	defaultActivityStore = store
 }

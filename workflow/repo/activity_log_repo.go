@@ -81,8 +81,14 @@ func (r *ActivityLogRepo) ListByActivity(ctx context.Context, project, actName s
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
+	// 排序：指定 trace_id 时按自增 id 升序（时间正序，便于按执行链路顺序查看）；
+	// 未指定时按 id 降序（时间倒序，便于查看最新日志）。
+	order := "id DESC"
+	if filter != nil && filter.TraceID != "" {
+		order = "id ASC"
+	}
 	var modelsList []models.ActivityLogModel
-	err := query.Order("id DESC").
+	err := query.Order(order).
 		Limit(filterLimit(filter)).
 		Offset(filterOffset(filter)).
 		Find(&modelsList).Error

@@ -22,6 +22,13 @@ const (
 	hostPortKey = "host_port"
 )
 
+type ReturnValue struct {
+	Name  string `json:"name,omitempty"`
+	Label string `json:"label,omitempty"`
+	Key   string `json:"key,omitempty"`
+	Type  string `json:"type,omitempty"`
+}
+
 // candidateConfigPaths 默认配置文件候选路径（按顺序尝试，存在即用）。
 // 1) 可执行文件同级的 config/app.yaml
 // 2) 可执行文件同级的 workflow/etc/app.yaml

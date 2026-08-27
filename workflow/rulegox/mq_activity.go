@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
+	"github.com/magic-lib/go-plat-workflow/workflow/config"
+	"github.com/samber/lo"
 	"net/http"
 	"strconv"
 	"sync"
@@ -359,7 +362,8 @@ func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName
 }
 
 // RequestActivity 订阅指定 topic 并注册处理函数。
-func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, params any, headers http.Header) (*httputil.CommResponse, error) {
+func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, params any, headers http.Header,
+	returnValues []*config.ReturnValue) (*httputil.CommResponse, error) {
 	if act == nil {
 		return nil, fmt.Errorf("activity is nil")
 	}
@@ -387,6 +391,34 @@ func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, 
 	if err != nil {
 		return nil, err
 	}
+	// 需要处理返回值的类型
+	if len(returnValues) > 0 {
+		if cond.IsJsonMap(conv.String(data)) {
+			var argMap map[string]any
+			_ = conv.Unmarshal(data, &argMap)
+			// 字段转换
+			lo.ForEach(returnValues, func(returnValue *config.ReturnValue, index int) {
+				if one, ok := argMap[returnValue.Key]; ok {
+					var oneValue = one
+					if returnValue.Type != "" {
+						one2, ok2 := conv.ConvertForTypeString(returnValue.Type, one)
+						if ok2 {
+							oneValue = one2
+						}
+					}
+					if returnValue.Name != "" {
+						argMap[returnValue.Name] = oneValue
+					} else {
+						argMap[returnValue.Key] = oneValue
+					}
+				}
+			})
+
+			resp.Data = argMap
+			return resp, nil
+		}
+	}
+
 	// 需要对返回值类型进行判断，然后进行转换
 	resp.Data = data
 	return resp, nil

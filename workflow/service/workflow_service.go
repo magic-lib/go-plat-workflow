@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
-	"github.com/magic-lib/go-plat-utils/logs"
 	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/samber/lo"
 	"io"
@@ -36,8 +35,6 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"github.com/rulego/rulego/api/types"
 )
-
-var MysqlLogger logs.ILogger
 
 // WorkflowService 工作流编排服务，整合节点管理、子链管理、DSL 组装和引擎执行。
 // 所有操作都限定在指定的 project 内。
@@ -129,6 +126,9 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	envConfigRepo := repo.NewEnvConfigRepo(db)
 	nodeTestRecordRepo := repo.NewNodeTestRecordRepo(db)
 	activityRepo := repo.NewActivityRepo(db)
+	// 将 activity 模板仓储注入 commnode 组件，使节点执行单个 Activity 时能按
+	// ActNamespace+ActName 反查模板的 return_values，正确构造 RequestActivity 的 returnBindConfig。
+	workflow.SetCommnodeActivityStore(activityRepo)
 	activityTestRecordRepo := repo.NewActivityTestRecordRepo(db)
 	activityLogRepo := repo.NewActivityLogRepo(db)
 	nodeLogRepo := repo.NewNodeLogRepo(db)
@@ -766,7 +766,7 @@ const executeRootChainByIDTimeout = 300000 * time.Second
 
 // ExecuteRootChainByID 基于已解析的根链 DSL（ruleChain）同步执行流程。
 // 从根链 flow 节点提取子链 ID 并通过 project 查询子链 DSL，组装 ActivityFlowConfig 后
-// 调用 rulegox.StartActivityFlow 同步执行，返回 FlowContext 序列化结果。
+// 调用 rulegox.StartWorkFlow 同步执行，返回 FlowContext 序列化结果。
 func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *types.RuleChain, jsonPayload map[string]any, project, envName, traceId string, activityFlowConfig *rulegox.ActivityFlowConfig) (*paramx.FlowContext, error) {
 	// 整体执行加超时，防止流程长时间不返回导致阻塞
 	execCtx, cancel := context.WithTimeout(ctx, executeRootChainByIDTimeout)
@@ -847,7 +847,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		resultErr = err
 		close(done)
 	}
-	if err := rulegox.StartActivityFlow(execCtx, actConfig, &metaData); err != nil {
+	if err := rulegox.StartWorkFlow(execCtx, actConfig, &metaData); err != nil {
 		return nil, err
 	}
 
@@ -1120,7 +1120,7 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 		NodeDef:     nodeDef,
 		InputParams: req.InputParams,
 	}
-	resp, err := s.mqExecutor.TestNode(ctx, payload)
+	resp, inputParams, err := s.mqExecutor.TestNode(ctx, payload)
 
 	// 6. 整理结果
 	result := &TestNodeResult{}
@@ -1148,7 +1148,7 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 			NodeName:    nodeDef.Name,
 			EnvName:     req.EnvName,
 			TraceID:     result.TraceID,
-			InputParams: mustJSON(req.InputParams),
+			InputParams: mustJSON(inputParams),
 			EnvVars:     mustJSON(envVars),
 			Status:      result.Status,
 			Result:      result.Result,

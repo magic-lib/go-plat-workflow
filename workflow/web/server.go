@@ -9,6 +9,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/logs"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"io/fs"
 	"net/http"
@@ -1321,7 +1322,7 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err != nil {
-		service.MysqlLogger.Error(&logs.LogData{
+		engine.MysqlLogger.Error(&logs.LogData{
 			LogCommData: logComm,
 			Message:     []any{err.Error()},
 		}, logData, map[string]any{
@@ -1340,7 +1341,7 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	service.MysqlLogger.Info(&logs.LogData{
+	engine.MysqlLogger.Info(&logs.LogData{
 		LogCommData: logComm,
 	}, logData, map[string]any{
 		"code": 0,
@@ -1421,10 +1422,11 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 		resp.Message = err.Error()
 		resp.InternalMsg = err.Error()
 
-		service.MysqlLogger.Error(&logs.LogData{
+		engine.MysqlLogger.Error(&logs.LogData{
 			LogCommData: logComm,
 			Message:     []any{err.Error()},
 		}, resp, logData)
+
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -1432,9 +1434,10 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 	resp.Code = 0
 	resp.Message = "success"
 
-	service.MysqlLogger.Info(&logs.LogData{
+	engine.MysqlLogger.Info(&logs.LogData{
 		LogCommData: logComm,
 	}, resp, logData)
+
 	writeJSON(w, http.StatusOK, resp)
 }
 

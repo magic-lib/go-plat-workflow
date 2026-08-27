@@ -632,6 +632,9 @@ type ActivityStore interface {
 	Create(ctx context.Context, def *ActivityDef) error
 	// GetByID 按项目+activity ID 查询
 	GetByID(ctx context.Context, project, activityID string) (*ActivityDef, error)
+	// GetByNamespaceName 按项目 + act_namespace + act_name 查询 activity 模板（唯一键定位）。
+	// 节点编排里的 activity.Activity.Id 不能稳定对应 ActivityDef.ID，故使用 namespace+name 反查。
+	GetByNamespaceName(ctx context.Context, project, actNamespace, actName string) (*ActivityDef, error)
 	// List 列出指定项目下所有启用的 activity
 	List(ctx context.Context, project string) ([]*ActivityDef, error)
 	// Update 更新 activity
@@ -910,6 +913,8 @@ type NodeLogDef struct {
 	DurationMs int64  `json:"duration_ms"`
 	// Payload node 执行的全部入参（全局参数 + 本节点参数），JSON 字符串
 	Payload json.RawMessage `json:"payload"`
+	// Arguments node 执行的输入参数（取自 payload.arguments），JSON 字符串，便于按 node 直接查看入参
+	Arguments json.RawMessage `json:"arguments"`
 	// Result node 执行后的返回值（按本节点 responses 配置提取），JSON 字符串
 	Result json.RawMessage `json:"result"`
 	// ErrorMsg 执行错误信息（成功为空）

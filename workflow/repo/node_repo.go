@@ -51,7 +51,7 @@ func (r *NodeRepo) BatchUpsert(ctx context.Context, defs []*workflow.NodeDef) er
 		modelsList = append(modelsList, m)
 	}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "project"}, {Name: "node_id"}},
+		Columns: []clause.Column{{Name: "project"}, {Name: "node_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"name", "type", "debug_mode", "configuration",
 			"additional_info", "params", "outputs", "kind", "category", "description", "status", "version",

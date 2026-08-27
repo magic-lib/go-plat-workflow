@@ -36,7 +36,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/logs"
 	"github.com/magic-lib/go-plat-utils/logs/mysqllog"
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
-	"github.com/magic-lib/go-plat-workflow/workflow/service"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"os"
 	"os/signal"
 	"strings"
@@ -97,7 +97,11 @@ func main() {
 	sqlDB.SetMaxOpenConns(50)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	service.MysqlLogger, err = initMysqlLogger(sqlDB)
+	engine.MysqlLogger, err = initMysqlLogger(sqlDB)
+	if engine.MysqlLogger == nil {
+		engine.MysqlLogger = logs.NewPrintLogger(logs.INFO)
+	}
+
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to init mysql logger")
 	}

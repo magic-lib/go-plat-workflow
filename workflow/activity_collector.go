@@ -299,6 +299,15 @@ func (c *ActivityCollector) drainNodeLogKey(cli *redis.Client, key string) {
 		if rec.Timestamp == 0 {
 			rec.Timestamp = time.Now().Unix()
 		}
+		// 从 payload 提取 arguments 作为输入参数单独存字段，便于按 node 直接查看入参
+		if len(rec.Arguments) == 0 && len(rec.Payload) > 0 {
+			var p map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Payload, &p); err == nil {
+				if args, ok := p["arguments"]; ok {
+					rec.Arguments = args
+				}
+			}
+		}
 		if err := c.nodeLogRepo.Create(context.Background(), &rec); err != nil {
 			log.Warn().Err(err).Msg("activity collector: save node log failed")
 		}

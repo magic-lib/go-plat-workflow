@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/logs"
 	"strings"
 	"sync"
 
@@ -20,6 +21,8 @@ var (
 	// ErrExecutionFailed 流程执行失败
 	ErrExecutionFailed = fmt.Errorf("workflow/engine: execution failed")
 )
+
+var MysqlLogger logs.ILogger
 
 // RootChainStore 根规则链仓储接口（engine 包内定义，避免循环依赖）。
 type RootChainStore interface {

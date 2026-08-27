@@ -9,7 +9,9 @@ import (
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/templates"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
+	"github.com/samber/lo"
 	"log"
 	"net/http"
 	"time"
@@ -24,6 +26,34 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
 	"github.com/rulego/rulego/api/types"
 )
+
+// activityStoreForCommnode commnode 适配所需的最小仓储接口（仅取模板 return_values 用）。
+// 用窄接口而非完整 workflow.ActivityStore，以兼容 repo.ActivityRepo（其 Create 返回 (uint,error) 不匹配 ActivityStore 接口）。
+type activityStoreForCommnode interface {
+	GetByNamespaceName(ctx context.Context, project, actNamespace, actName string) (*ActivityDef, error)
+}
+
+// commnodeActivityStoreAdapter 将 activityStoreForCommnode 适配为 commnode.ActivityStoreFetcher，
+// 隔离 commnode 对 workflow 包的依赖（避免 commnode -> workflow 循环）。
+type commnodeActivityStoreAdapter struct {
+	store activityStoreForCommnode
+}
+
+func (a commnodeActivityStoreAdapter) GetByNamespaceName(ctx context.Context, project, actNamespace, actName string) (*commnode.ActivityTemplateDef, error) {
+	def, err := a.store.GetByNamespaceName(ctx, project, actNamespace, actName)
+	if err != nil {
+		return nil, err
+	}
+	return &commnode.ActivityTemplateDef{ReturnValues: def.ReturnValues}, nil
+}
+
+// SetCommnodeActivityStore 将 activity 模板仓储注入到 commnode 组件，
+// 使 ActivityNode 在执行单个 Activity 时能按 ActNamespace+ActName 反查模板的 return_values，
+// 进而正确构造 RequestActivity 所需的 returnBindConfig。
+// 应在 WorkflowService 初始化时（持有 ActivityRepo 后）调用一次。
+func SetCommnodeActivityStore(store activityStoreForCommnode) {
+	commnode.SetActivityStore(commnodeActivityStoreAdapter{store: store})
+}
 
 // MQ Topic 定义（分布式 worker 订阅这些 topic 执行对应任务）。
 const (
@@ -140,22 +170,24 @@ type TestNodeResultData struct {
 	RelationType string `json:"relation_type"`
 	// TraceID 本次测试的分布式追踪 ID
 	TraceID string `json:"trace_id"`
-	// DurationMs 节点真实执行耗时（毫秒），即 rulegox.StartActivityFlow 调用本身的耗时
+	// DurationMs 节点真实执行耗时（毫秒），即 rulegox.StartWorkFlow 调用本身的耗时
 	DurationMs int64 `json:"duration_ms"`
 }
 
 // TestNode 通过 MQ 同步调用分布式 worker 测试单个节点，返回 worker 执行结果。
-func (e *MQExecutor) TestNode(ctx context.Context, payload *TestNodePayload) (any, error) {
+func (e *MQExecutor) TestNode(ctx context.Context, payload *TestNodePayload) (any, map[string]any, error) {
 	if payload == nil || payload.NodeDef == nil {
-		return nil, fmt.Errorf("payload or nodeDef is required")
+		return nil, nil, fmt.Errorf("payload or nodeDef is required")
 	}
 	if payload.NodeDef.Type == common.CondSwitchNodeTypeName {
-		return e.testNodeForCondSwitch(ctx, payload)
+		resp, err := e.testNodeForCondSwitch(ctx, payload)
+		return resp, payload.InputParams, err
 	}
 	if payload.NodeDef.Type == common.ActivityNodeTypeName {
-		return e.testNodeForActivity(ctx, payload)
+		resp, err := e.testNodeForActivity(ctx, payload)
+		return resp, payload.InputParams, err
 	}
-	return nil, fmt.Errorf("unsupported node type: %s", payload.NodeDef.Type)
+	return nil, nil, fmt.Errorf("unsupported node type: %s", payload.NodeDef.Type)
 }
 
 // RequestActivity 通过 MQ 同步调用分布式 worker 执行指定 activity，返回 worker 执行结果。
@@ -363,7 +395,7 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 	}
 
 	execStart := time.Now()
-	if err := rulegox.StartActivityFlow(ctx, flowCfg, metaData); err != nil {
+	if err := rulegox.StartWorkFlow(ctx, flowCfg, metaData); err != nil {
 		return nil, err
 	}
 	execMs := time.Since(execStart).Milliseconds()
@@ -379,7 +411,7 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 }
 
 // testNodeForActivity 本地利用被测节点的全部配置，构建一个「仅包含该 ActivityNode」的单节点规则链，
-// 交由 rulegox.StartActivityFlow 在本进程内同步执行：
+// 交由 rulegox.StartWorkFlow 在本进程内同步执行：
 // 前端传入的 InputParams 作为流程入参（Variables），
 // 执行结束后通过 EndFunc 回调拿到 ActivityNode 写回的 ParamCtx，作为测试结果返回。
 // 不再走 MQ 远程 worker。
@@ -423,6 +455,21 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		relationTypeString string
 		execErr            error
 	)
+
+	if len(payload.NodeDef.Params) > 0 {
+		var bindConfig = make([]*param.BindConfig, 0)
+		err := conv.Unmarshal(string(payload.NodeDef.Params), &bindConfig)
+		if err == nil && len(bindConfig) > 0 {
+			ruleObj := templates.NewRuleExprEngine()
+			lo.ForEach(bindConfig, func(item *param.BindConfig, index int) {
+				if conv.String(item.Value) == "" {
+					item.Value = payload.InputParams[item.Key]
+				}
+			})
+			payload.InputParams = commnode.GetActivityParam(ruleObj, payload.InputParams, bindConfig)
+		}
+	}
+
 	flowCtx := paramx.NewFlowContext(ruleNode.Id, id.NewUUID(), payload.InputParams)
 
 	flowCfg := &rulegox.ActivityFlowConfig{
@@ -456,13 +503,22 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	}
 
 	execStart := time.Now()
-	if err = rulegox.StartActivityFlow(ctx, flowCfg, metaData); err != nil {
+	if err = rulegox.StartWorkFlow(ctx, flowCfg, metaData); err != nil {
 		return nil, err
 	}
 	execMs := time.Since(execStart).Milliseconds()
 	if execErr != nil {
 		return nil, execErr
 	}
+
+	arguments := make(map[string]any)
+	var response any
+	for _, v := range resultParam.Steps {
+		arguments = v.Arguments
+		response = v.Responses
+	}
+	resultParam.Arguments = arguments
+	resultParam.Responses = response
 	return &TestNodeResultData{
 		Data:         resultParam,
 		RelationType: relationTypeString,

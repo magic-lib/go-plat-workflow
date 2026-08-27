@@ -8,9 +8,11 @@ import (
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 	"github.com/samber/lo"
+	"go.uber.org/zap"
 	"log"
 )
 
@@ -36,7 +38,7 @@ type ActivityMetaData struct {
 	RedisConfig *conn.Connect `json:"redis_config,omitempty"`
 }
 
-func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData *ActivityMetaData) error {
+func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData *ActivityMetaData) error {
 	if actConfig == nil {
 		return fmt.Errorf("参数不能为空")
 	}
@@ -66,6 +68,10 @@ func StartActivityFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaD
 
 	// 全局配置
 	config := rulego.NewConfig()
+
+	config.OnDebug = func(chainId string, flowType string, nodeId string, msg types.RuleMsg, relationType string, err error) {
+		engine.MysqlLogger.Debug("OnDebug", zap.String("chainId", chainId), zap.String("flowType", flowType), zap.String("nodeId", nodeId), zap.Any("msg", msg), zap.String("relationType", relationType), zap.Error(err))
+	}
 
 	// 如果有结束节点，则开启默认失败回调
 	hasEndNodeTag := false

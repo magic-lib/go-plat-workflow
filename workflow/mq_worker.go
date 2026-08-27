@@ -10,6 +10,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/utils"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
+	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
 	"github.com/samber/lo"
@@ -54,6 +55,11 @@ func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 		}
 		_ = conv.Unmarshal(retString, &retMap)
 	}
+	var returnValues = make([]*config.ReturnValue, 0)
+	if len(actDef.ReturnValues) > 0 {
+		// 名字转换
+		_ = conv.Unmarshal(string(actDef.ReturnValues), &returnValues)
+	}
 
 	if len(actDef.Arguments) > 0 {
 		var bindConfig = make([]*param.BindConfig, 0)
@@ -74,7 +80,7 @@ func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 		ActName:      actDef.ActName,
 		ArgTemplate:  actDef.ArgTemplate,
 		Responses:    retMap,
-	}, params, headers)
+	}, params, headers, returnValues)
 
 	return resp, params, err
 }

@@ -58,6 +58,21 @@ func (r *ActivityRepo) GetByID(ctx context.Context, project, activityID string) 
 	return m.ToDef(), nil
 }
 
+// GetByNamespaceName 按项目 + act_namespace + act_name 查询 activity 模板（唯一键定位）。
+func (r *ActivityRepo) GetByNamespaceName(ctx context.Context, project, actNamespace, actName string) (*workflow.ActivityDef, error) {
+	var m models.ActivityModel
+	err := r.db.WithContext(ctx).
+		Where("project = ? AND act_namespace = ? AND act_name = ?", project, actNamespace, actName).
+		First(&m).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, workflow.ErrActivityNotFound
+		}
+		return nil, err
+	}
+	return m.ToDef(), nil
+}
+
 // List 列出指定项目下所有启用的 activity。
 func (r *ActivityRepo) List(ctx context.Context, project string) ([]*workflow.ActivityDef, error) {
 	var modelsList []models.ActivityModel

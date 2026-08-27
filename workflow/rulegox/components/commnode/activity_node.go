@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
+	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"go.uber.org/multierr"
 	"log"
@@ -173,6 +175,13 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			err := fmt.Errorf("panic:%v", r)
+			ctx.TellFailure(msg, err)
+		}
+	}()
+
 	// 解析消息中的全局参数
 	allParamStr := msg.GetData()
 	allParam := new(paramx.FlowContext)
@@ -234,7 +243,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	nodeStep := &paramx.Step{
 		Arguments:   stepFlowCtx.Arguments,
 		Responses:   nil,
-		Status:      "",
+		Status:      paramx.StepStatusPending,
 		Error:       nil,
 		StartTimeMs: stepFlowCtx.Meta.StartTimeMs,
 		EndTimeMs:   time.Now().UnixMilli(),
@@ -251,7 +260,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		msg.SetData(conv.String(allParam))
 		log.Printf("[activityNode] node=%s 执行失败 error=%s", currNodeId, err.Error())
 		// 上报 node 失败日志（含入参），error_msg 填充失败原因，payload 为全部入参
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParam, stepFlowCtx.Arguments, err)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParam, stepFlowCtx.Arguments, stepFlowCtx.Responses, err)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
@@ -262,12 +271,28 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	allDataMap, err := stepFlowCtx.ToMaps()
 	if err == nil {
 		dataMap := x.getActivityParam(allDataMap, x.Configuration.Responses)
-		nodeStep.Responses = dataMap
+		if len(dataMap) == 0 {
+			// 如果没有定义，就将所有activity的返回值进行合并输出
+			newDataMap := make(map[string]any)
+			for _, oneStep := range stepFlowCtx.Steps {
+				if cond.IsJsonMap(conv.String(oneStep.Responses)) {
+					newDataMap2 := make(map[string]any)
+					_ = conv.Unmarshal(conv.String(oneStep.Responses), &newDataMap2)
+					for k, v := range newDataMap2 {
+						newDataMap[k] = v
+					}
+				}
+			}
+			nodeStep.Responses = newDataMap
+		} else {
+			nodeStep.Responses = dataMap
+		}
+
 		nodeStep.Status = paramx.StepStatusSuccess
 		allParam.SetStep(currNodeId, nodeStep)
 		msg.SetData(conv.String(allParam))
 		// 上报 node 返回值日志（落库 wf_node_logs）
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success, allParam, dataMap, nil)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success, allParam, stepFlowCtx.Arguments, dataMap, nil)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
@@ -275,42 +300,53 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
-	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "response", "error", types.Success, allParam, allParam, err)
+	dataMap := x.getActivityParam(allDataMap, x.Configuration.Responses)
+	nodeStep.Responses = dataMap
+	nodeStep.Status = paramx.StepStatusSuccess
+	allParam.SetStep(currNodeId, nodeStep)
+	msg.SetData(conv.String(allParam))
+
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "response", "error", types.Success, allParam, stepFlowCtx.Arguments, dataMap, err)
 	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli
 	}
-
-	msg.SetData(conv.String(allParam))
 	ctx.TellSuccess(msg)
 }
 
-// pushNodeLog 将 node 的入参/返回值作为运行日志记录到 redis（workflow:node:log:<namespace>），
-// nodeLogRecord node 运行日志上报结构（JSON 字段名与 workflow.NodeLogDef 保持一致，
-// 便于管理端收集器直接反序列化为 workflow.NodeLogDef 落库 wf_node_logs）。
-// 定义在 commnode 包内以避免反向 import workflow（workflow 已 import commnode，会产生循环依赖）。
-type nodeLogRecord struct {
-	Project      string          `json:"project"`
-	Env          string          `json:"env"`
-	NodeID       string          `json:"node_id"`
-	NodeName     string          `json:"node_name"`
-	EventID      string          `json:"event_id"`
-	Level        string          `json:"level"`
-	Timestamp    int64           `json:"timestamp"`
-	DurationMs   int64           `json:"duration_ms"`
-	Payload      json.RawMessage `json:"payload"`
-	Result       json.RawMessage `json:"result"`
-	ErrorMsg     string          `json:"error_msg"`
-	Error        string          `json:"error"`
-	TraceID      string          `json:"trace_id"`
-	RootChainID  string          `json:"root_chain_id"`
-	SpanID       string          `json:"span_id"`
-	RelationType string          `json:"relation_type"`
-	CreatedAt    time.Time       `json:"created_at"`
+type NodeLogDef struct {
+	ID         uint   `json:"id"`
+	Project    string `json:"project"`
+	Env        string `json:"env"`
+	NodeID     string `json:"node_id"`
+	NodeName   string `json:"node_name"`
+	EventID    string `json:"event_id"`
+	Level      string `json:"level"`
+	Timestamp  int64  `json:"timestamp"`
+	DurationMs int64  `json:"duration_ms"`
+	// Payload node 执行的全部入参（全局参数 + 本节点参数），JSON 字符串
+	Payload json.RawMessage `json:"payload"`
+	// Arguments node 执行的输入参数（取自 payload.arguments），JSON 字符串，便于按 node 直接查看入参
+	Arguments json.RawMessage `json:"arguments"`
+	// Result node 执行后的返回值（按本节点 responses 配置提取），JSON 字符串
+	Result json.RawMessage `json:"result"`
+	// ErrorMsg 执行错误信息（成功为空）
+	ErrorMsg string `json:"error_msg"`
+	// Error 兼容 worker/组件上报时使用的 "error" 字段名
+	Error string `json:"error"`
+	// TraceID 本次执行的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
+	TraceID     string `json:"trace_id"`
+	RootChainID string `json:"root_chain_id"`
+	SpanID      string `json:"span_id"`
+	// RelationType 该 node 执行完成后往下传递的连接类型（relationType），
+	// 对应 rulego 的 TellSuccess/TellFailure/TellNext 等，取值如 Success/Failure/True/False 或自定义字符串。
+	// 用于回查本次 node 走了哪条分支链路。
+	RelationType string    `json:"relation_type"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // 由管理端收集器消费后落库 wf_node_logs，便于在前端查看每个 node 的运行情况。
 // redis 客户端基于 actMetaData.RedisConfig 惰性建立并缓存在组件实例上；配置缺失时静默跳过。
-func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level, relationType string, payload, result any, runErr error) (*redis.Client, error) {
+func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level, relationType string, payload any, arguments map[string]any, result any, runErr error) (*redis.Client, error) {
 	if metaData == nil || metaData.RedisConfig == nil {
 		return nil, nil
 	}
@@ -322,7 +358,7 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 		nodeLogCli = cli
 	}
 	now := time.Now()
-	rec := nodeLogRecord{
+	rec := NodeLogDef{
 		Project:      metaData.Project,
 		Env:          metaData.Env,
 		NodeID:       nodeID,
@@ -332,6 +368,7 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 		Level:        level,
 		Timestamp:    now.Unix(),
 		Payload:      json.RawMessage(conv.String(payload)),
+		Arguments:    json.RawMessage(conv.String(arguments)),
 		Result:       json.RawMessage(conv.String(result)),
 		TraceID:      metaData.TraceId,
 		RootChainID:  metaData.RootChainID,
@@ -458,7 +495,19 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 			SpanID:      newAct.Id,
 			NodeSpanID:  nodeSpanId,
 		}
-		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil))
+		// 构造 returnBindConfig：从 activity 模板定义（按 ActNamespace+ActName 唯一确定）的
+		// return_values 解析得到，用于 RequestActivity 从 worker 返回值中按配置提取/重命名。
+		// 节点编排里的 activity.Activity.Id 不能稳定对应 ActivityDef.ID，故使用 namespace+name 反查。
+		// 若 store 未注入或无匹配模板，则回退为 nil（与历史行为一致）。
+		var returnValues = make([]*config.ReturnValue, 0)
+		if newAct.ActNamespace != "" && newAct.ActName != "" &&
+			defaultActivityStore != nil && metaData.Project != "" {
+			if actDef, fErr := defaultActivityStore.GetByNamespaceName(ctx.GetContext(), metaData.Project, newAct.ActNamespace, newAct.ActName); fErr == nil && len(actDef.ReturnValues) > 0 {
+				_ = conv.Unmarshal(string(actDef.ReturnValues), &returnValues)
+			}
+		}
+
+		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil), returnValues)
 		if err != nil {
 			return err
 		}

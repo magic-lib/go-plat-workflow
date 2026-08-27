@@ -1175,7 +1175,7 @@ function addActivityItemRow(item, stage) {
   try { rvList = cacheAct && cacheAct.return_values ? (typeof cacheAct.return_values === 'string' ? JSON.parse(cacheAct.return_values) : cacheAct.return_values) : []; } catch(e) { rvList = []; }
   if (Array.isArray(rvList) && rvList.length > 0) {
     rvHtml = rvList.map(rv => {
-      const nm = escHtml(rv.name || '');
+      const nm = escHtml(rv.label || rv.name || '');
       const ky = rv.key ? (' ← ' + escHtml(rv.key)) : '';
       const tp = rv.type ? (' <span style="color:var(--text-muted)">(' + escHtml(rv.type) + ')</span>') : '';
       return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:1px 7px;border:1px solid var(--border);border-radius:10px;background:#eef6ff;color:#0e7490;font-family:monospace;font-size:.72rem">' + nm + ky + tp + '</span>';
@@ -1453,8 +1453,10 @@ function renderActivityItemParams(row) {
       }
       const opts = rvs.map(rv => {
         const rvName = rv.name || '';
+        const rvLabel = rv.label || rv.name || '';
         const rvKey = rv.key || '';
-        const label = rvName + (rvKey ? ' (' + rvKey + ')' : '');
+        // 中文显示优先用 label，引用路径 value 仍用 name（代码名）
+        const label = rvLabel + (rvKey ? ' (' + rvKey + ')' : '');
         return '<option value="' + escAttr(rvName) + '"' + (rvName === selectedField ? ' selected' : '') + '>' + escHtml(label) + '</option>';
       }).join('');
       return '<select class="arg-refield" onchange="onRefChange(this)" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
@@ -2155,7 +2157,7 @@ function openActivityModal(act) {
   let rvs = act ? act.return_values : null;
   if (typeof rvs === 'string') { try { rvs = JSON.parse(rvs); } catch(e) { rvs = null; } }
   if (Array.isArray(rvs) && rvs.length > 0) {
-    rvs.forEach(it => addReturnValueRow(it.name, it.key || '', it.type || ''));
+    rvs.forEach(it => addReturnValueRow(it.name, it.key || '', it.type || '', it.label || ''));
   }
   // 异步加载测试成功记录的返回 map 所有 key，回填 key 下拉选项
   loadReturnValueKeyOptions(act ? act.activity_id : '');
@@ -3083,16 +3085,32 @@ function renderNodeLogItem(r) {
     (r.trace_id ? '<span class="log-meta">trace_id=' + esc(r.trace_id) + '</span>' : ''),
     (r.relation_type ? '<span class="log-meta log-relation">relation=' + esc(r.relation_type) + '</span>' : ''),
   ].join(' ');
-  // request/fail 展示入参（payload），response 展示返回值（result）
+  // request/fail/start 展示入参（取 payload 内的 arguments 字段），response 展示返回值（result）
   let body = '';
   const showPayload = (r.event_id === 'request' || r.event_id === 'fail' || r.event_id === 'start');
-  const key = showPayload ? 'payload' : 'result';
-  const raw = r[key];
-  if (raw) {
-    let pretty = raw;
-    try { pretty = JSON.stringify(JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)), null, 2); } catch (e) {}
-    body = '<div class="log-json"><div class="log-json-label">' + (showPayload ? '入参' : '返回值') +
-      '</div><pre>' + esc(pretty) + '</pre></div>';
+  if (showPayload) {
+    // 入参：从 payload.arguments 中取（payload 可能是字符串或对象）
+    let args = null;
+    try {
+      const p = (typeof r.payload === 'string') ? JSON.parse(r.payload) : r.payload;
+      if (p && typeof p === 'object' && p.arguments !== undefined) {
+        args = p.arguments;
+      } else if (p && typeof p === 'object') {
+        args = p; // 兼容没有 arguments 包裹的情况
+      }
+    } catch (e) { args = r.payload; }
+    if (args !== null && args !== undefined && !(typeof args === 'object' && Object.keys(args).length === 0)) {
+      let pretty = args;
+      try { pretty = JSON.stringify(typeof args === 'string' ? JSON.parse(args) : args, null, 2); } catch (e) {}
+      body = '<div class="log-json"><div class="log-json-label">参数 (arguments)</div><pre>' + esc(pretty) + '</pre></div>';
+    }
+  } else {
+    const raw = r.result;
+    if (raw) {
+      let pretty = raw;
+      try { pretty = JSON.stringify(JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)), null, 2); } catch (e) {}
+      body = '<div class="log-json"><div class="log-json-label">返回值 (result)</div><pre>' + esc(pretty) + '</pre></div>';
+    }
   }
   if (r.error_msg) {
     body += '<div class="log-error-msg">错误: ' + esc(r.error_msg) + '</div>';
@@ -3600,13 +3618,15 @@ function collectParams() {
 
 // 将节点参数定义（params）按类型转换后写入 Configuration 第一层 arguments。
 // 对应后端 commnode.CommConfiguration.Arguments（[]*param.BindConfig），
-// 每项仅保留 key / value / policy 三个字段。
+// 每项保留 key / value / type / policy 字段；type 与 outputs 保持一致写入，
+// 供后端按类型计算（formula）及前端 checkAllNodesArguments 解析 {{arguments.xxx}} 入参。
 function paramsToBindConfigs(params) {
   return (params || [])
     .filter(p => p && p.key)
     .map(p => ({
       key: p.key,
       value: castParamValue(p.value, p.type),
+      type: p.type || '',
       policy: p.policy || 'frontend+'
     }));
 }
@@ -4221,7 +4241,7 @@ function renderReturnValueKeyOptions(row) {
   ).join('');
 }
 
-function addReturnValueRow(name, key, type) {
+function addReturnValueRow(name, key, type, label) {
   const container = document.getElementById('act-return-values-container');
   const emptyEl = document.getElementById('act-return-values-empty');
   if (emptyEl) emptyEl.style.display = 'none';
@@ -4237,6 +4257,7 @@ function addReturnValueRow(name, key, type) {
   row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px dotted #eef0f3';
   row.innerHTML = `
     <input class="rv-name" placeholder="返回值名称" value="${esc(name||'')}" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">
+    <input class="rv-label" placeholder="中文显示名（可选）" value="${esc(label||'')}" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">
     <input class="rv-key" placeholder="返回值 key（留空=返回所有内容，可手动输入）" value="${esc(key||'')}" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">
     <select class="rv-type" title="输出格式转换类型" style="flex:0 0 96px;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">${typeHTML}</select>
     <button class="btn-remove-param" onclick="removeReturnValueRow(this)" title="删除此返回值">&times;</button>
@@ -4260,10 +4281,12 @@ function collectReturnValues() {
   const list = [];
   rows.forEach(row => {
     const name = row.querySelector('.rv-name').value.trim();
+    const label = row.querySelector('.rv-label') ? row.querySelector('.rv-label').value.trim() : '';
     const key = row.querySelector('.rv-key').value;
     const type = row.querySelector('.rv-type') ? row.querySelector('.rv-type').value : '';
     if (!name) return; // 跳过未填名称的空行
-    list.push({ name: name, key: key || '', type: type || '' });
+    // label 缺省时回退为 name，保证后端 BindConfig.Label 始终有值（中文显示）
+    list.push({ name: name, label: label || name, key: key || '', type: type || '' });
   });
   return list;
 }
