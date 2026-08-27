@@ -1707,6 +1707,25 @@ async function saveNode() {
   //   params  -> configuration.arguments（param.BindConfig 数组：[{ key, value, policy }]）
   //   outputs -> configuration.responses（返回值定义数组：[{ key, label, type, source, value|ref }]）
   syncParamsToConfigArguments(body);
+  // 引用节点参数（ref_node）校验：本节点尚未定义任何参数时，若存在 ref_node 绑定则拦截保存，
+  // 避免用户遗漏参数配置（界面此时已提示"本节点未定义参数，无法引用"）。
+  if (nodeParamDefs().length === 0) {
+    let hasNodeRef = false;
+    if (body.type === 'custom/Activity') {
+      const stages = collectStages();
+      stages.forEach(s => s.forEach(it => {
+        const args = it.args || {};
+        Object.keys(args).forEach(k => { if ((args[k].source || '') === 'ref_node') hasNodeRef = true; });
+      }));
+    }
+    if (!hasNodeRef) {
+      collectOutputs().forEach(o => { if ((o.source || '') === 'ref_node') hasNodeRef = true; });
+    }
+    if (hasNodeRef) {
+      showToast('存在「引用节点参数」的绑定，但本节点尚未定义任何参数。请先在「节点参数」中设置参数后再保存', 'error');
+      return;
+    }
+  }
   // activity 类型：校验 activity 编排，并写入 Configuration
   if (body.type === 'custom/Activity') {
     if (typeof body.configuration !== 'object' || body.configuration === null) body.configuration = {};
@@ -2603,7 +2622,11 @@ async function openTestNodeModal(nodeId) {
   if (!p) { showToast('请先选择项目', 'error'); return; }
   if (!nodeId) return;
   document.getElementById('test-node-id').value = nodeId;
-  document.getElementById('test-node-modal-title').textContent = '测试 Node: ' + nodeId;
+  // 从节点缓存中反查中文名称，便于在标题处展示
+  let nodeTitleName = '';
+  const cachedNode = (window._nodesForEdit || []).find(n => n.node_id === nodeId);
+  if (cachedNode && cachedNode.name) nodeTitleName = cachedNode.name;
+  document.getElementById('test-node-modal-title').textContent = '测试 Node: ' + nodeId + (nodeTitleName ? '（' + nodeTitleName + '）' : '');
   document.getElementById('test-node-result').textContent = '点击"执行测试"后显示结果';
   document.getElementById('test-node-save').value = 'true';
 
@@ -2765,8 +2788,8 @@ async function loadNodeTestRecords(nodeId) {
           </span>
         </div>
         <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}${(r.duration_ms !== undefined && r.duration_ms !== null)?((' · 耗时: ' + formatDuration(r.duration_ms))):''}${r.trace_id?(' · trace_id: <code style="font-size:.72rem">'+esc(r.trace_id)+'</code>'):''}</div>
-        <div><b>入参:</b> <code style="font-size:.72rem">${esc(trunc(r.input_params||'',200))}</code></div>
-        <div><b>结果:</b> <code style="font-size:.72rem">${esc(trunc(r.result||r.error_msg||'',200))}</code></div>
+        <div><b>入参:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.input_params||'',200))}</code></div>
+        <div><b>结果:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.result||r.error_msg||'',200))}</code></div>
       </div>`).join('');
   } catch (e) {
     box.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-muted);font-size:.82rem">加载记录失败</div>';
@@ -3525,8 +3548,8 @@ async function loadActivityTestRecords(activityId) {
           <button class="btn btn-sm btn-danger edit-only" onclick="deleteActivityTestRecord('${esc(r.record_id)}','${esc(activityId)}')">删除</button>
         </div>
         <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}</div>
-        <div><b>入参:</b> <code style="font-size:.72rem">${esc(trunc(r.input_params||'',200))}</code></div>
-        <div><b>结果:</b> <code style="font-size:.72rem">${esc(trunc(r.result||r.error_msg||'',200))}</code></div>
+        <div><b>入参:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.input_params||'',200))}</code></div>
+        <div><b>结果:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.result||r.error_msg||'',200))}</code></div>
       </div>`).join('');
   } catch (e) {
     box.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-muted);font-size:.82rem">加载记录失败</div>';

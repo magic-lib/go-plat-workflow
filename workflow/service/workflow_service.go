@@ -20,7 +20,6 @@ import (
 
 	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/conv"
-	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -1127,17 +1126,17 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 	// 6. 整理结果
 	result := &TestNodeResult{}
 	var execMs int64
+	if resp != nil {
+		result.TraceID = resp.TraceID
+		execMs = resp.DurationMs
+	}
+
 	if err != nil {
 		result.Status = "fail"
 		result.ErrorMsg = err.Error()
 	} else {
 		result.Status = "success"
-		result.Result = extractResultData(resp)
-		// 提取本次测试的链路 ID 与节点真实执行耗时，便于回查与统计
-		if tnr, ok := resp.(*workflow.TestNodeResultData); ok {
-			result.TraceID = tnr.TraceID
-			execMs = tnr.DurationMs
-		}
+		result.Result = conv.String(resp.Response)
 	}
 	result.DurationMs = execMs
 
@@ -1251,25 +1250,6 @@ func (s *WorkflowService) GetRedisConnect(ctx context.Context, project, envName 
 		Password: redisCfg.Password,
 		Database: fmt.Sprintf("%d", redisCfg.DB),
 	}, nil
-}
-
-// extractResultData 从 MQ 响应中提取 Data 字段并序列化为 JSON 字符串。
-func extractResultData(resp any) string {
-	if resp == nil {
-		return ""
-	}
-	// TestNodeResultData 包装结构：取内部 Data
-	if tnr, ok := resp.(*workflow.TestNodeResultData); ok {
-		resp = tnr.Data
-	}
-	// mq.Response 结构：{error_msg, event, data}
-	if r, ok := resp.(*httputil.CommResponse); ok {
-		if r.Data != nil {
-			return conv.String(r.Data)
-		}
-		return conv.String(r)
-	}
-	return conv.String(resp)
 }
 
 func mustJSON(v interface{}) string {
@@ -1432,7 +1412,7 @@ func (s *WorkflowService) TestActivity(ctx context.Context, req *TestActivityReq
 		result.ErrorMsg = err.Error()
 	} else {
 		result.Status = "success"
-		result.Result = extractResultData(resp)
+		result.Result = conv.String(resp.Data)
 	}
 
 	// 7. 保存测试记录（除非显式关闭）

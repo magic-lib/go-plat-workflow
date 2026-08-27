@@ -193,8 +193,9 @@ func (e *MQExecutor) newMQClient(redisCfg *RedisConfig) (*mq.AsynqMessageQueue, 
 // 便于在测试记录中回查完整执行链路。
 type TestNodeResultData struct {
 	// Data 执行结果（FlowContext / map 等，由具体节点类型决定）
-	Data         any    `json:"data"`
-	RelationType string `json:"relation_type"`
+	Arguments    map[string]any `json:"arguments"`
+	Response     any            `json:"response"`
+	RelationType string         `json:"relation_type"`
 	// TraceID 本次测试的分布式追踪 ID
 	TraceID string `json:"trace_id"`
 	// DurationMs 节点真实执行耗时（毫秒），即 rulegox.StartWorkFlow 调用本身的耗时
@@ -202,7 +203,7 @@ type TestNodeResultData struct {
 }
 
 // TestNode 通过 MQ 同步调用分布式 worker 测试单个节点，返回 worker 执行结果。
-func (e *MQExecutor) TestNode(ctx context.Context, payload *TestNodePayload) (any, map[string]any, error) {
+func (e *MQExecutor) TestNode(ctx context.Context, payload *TestNodePayload) (*TestNodeResultData, map[string]any, error) {
 	if payload == nil || payload.NodeDef == nil {
 		return nil, nil, fmt.Errorf("payload or nodeDef is required")
 	}
@@ -350,7 +351,7 @@ func (e *MQExecutor) BuildWorker(env string, projectName string, redisCfg *Redis
 // 根据结果路由到 True/False 或指定分支。
 // 因此这里直接复用 condition_node 组件：将节点以单节点 RuleChain 形式加载到 rulego 引擎执行（ruleNode.Type 用 "condition"），
 // 并将前端传入的 InputParams 作为消息体传入（condSwitch 节点从 msg.Data 读取参数，而非 configuration.arguments）。
-func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNodePayload) (any, error) {
+func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNodePayload) (*TestNodeResultData, error) {
 	if payload.NodeDef.Type != common.CondSwitchNodeTypeName {
 		return nil, fmt.Errorf("node type is not %s: %s", common.CondSwitchNodeTypeName, payload.NodeDef.Type)
 	}
@@ -430,7 +431,8 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 		return nil, execErr
 	}
 	return &TestNodeResultData{
-		Data:         relationTypeString,
+		Arguments:    payload.InputParams,
+		Response:     relationTypeString,
 		RelationType: relationTypeString,
 		TraceID:      metaData.TraceId,
 		DurationMs:   execMs,
@@ -442,7 +444,7 @@ func (e *MQExecutor) testNodeForCondSwitch(ctx context.Context, payload *TestNod
 // 前端传入的 InputParams 作为流程入参（Variables），
 // 执行结束后通过 EndFunc 回调拿到 ActivityNode 写回的 ParamCtx，作为测试结果返回。
 // 不再走 MQ 远程 worker。
-func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodePayload) (any, error) {
+func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodePayload) (*TestNodeResultData, error) {
 	if payload.NodeDef.Type != common.ActivityNodeTypeName {
 		return nil, fmt.Errorf("node type is not %s: %s", common.ActivityNodeTypeName, payload.NodeDef.Type)
 	}
@@ -547,7 +549,8 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 	resultParam.Arguments = arguments
 	resultParam.Responses = response
 	return &TestNodeResultData{
-		Data:         resultParam,
+		Arguments:    arguments,
+		Response:     response,
 		RelationType: relationTypeString,
 		TraceID:      metaData.TraceId,
 		DurationMs:   execMs,
