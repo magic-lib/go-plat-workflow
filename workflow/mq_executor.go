@@ -47,6 +47,33 @@ func (a commnodeActivityStoreAdapter) GetByNamespaceName(ctx context.Context, pr
 	return &commnode.ActivityTemplateDef{ReturnValues: def.ReturnValues}, nil
 }
 
+// nodeLogSaverForCommnode commnode 落库适配所需的最小接口（仅 Create 用）。
+// 用窄接口而非完整 repo，隔离 commnode 对 workflow 包内部类型的依赖。
+type nodeLogSaverForCommnode interface {
+	Create(ctx context.Context, def *NodeLogDef) error
+}
+
+// commnodeNodeLogSaverAdapter 将 workflow 层 NodeLogRepo 适配为 commnode.NodeLogSaver：
+// 把 commnode.NodeLogDef 转换为 workflow.NodeLogDef 后写入 wf_node_logs。
+type commnodeNodeLogSaverAdapter struct {
+	repo nodeLogSaverForCommnode
+}
+
+func (a commnodeNodeLogSaverAdapter) CreateNodeLog(ctx context.Context, def *commnode.NodeLogDef) error {
+	var wDef NodeLogDef
+	if err := conv.Unmarshal(conv.String(def), &wDef); err != nil {
+		return err
+	}
+	return a.repo.Create(ctx, &wDef)
+}
+
+// SetCommnodeNodeLogSaver 将 node 日志落库实现注入到 commnode 组件，
+// 使 node 运行日志直接写入 wf_node_logs（无需经过 redis 中转由 collector 消费）。
+// 应在 WorkflowService 初始化时（持有 NodeLogRepo 后）调用一次。
+func SetCommnodeNodeLogSaver(repo nodeLogSaverForCommnode) {
+	commnode.SetNodeLogSaver(commnodeNodeLogSaverAdapter{repo: repo})
+}
+
 // SetCommnodeActivityStore 将 activity 模板仓储注入到 commnode 组件，
 // 使 ActivityNode 在执行单个 Activity 时能按 ActNamespace+ActName 反查模板的 return_values，
 // 进而正确构造 RequestActivity 所需的 returnBindConfig。

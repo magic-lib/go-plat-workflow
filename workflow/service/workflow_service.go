@@ -132,6 +132,8 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	activityTestRecordRepo := repo.NewActivityTestRecordRepo(db)
 	activityLogRepo := repo.NewActivityLogRepo(db)
 	nodeLogRepo := repo.NewNodeLogRepo(db)
+	// 将 node 日志落库实现注入 commnode 组件，使 node 运行日志直接写入 wf_node_logs（不再经 redis 中转）。
+	workflow.SetCommnodeNodeLogSaver(nodeLogRepo)
 	userRepo := repo.NewUserRepo(db)
 
 	// 幂等种子：若 wf_users 为空，则根据环境变量创建一个 bootstrap 管理员账号。

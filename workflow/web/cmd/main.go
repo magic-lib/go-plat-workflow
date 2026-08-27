@@ -241,11 +241,15 @@ func initMysqlLogger(db *sql.DB) (logs.ILogger, error) {
 			{Name: "project", DBType: "VARCHAR(100)", Comment: "项目名称"},
 			{Name: "chain_id", DBType: "VARCHAR(100)", Comment: "规则链Id"},
 			{Name: "chain_key", DBType: "VARCHAR(100)", Comment: "规则链key"},
+			{Name: "node_id", DBType: "VARCHAR(100)", Comment: "NodeID"},
+			{Name: "relation_type", DBType: "VARCHAR(100)", Comment: "relationType"},
 			{Name: "trace_id", DBType: "VARCHAR(100)", Comment: "traceId"},
+			{Name: "error", DBType: "VARCHAR(255)", Comment: "Error"},
 			{Name: "request", DBType: "TEXT", Comment: "请求参数"},
 			{Name: "response", DBType: "TEXT", Comment: "返回参数"},
 		},
 	}
+
 	logger, err := mysqllog.New(cfg)
 	if err != nil {
 		return nil, err

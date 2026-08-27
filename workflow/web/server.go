@@ -1317,6 +1317,7 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		"response":      result,
 	}
 	logComm := logs.LogCommData{
+		LogId:  req.TraceId,
 		Path:   r.URL.Path,
 		Method: r.Method,
 	}

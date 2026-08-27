@@ -7,13 +7,14 @@ import (
 	"github.com/magic-lib/go-plat-utils/conn"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/magic-lib/go-plat-utils/logs"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 	"log"
+	"time"
 )
 
 type ActivityFlowConfig struct {
@@ -69,10 +70,6 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 	// 全局配置
 	config := rulego.NewConfig()
 
-	config.OnDebug = func(chainId string, flowType string, nodeId string, msg types.RuleMsg, relationType string, err error) {
-		engine.MysqlLogger.Debug("OnDebug", zap.String("chainId", chainId), zap.String("flowType", flowType), zap.String("nodeId", nodeId), zap.Any("msg", msg), zap.String("relationType", relationType), zap.Error(err))
-	}
-
 	// 如果有结束节点，则开启默认失败回调
 	hasEndNodeTag := false
 	if hasEndNode(actConfig.RootChainDSL.Metadata.Nodes) {
@@ -116,16 +113,16 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 
 	var engineIns types.RuleEngine
 
-	if !actConfig.UseCache {
-		actConfig.RootChainDSL.RuleChain.DebugMode = true
-		config.OnDebug = func(ruleChainId string, flowType string, nodeId string, msg types.RuleMsg, relationType string, err error) {
-			fmt.Println("OnDebug", ruleChainId, flowType, nodeId, msg, relationType, err)
-		}
-	} else {
-		actConfig.RootChainDSL.RuleChain.DebugMode = false
+	if actConfig.UseCache {
 		if engineTemp, ok := rulego.Get(metaData.RootChainID); ok {
 			engineIns = engineTemp
 		}
+	} else {
+		actConfig.RootChainDSL.RuleChain.DebugMode = true
+	}
+
+	if actConfig.RootChainDSL.RuleChain.DebugMode {
+		config.OnDebug = commDebugFunction
 	}
 
 	rootChainDSL := []byte(conv.String(actConfig.RootChainDSL))
@@ -212,6 +209,47 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 		}
 	}
 	return nil
+}
+
+func commDebugFunction(chainId string, flowType string, nodeId string, msg types.RuleMsg, relationType string, err error) {
+	traceId := msg.GetMetadata().GetValue("trace_id")
+	logData := logs.LogData{
+		LogCommData: logs.LogCommData{
+			LogId:      traceId,
+			LogKey:     "",
+			Env:        "",
+			Method:     flowType,
+			LogTime:    time.Now(),
+			CreateTime: time.Now(),
+			Extends:    nil,
+		},
+		Message: []any{msg},
+	}
+
+	code := 0
+	if err != nil {
+		code = 500
+	}
+	paramCtx := new(paramx.FlowContext)
+	_ = conv.Unmarshal(msg.GetData(), paramCtx)
+	nodeIdTag := paramx.StepId(nodeId)
+	req := paramCtx.Arguments
+	resp := paramCtx.Responses
+
+	if one, ok := paramCtx.Steps[nodeIdTag]; ok {
+		req = one.Arguments
+		resp = one.Responses
+	}
+
+	engine.MysqlLogger.Info(logData, map[string]any{
+		"chain_id":      chainId,
+		"node_id":       nodeId,
+		"relation_type": relationType,
+		"error":         err,
+		"code":          code,
+		"request":       req,
+		"response":      resp,
+	}, msg.GetMetadata().Values(), msg.GetData())
 }
 
 // getFirstNodeIndexByConnection 将 connections 连成一个有向图（fromId -> toId），

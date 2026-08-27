@@ -916,7 +916,7 @@ type NodeLogDef struct {
 	// Arguments node 执行的输入参数（取自 payload.arguments），JSON 字符串，便于按 node 直接查看入参
 	Arguments json.RawMessage `json:"arguments"`
 	// Result node 执行后的返回值（按本节点 responses 配置提取），JSON 字符串
-	Result json.RawMessage `json:"result"`
+	Result string `json:"result"`
 	// ErrorMsg 执行错误信息（成功为空）
 	ErrorMsg string `json:"error_msg"`
 	// Error 兼容 worker/组件上报时使用的 "error" 字段名

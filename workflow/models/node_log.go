@@ -22,7 +22,7 @@ type NodeLogModel struct {
 	DurationMs   int64     `gorm:"column:duration_ms" json:"duration_ms"`
 	Payload      string    `gorm:"column:payload;type:json" json:"payload"`
 	Arguments    string    `gorm:"column:arguments;type:json" json:"arguments"`
-	Result       string    `gorm:"column:result;type:json" json:"result"`
+	Result       string    `gorm:"column:result;type:text" json:"result"`
 	ErrorMsg     string    `gorm:"column:error_msg;type:text" json:"error_msg"`
 	TraceID      string    `gorm:"column:trace_id;type:varchar(128);index;default:''" json:"trace_id"`
 	RootChainID  string    `gorm:"column:root_chain_id;type:varchar(128);index;default:''" json:"root_chain_id"`
@@ -50,7 +50,7 @@ func (m *NodeLogModel) ToDef() *workflow.NodeLogDef {
 		DurationMs:   m.DurationMs,
 		Payload:      json.RawMessage(m.Payload),
 		Arguments:    json.RawMessage(m.Arguments),
-		Result:       json.RawMessage(m.Result),
+		Result:       m.Result,
 		ErrorMsg:     m.ErrorMsg,
 		TraceID:      m.TraceID,
 		RootChainID:  m.RootChainID,
@@ -72,7 +72,7 @@ func (m *NodeLogModel) FromDef(def *workflow.NodeLogDef) {
 	m.DurationMs = def.DurationMs
 	m.Payload = string(def.Payload)
 	m.Arguments = string(def.Arguments)
-	m.Result = string(def.Result)
+	m.Result = def.Result
 	m.ErrorMsg = def.ErrorMsg
 	m.TraceID = def.TraceID
 	m.RootChainID = def.RootChainID

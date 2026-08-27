@@ -99,3 +99,23 @@ var defaultActivityStore ActivityStoreFetcher
 func SetActivityStore(store ActivityStoreFetcher) {
 	defaultActivityStore = store
 }
+
+// NodeLogSaver 将 node 运行日志直接落库的能力抽象。
+// 定义在 commnode 包内（而非 workflow 包），避免 commnode -> workflow(repo) 的循环依赖：
+// commnode 仅依赖此接口与自身 NodeLogDef 结构，真正的实现由 workflow 层适配 repo.NodeLogRepo 后注入。
+// pushNodeLog 在注入后会直接将 NodeLogDef 写入数据库，而非经 redis 中转由 collector 消费。
+type NodeLogSaver interface {
+	// CreateNodeLog 直接创建一条 node 运行日志。
+	CreateNodeLog(ctx context.Context, def *NodeLogDef) error
+}
+
+// defaultNodeLogSaver 包级默认的 node 日志落库实现（由 workflow 包在初始化时注入）。
+var defaultNodeLogSaver NodeLogSaver
+
+// SetNodeLogSaver 注入（或清空）包级默认 node 日志落库实现。
+// workflow 包在构造 WorkflowService（持有 NodeLogRepo）时应调用此方法，
+// 使 node 运行日志直接写入 wf_node_logs，无需经过 redis 中转。
+// 传入 nil 可清除（此时 pushNodeLog 回退为 redis 推送，保持兼容）。
+func SetNodeLogSaver(saver NodeLogSaver) {
+	defaultNodeLogSaver = saver
+}

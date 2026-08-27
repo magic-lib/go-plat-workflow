@@ -328,7 +328,7 @@ type NodeLogDef struct {
 	// Arguments node 执行的输入参数（取自 payload.arguments），JSON 字符串，便于按 node 直接查看入参
 	Arguments json.RawMessage `json:"arguments"`
 	// Result node 执行后的返回值（按本节点 responses 配置提取），JSON 字符串
-	Result json.RawMessage `json:"result"`
+	Result string `json:"result"`
 	// ErrorMsg 执行错误信息（成功为空）
 	ErrorMsg string `json:"error_msg"`
 	// Error 兼容 worker/组件上报时使用的 "error" 字段名
@@ -345,17 +345,11 @@ type NodeLogDef struct {
 }
 
 // 由管理端收集器消费后落库 wf_node_logs，便于在前端查看每个 node 的运行情况。
-// redis 客户端基于 actMetaData.RedisConfig 惰性建立并缓存在组件实例上；配置缺失时静默跳过。
+// 若已注入 NodeLogSaver，则直接将 NodeLogDef 写入数据库（不经过 redis 中转）；
+// 否则回退为 redis 推送（基于 actMetaData.RedisConfig 惰性建连并缓存），保持兼容。
 func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level, relationType string, payload any, arguments map[string]any, result any, runErr error) (*redis.Client, error) {
-	if metaData == nil || metaData.RedisConfig == nil {
-		return nil, nil
-	}
-	if nodeLogCli == nil {
-		cli, err := rulegox.NewRedisClient(metaData.RedisConfig)
-		if err != nil {
-			return nil, err
-		}
-		nodeLogCli = cli
+	if metaData == nil {
+		return nodeLogCli, nil
 	}
 	now := time.Now()
 	rec := NodeLogDef{
@@ -369,7 +363,7 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 		Timestamp:    now.Unix(),
 		Payload:      json.RawMessage(conv.String(payload)),
 		Arguments:    json.RawMessage(conv.String(arguments)),
-		Result:       json.RawMessage(conv.String(result)),
+		Result:       conv.String(result),
 		TraceID:      metaData.TraceId,
 		RootChainID:  metaData.RootChainID,
 		SpanID:       nodeSpanId,
@@ -379,12 +373,40 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 	if runErr != nil {
 		rec.ErrorMsg = runErr.Error()
 	}
+
+	// 已注入落库实现：直接写入数据库
+	if defaultNodeLogSaver != nil {
+		goroutines.GoAsync(func(param ...any) {
+			if err := defaultNodeLogSaver.CreateNodeLog(context.Background(), &rec); err != nil {
+				log.Printf("[activityNode] pushNodeLog save error=%s", err.Error())
+			}
+		})
+		return nodeLogCli, nil
+	}
+
+	// 兜底：未注入落库实现时走 redis 推送（原行为）
+	if metaData.RedisConfig == nil {
+		return nodeLogCli, nil
+	}
+	if nodeLogCli == nil {
+		cli, err := rulegox.NewRedisClient(metaData.RedisConfig)
+		if err != nil {
+			return nodeLogCli, err
+		}
+		nodeLogCli = cli
+	}
 	key := rulegox.NodeLogKeyPrefix + rulegox.GetMQNamespace(metaData.Project, metaData.Env)
 	logDataStr := conv.String(rec)
 	goroutines.GoAsync(func(param ...any) {
-		_ = nodeLogCli.RPush(context.Background(), key, logDataStr).Err()
+		err := nodeLogCli.RPush(context.Background(), key, logDataStr).Err()
+		if err != nil {
+			log.Printf("[activityNode] pushNodeLog redis.RPush error=%s", err.Error())
+		}
 		// 限制单个 node 日志 list 长度，避免 redis 中无限增长
-		_ = nodeLogCli.LTrim(context.Background(), key, -500, -1).Err()
+		err = nodeLogCli.LTrim(context.Background(), key, -500, -1).Err()
+		if err != nil {
+			log.Printf("[activityNode] pushNodeLog redis.LTrim error=%s", err.Error())
+		}
 	})
 	return nodeLogCli, nil
 }

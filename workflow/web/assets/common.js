@@ -810,7 +810,7 @@ function openNodeModal(node) {
   renderNodeTagChips();
   document.getElementById('node-version').value = node ? node.version || '' : '';
   document.getElementById('node-status').value = node ? String(node.status) : '1';
-  document.getElementById('node-configuration').value = node ? prettyJson(node.configuration) : '{\n  "jsScript": "return {msg: \'hello\'};"\n}';
+  document.getElementById('node-configuration').value = node ? prettyJson(node.configuration) : '{}';
   document.getElementById('node-additional-info').value = node ? prettyJson(node.additional_info) : '{}';
   // 回显 activity 编排（优先读 configuration.activities，兼容旧版 node_config 单 activity）
   let nodeCfg = {};
