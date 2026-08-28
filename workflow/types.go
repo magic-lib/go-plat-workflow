@@ -36,6 +36,8 @@ var (
 	ErrReleaseNotFound = fmt.Errorf("workflow: release not found")
 	// ErrReleaseInUse 当前生产版本不允许删除
 	ErrReleaseInUse = fmt.Errorf("workflow: current release in use, cannot delete")
+	// ErrRootChainHasReleases 根链存在发布记录，不允许删除
+	ErrRootChainHasReleases = fmt.Errorf("workflow: root chain has releases, cannot delete")
 	// ErrActivityNotFound activity 未找到
 	ErrActivityNotFound = fmt.Errorf("workflow: activity not found")
 )
@@ -230,6 +232,8 @@ type RootChainDef struct {
 	ConnectionsData string `json:"connections_data,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖值 JSON，保存后可在下次编辑时恢复
 	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
+	// HasReleases 是否存在发布记录（存在时不允许删除该根链）
+	HasReleases bool `json:"has_releases"`
 }
 
 // RootChainReleaseDef 根链发布版本定义。

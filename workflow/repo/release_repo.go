@@ -90,6 +90,19 @@ func (r *RootChainReleaseRepo) ListCurrentByProject(ctx context.Context, project
 	return defs, nil
 }
 
+// HasReleases 判断指定根链是否存在发布记录。
+func (r *RootChainReleaseRepo) HasReleases(ctx context.Context, project, chainID string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.RootChainReleaseModel{}).
+		Where("project = ? AND chain_id = ?", project, chainID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // MaxVersion 查询指定根链的最大发布版本号（无记录返回 0）。
 func (r *RootChainReleaseRepo) MaxVersion(ctx context.Context, project, chainID string) (int, error) {
 	var maxVer int

@@ -809,7 +809,7 @@ function openNodeModal(node) {
   document.getElementById('node-tags').value = node && Array.isArray(node.tags) ? node.tags.join(',') : '';
   renderNodeTagChips();
   document.getElementById('node-version').value = node ? node.version || '' : '';
-  document.getElementById('node-status').value = node ? String(node.status) : '1';
+  document.getElementById('node-status').value = node ? String(node.status) : '0';
   document.getElementById('node-configuration').value = node ? prettyJson(node.configuration) : '{}';
   document.getElementById('node-additional-info').value = node ? prettyJson(node.additional_info) : '{}';
   // 回显 activity 编排（优先读 configuration.activities，兼容旧版 node_config 单 activity）
@@ -4494,8 +4494,8 @@ function addReturnValueRow(name, key, type, label) {
   const emptyEl = document.getElementById('act-return-values-empty');
   if (emptyEl) emptyEl.style.display = 'none';
 
-  const typeOptions = ['', 'string', 'int64', 'float64', 'bool', 'formula', 'json'];
-  const typeLabels = { '': '不转换', 'string': 'string', 'int64': 'int64', 'float64': 'float64', 'bool': 'bool', 'formula': 'formula', 'json': 'json' };
+  const typeOptions = ['', 'string', 'int64', 'float64', 'bool', 'slice', 'map', 'formula'];
+  const typeLabels = { '': '不转换', 'string': 'string', 'int64': 'int64', 'float64': 'float64', 'bool': 'bool', 'slice': 'slice', 'map': 'map', 'formula': 'formula' };
   const typeHTML = typeOptions.map(t =>
     '<option value="' + t + '"' + ((type||'') === t ? ' selected' : '') + '>' + typeLabels[t] + '</option>'
   ).join('');
@@ -4696,7 +4696,7 @@ async function loadRootChains() {
           <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
           <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
           <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
-          <button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>
+          ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>`}
         </td>
       </tr>`;
     }).join('');
@@ -4704,7 +4704,7 @@ async function loadRootChains() {
 }
 
 async function deleteRootChain(id) {
-  if (!confirm('确定删除根链 ' + id + ' 吗？发布记录会保留。')) return;
+  if (!confirm('确定删除根链 ' + id + ' 吗？')) return;
   try {
     await api('/api/root-chains/' + encodeURIComponent(id), { method: 'DELETE' });
     showToast('根链已删除', 'success');
@@ -6501,24 +6501,58 @@ function parseStepsRef(ref) {
   return { nodeId: m[1], kind: m[2], key: m[3] };
 }
 
-// 收集「已选择的其它节点/子链」用于「引用节点」选择（excludeId 为当前实例 instanceId）
+// 收集「已选择的其它节点/子链」用于「引用节点」选择（excludeId 为当前实例 instanceId）。
+// 仅返回位于当前节点「所有父节点（祖先）」上的节点/子链：即从 excludeId 沿 Connections 反向
+// 可达的节点。子节点、兄弟节点、无关节点由于时间上拿不到该参数，均不列出。
 function getOrchRefNodeCandidates(excludeId) {
+  const ancestorIds = getOrchAncestorIds(excludeId);
   const cands = [];
-  // 已选节点实例（按 instanceId 排除自身）
+  // 已选节点实例（按 instanceId 排除自身，且必须在祖先集合内）
   (window._orchNodeInstances || []).forEach(inst => {
     if (inst.instanceId === excludeId) return;
+    if (!ancestorIds.has(inst.instanceId)) return;
     const def = (_orchNodes || []).find(n => n.node_id === inst.nodeId);
     if (!def) return;
     cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: parseNodeParams(def), outputs: parseNodeOutputs(def) });
   });
-  // 已选子链（按 chain_id 排除自身）
+  // 已选子链（按 chain_id 排除自身，且必须在祖先集合内）
   getSelectedOrchSubIds().forEach(subId => {
     if (subId === excludeId) return;
+    if (!ancestorIds.has(subId)) return;
     const s = (_orchSubChains || []).find(x => x.chain_id === subId);
     if (!s) return;
     cands.push({ id: s.chain_id, name: s.name || s.chain_id, type: 'sub', params: parseNodeParams(s), outputs: parseNodeOutputs(s) });
   });
   return cands;
+}
+
+// 计算当前节点的所有祖先节点 ID 集合（含直接父节点及其上游，不含自身）。
+// 基于 Connections 中 from_id → to_id 的有向关系反向遍历：
+// 从 targetId 出发，沿「谁指向我」反向回溯，所有可达节点即为时间上先于 target 执行的祖先。
+function getOrchAncestorIds(targetId) {
+  const result = new Set();
+  if (!targetId) return result;
+  const conns = collectOrchConnections();
+  // 反向邻接表：to_id -> [from_id, ...]
+  const reverse = {};
+  conns.forEach(c => {
+    if (c.from_id && c.to_id) {
+      (reverse[c.to_id] = reverse[c.to_id] || []).push(c.from_id);
+    }
+  });
+  // 从 targetId 反向 BFS/DFS 收集祖先
+  const stack = [targetId];
+  const visited = new Set([targetId]);
+  while (stack.length) {
+    const cur = stack.pop();
+    (reverse[cur] || []).forEach(from => {
+      if (visited.has(from)) return;
+      visited.add(from);
+      result.add(from);
+      stack.push(from);
+    });
+  }
+  return result;
 }
 
 // 渲染「引用节点」控件：先选节点，再选 参数定义/返回值定义
@@ -6535,7 +6569,7 @@ function renderOrchRefNodeControl(slot, excludeId, presetValue) {
 
   let nodeOpts = `<option value="">— 选择节点 —</option>`;
   cands.forEach(c => {
-    nodeOpts += `<option value="${esc(c.id)}" ${c.id === selNodeId ? 'selected' : ''}>${esc(c.name)} <${esc(c.id)}></option>`;
+    nodeOpts += `<option value="${esc(c.id)}" ${c.id === selNodeId ? 'selected' : ''}>${esc(c.id)} ${esc(c.name)}</option>`;
   });
 
   const fieldOpts = renderOrchRefNodeFieldOptions(cand, kind, presetKey);

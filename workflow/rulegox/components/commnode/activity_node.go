@@ -318,6 +318,11 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	ctx.TellSuccess(msg)
 }
 
+func createNodeResponse(allDataMap map[string]any, responseList []*param.BindConfig) map[string]any {
+	//
+	return nil
+}
+
 type NodeLogDef struct {
 	ID         uint   `json:"id"`
 	Project    string `json:"project"`
@@ -533,7 +538,7 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 				_ = conv.Unmarshal(string(actDef.ReturnValues), &returnValues)
 			}
 		}
-
+		// 执行Activity方法
 		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil), returnValues)
 		if err != nil {
 			return err
@@ -561,11 +566,12 @@ func GetActivityParam(ruleEngine *templates.RuleExprEngine, allParam map[string]
 		exp := conv.String(item.Value)
 		if item.Type == "formula" {
 			expAny, err := ruleEngine.RunString(exp, allParam)
-			if err == nil {
+			if err != nil {
 				log.Printf("activityNode getActivityParam: RunString err: %v", err)
-				actParam[item.Key] = expAny
 				continue
 			}
+			actParam[item.Key] = expAny
+			continue
 		}
 		ruleObj := templates.NewTemplate(exp, templates.DefaultPrefix, templates.DefaultSuffix)
 		tempVal := ruleObj.Replace(allParam)

@@ -383,45 +383,71 @@ func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, 
 	if err != nil {
 		return nil, err
 	}
-	responses := ""
-	if len(act.Responses) > 0 {
-		responses = conv.String(act.Responses)
-	}
-	data, err := ruleEngine.RenderObject(responses, resp.Data)
+
+	data, err := w.execActivityResponse(resp.Data, act.Responses, returnValues)
 	if err != nil {
 		return nil, err
 	}
-	// 需要处理返回值的类型
-	if len(returnValues) > 0 {
-		if cond.IsJsonMap(conv.String(data)) {
-			var argMap map[string]any
-			_ = conv.Unmarshal(data, &argMap)
-			// 字段转换
-			lo.ForEach(returnValues, func(returnValue *config.ReturnValue, index int) {
-				if one, ok := argMap[returnValue.Key]; ok {
-					var oneValue = one
-					if returnValue.Type != "" {
-						one2, ok2 := conv.ConvertForTypeString(returnValue.Type, one)
-						if ok2 {
-							oneValue = one2
-						}
-					}
-					if returnValue.Name != "" {
-						argMap[returnValue.Name] = oneValue
-					} else {
-						argMap[returnValue.Key] = oneValue
-					}
-				}
-			})
 
-			resp.Data = argMap
-			return resp, nil
-		}
-	}
-
-	// 需要对返回值类型进行判断，然后进行转换
 	resp.Data = data
 	return resp, nil
+}
+
+// execActivityResponse 处理活动返回值
+func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any, returnValues []*config.ReturnValue) (any, error) {
+	responses := ""
+	if len(respConfig) > 0 {
+		responses = conv.String(respConfig)
+	}
+	ruleEngine := templates.NewRuleExprEngine()
+	data, err := ruleEngine.RenderObject(responses, respData)
+	if err != nil {
+		return nil, err
+	}
+	if len(returnValues) == 0 {
+		return data, nil
+	}
+	// 需要处理返回值的类型
+	if cond.IsJsonMap(conv.String(data)) {
+		var argMap map[string]any
+		_ = conv.Unmarshal(data, &argMap)
+		// 字段转换
+		lo.ForEach(returnValues, func(returnValue *config.ReturnValue, index int) {
+			if one, ok := argMap[returnValue.Key]; ok {
+				var oneValue = one
+				if returnValue.Type != "" {
+					one2, ok2 := conv.ConvertForTypeString(returnValue.Type, one)
+					if ok2 {
+						oneValue = one2
+					}
+				}
+				if returnValue.Name != "" {
+					argMap[returnValue.Name] = oneValue
+				} else {
+					argMap[returnValue.Key] = oneValue
+				}
+			}
+		})
+		return argMap, nil
+	} else {
+		var argMap = make(map[string]any)
+		for _, returnValue := range returnValues {
+			if returnValue.Key == "" {
+				var oneValue = data
+				if returnValue.Type != "" {
+					one2, ok2 := conv.ConvertForTypeString(returnValue.Type, data)
+					if ok2 {
+						oneValue = one2
+					}
+				}
+				argMap[returnValue.Name] = oneValue
+			}
+		}
+		if len(argMap) > 0 {
+			return argMap, nil
+		}
+	}
+	return data, nil
 }
 
 // Stop 停止消费端，并清理心跳协程与 redis 连接。

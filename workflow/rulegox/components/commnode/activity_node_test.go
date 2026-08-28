@@ -7,6 +7,9 @@ import (
 	"github.com/magic-lib/go-plat-utils/plugins/action"
 	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
+	"github.com/magic-lib/go-plat-utils/templates"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
 	"testing"
 
 	"github.com/rulego/rulego"
@@ -19,6 +22,40 @@ type AddReq struct {
 	B int `json:"b"`
 }
 
+func TestCreateNodeResponse(t *testing.T) {
+	allDataMap := map[string]any{
+		"steps": map[string]any{
+			"A000013__iooum": map[string]any{
+				"responses": []any{1},
+			},
+			"A000014__no3m7": map[string]any{
+				"responses": []any{"N60", "ZAMTEL", "AIRTEL DATA"},
+			},
+		},
+	}
+	responseList := []*param.BindConfig{
+		{Key: "result", Value: "In(5, {{steps.A000013__iooum.responses}}) || (In(3, {{steps.A000013__iooum.responses}}) && (In('N60', {{steps.A000014__no3m7.responses}}) || In('ZAMTEL', {{steps.A000014__no3m7.responses}})))", Type: "formula"},
+	}
+	ruleObj := templates.NewRuleExprEngine()
+
+	dataMap := commnode.GetActivityParam(ruleObj, allDataMap, responseList)
+	if len(dataMap) == 0 {
+		// 如果没有定义，就将所有activity的返回值进行合并输出
+		//newDataMap := make(map[string]any)
+		//for _, oneStep := range stepFlowCtx.Steps {
+		//	if cond.IsJsonMap(conv.String(oneStep.Responses)) {
+		//		newDataMap2 := make(map[string]any)
+		//		_ = conv.Unmarshal(conv.String(oneStep.Responses), &newDataMap2)
+		//		for k, v := range newDataMap2 {
+		//			newDataMap[k] = v
+		//		}
+		//	}
+		//}
+		//fmt.Println("newDataMap", newDataMap)
+	} else {
+		fmt.Println("dataMap", dataMap)
+	}
+}
 func AddMethod(_ context.Context, req *AddReq) (int, error) {
 	fmt.Println("[AddMethod] received:", conv.String(req))
 	return req.A + req.B, nil

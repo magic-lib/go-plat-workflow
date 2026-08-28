@@ -233,14 +233,14 @@ func (s *WorkflowService) DeleteProjectSecret(ctx context.Context, project, secr
 	return secretRepo.DeleteByKey(ctx, project, secretKey)
 }
 
-// authProjectSecret 校验项目密钥（API_TOKEN）。
+// AuthProjectSecret 校验项目密钥（API_TOKEN）。
 // 支持两种鉴权方式：
 //  1. 带 timestamp（推荐）：校验时间戳 ±5 分钟内且 MD5 恒定时间比对一致。
 //     其中"存储密钥"为列表接口返回的哈希串（id.GetUUID 结果），对外当作明文密钥使用，避免用户录入弱口令被暴力破解。
 //  2. 不带 timestamp（兼容旧调用）：直接恒定时间比对存储密钥与传入值。
 //
 // 匹配返回 nil，否则返回错误。
-func (s *WorkflowService) authProjectSecret(ctx context.Context, project, key string, timestamp int64) error {
+func (s *WorkflowService) AuthProjectSecret(ctx context.Context, project, key string, timestamp int64) error {
 	if project == "" {
 		return fmt.Errorf("project is required")
 	}
@@ -283,11 +283,7 @@ func (s *WorkflowService) authProjectSecret(ctx context.Context, project, key st
 // GetProjectConfig 对外配置查询：根据项目密钥鉴权后，
 // 返回项目下的环境配置信息，以及可执行的 RootChains 概要列表（不含 DSL 等敏感内容）。
 // 密钥不匹配时返回错误。token 可由 timestamp 参与签名（推荐），也可直接传密钥（兼容）。
-func (s *WorkflowService) GetProjectConfig(ctx context.Context, project, key string, timestamp int64) (*workflow.ProjectConfigResponse, error) {
-	if err := s.authProjectSecret(ctx, project, key, timestamp); err != nil {
-		return nil, err
-	}
-
+func (s *WorkflowService) GetProjectConfig(ctx context.Context, project string) (*workflow.ProjectConfigResponse, error) {
 	// 项目基本信息
 	proj, err := s.projectRepo.GetByID(ctx, project)
 	if err != nil {
@@ -328,10 +324,7 @@ func (s *WorkflowService) GetProjectConfig(ctx context.Context, project, key str
 
 // GetProjectRedisConfig 对外配置查询：校验项目密钥后，按项目 + 环境名返回该环境的 Redis 配置。
 // 与 GetProjectConfig 共用 secret_key 鉴权；环境未配置或无 Redis 时返回明确错误。
-func (s *WorkflowService) GetProjectRedisConfig(ctx context.Context, project, envName, key string, timestamp int64) (*workflow.RedisConfig, error) {
-	if err := s.authProjectSecret(ctx, project, key, timestamp); err != nil {
-		return nil, err
-	}
+func (s *WorkflowService) GetProjectRedisConfig(ctx context.Context, project, envName string) (*workflow.RedisConfig, error) {
 	if envName == "" {
 		return nil, fmt.Errorf("env_name is required")
 	}
@@ -553,13 +546,31 @@ func (s *WorkflowService) GetRootChainByKey(ctx context.Context, project, chainK
 	return s.rootChainRepo.GetByKey(ctx, project, chainKey)
 }
 
-// ListRootChains 列出指定项目下所有可用根链。
+// ListRootChains 列出指定项目下所有可用根链，并填充每个根链是否存在发布记录（用于前端隐藏删除按钮）。
 func (s *WorkflowService) ListRootChains(ctx context.Context, project string) ([]*workflow.RootChainDef, error) {
-	return s.rootChainRepo.List(ctx, project)
+	chains, err := s.rootChainRepo.List(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range chains {
+		has, err := s.releaseRepo.HasReleases(ctx, project, c.ChainID)
+		if err != nil {
+			return nil, err
+		}
+		c.HasReleases = has
+	}
+	return chains, nil
 }
 
-// DeleteRootChain 物理删除根链草稿（发布历史记录保留，不受影响）。
+// DeleteRootChain 物理删除根链草稿；若存在发布记录则拒绝删除。
 func (s *WorkflowService) DeleteRootChain(ctx context.Context, project, chainID string) error {
+	has, err := s.releaseRepo.HasReleases(ctx, project, chainID)
+	if err != nil {
+		return err
+	}
+	if has {
+		return workflow.ErrRootChainHasReleases
+	}
 	return s.rootChainRepo.Delete(ctx, project, chainID)
 }
 

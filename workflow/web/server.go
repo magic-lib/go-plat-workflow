@@ -5,10 +5,12 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/logs"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"io/fs"
@@ -35,6 +37,11 @@ type WebServer struct {
 	svc       *service.WorkflowService
 	collector *workflow.ActivityCollector
 	mux       *http.ServeMux
+}
+
+type signRequest struct {
+	Sign      string `json:"sign"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 // NewWebServer 创建 Web 服务实例。
@@ -379,11 +386,10 @@ func (ws *WebServer) handleDeleteProject(w http.ResponseWriter, r *http.Request)
 // 鉴权支持两种：直接传 secret_key（旧）；或传 token + timestamp 时间戳签名（推荐）。
 func (ws *WebServer) handleGetProjectConfig(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
-	var req struct {
-		Key       string `json:"key"`
-		Timestamp int64  `json:"timestamp"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+
+	req := new(signRequest)
+
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
@@ -391,11 +397,19 @@ func (ws *WebServer) handleGetProjectConfig(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
 	}
-	if req.Key == "" {
+	if req.Sign == "" {
 		writeError(w, http.StatusBadRequest, "key is required")
 		return
 	}
-	cfg, err := ws.svc.GetProjectConfig(r.Context(), project, req.Key, req.Timestamp)
+	if err := ws.svc.AuthProjectSecret(r.Context(), project, req.Sign, req.Timestamp); err != nil {
+		writeJSON(w, http.StatusOK, &httputil.CommResponse{
+			Code:    http.StatusUnauthorized,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	cfg, err := ws.svc.GetProjectConfig(r.Context(), project)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -408,17 +422,17 @@ func (ws *WebServer) handleGetProjectConfig(w http.ResponseWriter, r *http.Reque
 func (ws *WebServer) handleGetProjectRedisConfig(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
 	envName := r.PathValue("env")
-	var req struct {
-		Key       string `json:"key"`
-		Timestamp int64  `json:"timestamp"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+
+	signReq := new(signRequest)
+
+	if err := param.NewParam().Parse(r, signReq); err != nil {
 		writeJSON(w, http.StatusOK, &httputil.CommResponse{
 			Code:    http.StatusBadRequest,
 			Message: "invalid json: " + err.Error(),
 		})
 		return
 	}
+
 	if project == "" || envName == "" {
 		writeJSON(w, http.StatusOK, &httputil.CommResponse{
 			Code:    http.StatusBadRequest,
@@ -426,14 +440,23 @@ func (ws *WebServer) handleGetProjectRedisConfig(w http.ResponseWriter, r *http.
 		})
 		return
 	}
-	if req.Key == "" {
+	if signReq.Sign == "" {
 		writeJSON(w, http.StatusOK, &httputil.CommResponse{
 			Code:    http.StatusBadRequest,
-			Message: "key is required",
+			Message: "sign is required",
 		})
 		return
 	}
-	cfg, err := ws.svc.GetProjectRedisConfig(r.Context(), project, envName, req.Key, req.Timestamp)
+
+	if err := ws.svc.AuthProjectSecret(r.Context(), project, signReq.Sign, signReq.Timestamp); err != nil {
+		writeJSON(w, http.StatusOK, &httputil.CommResponse{
+			Code:    http.StatusUnauthorized,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	cfg, err := ws.svc.GetProjectRedisConfig(r.Context(), project, envName)
 	if err != nil {
 		writeJSON(w, http.StatusOK, &httputil.CommResponse{
 			Code:    http.StatusUnauthorized,
@@ -895,6 +918,10 @@ func (ws *WebServer) handleDeleteRootChain(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := ws.svc.DeleteRootChain(r.Context(), project, chainID); err != nil {
+		if errors.Is(err, workflow.ErrRootChainHasReleases) {
+			writeError(w, http.StatusConflict, "该根链存在发布记录，不允许删除")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -925,6 +952,7 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 		ChainID:            req.ChainID,
 		ChainKey:           req.ChainKey,
 		ChainName:          req.ChainName,
+		Description:        req.Description,
 		NodeIDs:            req.NodeIDs,
 		SubChainIDs:        req.SubChainIDs,
 		Connections:        req.Connections,
@@ -1212,6 +1240,7 @@ type executeRequest struct {
 	ChainID            string                            `json:"chain_id"`
 	ChainKey           string                            `json:"chain_key"`
 	ChainName          string                            `json:"chain_name"`
+	Description        string                            `json:"description"`
 	NodeIDs            []string                          `json:"node_ids"`
 	TraceId            string                            `json:"trace_id"`
 	SubChainIDs        []string                          `json:"sub_chain_ids"`
@@ -1383,11 +1412,21 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 }
 
 func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request) {
+	var resp = &httputil.CommResponse{}
 	project := r.PathValue("project")
 	envName := r.PathValue("env")
 
+	signReq := new(signRequest)
+
+	if err := param.NewParam().Parse(r, signReq); err != nil {
+		resp.Code = http.StatusBadRequest
+		resp.Message = "invalid json: " + err.Error()
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
 	var req workflow.InvokeRequest
-	var resp = &httputil.CommResponse{}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		resp.Code = http.StatusBadRequest
 		resp.Message = "invalid json: " + err.Error()
@@ -1408,6 +1447,20 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 	}
 	if req.Payload == nil {
 		req.Payload = map[string]any{}
+	}
+
+	if signReq.Sign == "" {
+		resp.Code = http.StatusBadRequest
+		resp.Message = "sign is required"
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if err := ws.svc.AuthProjectSecret(r.Context(), project, signReq.Sign, signReq.Timestamp); err != nil {
+		writeJSON(w, http.StatusOK, &httputil.CommResponse{
+			Code:    http.StatusUnauthorized,
+			Message: err.Error(),
+		})
+		return
 	}
 
 	traceId := id.GetUUID(req.Metadata.TraceID)
