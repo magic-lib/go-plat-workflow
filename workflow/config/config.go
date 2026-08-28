@@ -20,6 +20,10 @@ const (
 	mysqlConnectName = "mysql_connect"
 	// hostPortKey 配置文件中 custom.normal 下监听地址的 key 名。
 	hostPortKey = "host_port"
+	// feishuAlertWebhookKey 配置文件中 custom.normal 下飞书告警机器人地址的 key 名。
+	feishuAlertWebhookKey = "feishu_alert_webhook"
+	// normalKey 配置文件中 custom.normal 段的 key 名。
+	normalKey = "normal"
 )
 
 type ReturnValue struct {
@@ -45,6 +49,8 @@ type AppConfig struct {
 	DBDsn string
 	// ListenAddr HTTP 监听地址（由 custom.normal.host_port.host + port 拼接）
 	ListenAddr string
+	// FeishuAlertWebhook 飞书告警机器人 Webhook 地址（由 custom.normal.feishu_alert_webhook 读取）
+	FeishuAlertWebhook string
 }
 
 // Load 通过 startupcfg 从配置文件加载应用配置。
@@ -85,7 +91,28 @@ func Load(path ...string) (*AppConfig, error) {
 		cfg.ListenAddr = hostPortToAddr(hp)
 	}
 
+	// 从 custom.normal.feishu_alert_webhook 读取飞书告警机器人地址
+	cfg.FeishuAlertWebhook = customNormalString(startCfg.Custom, feishuAlertWebhookKey)
+
 	return cfg, nil
+}
+
+// customNormalString 从 custom.normal 段读取字符串配置项。
+// startCfg.Custom 形如 {"normal":{"host_port":{...},"feishu_alert_webhook":"..."}}，
+// 找不到或类型不符时返回空串。
+func customNormalString(custom map[string]interface{}, key string) string {
+	normal, ok := custom[normalKey]
+	if !ok {
+		return ""
+	}
+	nm, ok := normal.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if v, ok := nm[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // secretHandlerOnce 保证敏感信息解密 handler 全局仅初始化一次

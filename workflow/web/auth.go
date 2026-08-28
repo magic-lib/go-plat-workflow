@@ -47,7 +47,7 @@ func (ws *WebServer) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		// 放行白名单
-		if p == "/api/login" || p == "/api/health" || p == "/api/logout" {
+		if p == "/api/login" || p == "/api/health" || p == "/api/version" || p == "/api/logout" {
 			next.ServeHTTP(w, r)
 			return
 		}

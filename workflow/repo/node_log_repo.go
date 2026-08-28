@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -49,6 +50,54 @@ func (r *NodeLogRepo) ListByNode(ctx context.Context, project, nodeID string, li
 		defs = append(defs, modelsList[i].ToDef())
 	}
 	return defs, total, nil
+}
+
+// StatsByDay 按 node + 天聚合统计每个 node 每天的访问量（总条数）与错误量（error_msg 非空条数）。
+// days 表示统计最近 N 天（基于 created_at）；env 为空表示不限定环境；nodeID 为空表示统计全部 node。
+// 返回结果按日期升序、node_id 升序排序，便于前端按日期横轴、node 分系列绘制。
+func (r *NodeLogRepo) StatsByDay(ctx context.Context, project, env, nodeID string, days int) ([]workflow.NodeLogDayStat, error) {
+	if days <= 0 {
+		days = 7
+	}
+	if days > 365 {
+		days = 365
+	}
+	since := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02") + " 00:00:00"
+
+	type row struct {
+		NodeID   string `gorm:"column:node_id"`
+		NodeName string `gorm:"column:node_name"`
+		Date     string `gorm:"column:date"`
+		Total    int64  `gorm:"column:total"`
+		Errors   int64  `gorm:"column:errors"`
+	}
+	var rows []row
+	query := r.db.WithContext(ctx).Model(&models.NodeLogModel{}).
+		Select("node_id, node_name, DATE(created_at) as date, COUNT(*) as total, " +
+			"SUM(CASE WHEN error_msg <> '' THEN 1 ELSE 0 END) as errors").
+		Where("project = ? AND created_at >= ?", project, since)
+	if env != "" {
+		query = query.Where("env = ?", env)
+	}
+	if nodeID != "" {
+		query = query.Where("node_id = ?", nodeID)
+	}
+	if err := query.Group("node_id, node_name, DATE(created_at)").
+		Order("date ASC, node_id ASC").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	stats := make([]workflow.NodeLogDayStat, 0, len(rows))
+	for _, rw := range rows {
+		stats = append(stats, workflow.NodeLogDayStat{
+			NodeID:   rw.NodeID,
+			NodeName: rw.NodeName,
+			Date:     rw.Date,
+			Total:    rw.Total,
+			Errors:   rw.Errors,
+		})
+	}
+	return stats, nil
 }
 
 // ListByFilter 按条件全局查询 node 运行日志（按时间倒序），支持分页。

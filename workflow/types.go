@@ -952,6 +952,18 @@ type NodeLogFilter struct {
 	Offset int `json:"offset,omitempty"`
 }
 
+// NodeLogDayStat node 日志按天聚合统计：某 node 在某天的总访问量与错误量。
+type NodeLogDayStat struct {
+	NodeID   string `json:"node_id"`
+	NodeName string `json:"node_name"`
+	// Date 统计日期，格式 2006-01-02
+	Date string `json:"date"`
+	// Total 当天该 node 的总执行次数（访问量）
+	Total int64 `json:"total"`
+	// Errors 当天该 node 的错误执行次数
+	Errors int64 `json:"errors"`
+}
+
 // NodeLogStore node 运行日志仓储接口。
 type NodeLogStore interface {
 	// Create 创建一条 node 运行日志

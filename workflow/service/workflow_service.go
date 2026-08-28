@@ -3,12 +3,11 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/samber/lo"
 	"io"
@@ -236,7 +235,7 @@ func (s *WorkflowService) DeleteProjectSecret(ctx context.Context, project, secr
 
 // authProjectSecret 校验项目密钥（API_TOKEN）。
 // 支持两种鉴权方式：
-//  1. 带 timestamp（推荐）：token = MD5(fmt.Sprint(timestamp) + 存储密钥)，校验时间戳 ±5 分钟内且 MD5 恒定时间比对一致。
+//  1. 带 timestamp（推荐）：校验时间戳 ±5 分钟内且 MD5 恒定时间比对一致。
 //     其中"存储密钥"为列表接口返回的哈希串（id.GetUUID 结果），对外当作明文密钥使用，避免用户录入弱口令被暴力破解。
 //  2. 不带 timestamp（兼容旧调用）：直接恒定时间比对存储密钥与传入值。
 //
@@ -257,16 +256,14 @@ func (s *WorkflowService) authProjectSecret(ctx context.Context, project, key st
 		return fmt.Errorf("project has no secret_key configured, please set it first")
 	}
 
-	// 时间戳签名模式：校验时效并比对 MD5(timestamp + 密钥)
+	// 时间戳签名模式：校验时效并比对
 	if timestamp > 0 {
 		now := time.Now().Unix()
 		if diff := now - timestamp; diff > 300 || diff < -300 {
 			return fmt.Errorf("timestamp expired or invalid (allowed ±5min)")
 		}
-		prefix := fmt.Sprint(timestamp)
 		for _, k := range storedKeys {
-			sum := md5.Sum([]byte(prefix + k))
-			expected := hex.EncodeToString(sum[:])
+			expected := httputil.GenFeiShuSign(timestamp, k)
 			if subtle.ConstantTimeCompare([]byte(expected), []byte(key)) == 1 {
 				return nil
 			}
@@ -1618,6 +1615,19 @@ func (s *WorkflowService) ListNodeLogs(ctx context.Context, project, nodeID stri
 		records = []*workflow.NodeLogDef{}
 	}
 	return records, total, nil
+}
+
+// NodeLogStats 统计 node 日志：按 node + 天聚合，返回每个 node 每天的访问量与错误量。
+// 常用于前端「统计」页柱状图。env 为空表示不限定环境；nodeID 为空表示统计全部 node；days 为最近 N 天。
+func (s *WorkflowService) NodeLogStats(ctx context.Context, project, env, nodeID string, days int) ([]workflow.NodeLogDayStat, error) {
+	stats, err := s.nodeLogRepo.StatsByDay(ctx, project, env, nodeID, days)
+	if err != nil {
+		return nil, err
+	}
+	if stats == nil {
+		stats = []workflow.NodeLogDayStat{}
+	}
+	return stats, nil
 }
 
 // ActivityLogRepo 返回 activity 日志仓储实例（供 web 层构造收集器复用同一仓储）。

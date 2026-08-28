@@ -19,6 +19,7 @@ package commnode
 import (
 	"context"
 	"encoding/json"
+	"github.com/magic-lib/go-plat-utils/goroutines"
 
 	"github.com/magic-lib/go-plat-utils/plugins/activity"
 )
@@ -118,4 +119,34 @@ var defaultNodeLogSaver NodeLogSaver
 // 传入 nil 可清除（此时 pushNodeLog 回退为 redis 推送，保持兼容）。
 func SetNodeLogSaver(saver NodeLogSaver) {
 	defaultNodeLogSaver = saver
+}
+
+// AlertSender 发送告警通知的能力抽象（如飞书自定义机器人）。
+// 定义在 commnode 包内，避免 commnode -> workflow 的循环依赖：
+// 真正的实现（读取飞书 webhook 并发消息）由 workflow 包适配后注入。
+// 实现侧应在 webhook 未配置时静默 no-op（即"配置了机器人地址才发"）。
+type AlertSender interface {
+	// SendAlert 发送一条告警。title 为标题，content 为正文。
+	SendAlert(ctx context.Context, title, content string)
+}
+
+// defaultAlertSender 包级默认告警发送器（由 workflow 包注入）。
+var defaultAlertSender AlertSender
+
+// SetAlertSender 注入（或清空）包级默认告警发送器。
+// workflow 包初始化时应调用此方法，使 Node 执行失败等场景能推送告警到飞书群。
+// 传入 nil 可清除（回退为静默跳过）。
+func SetAlertSender(sender AlertSender) {
+	defaultAlertSender = sender
+}
+
+// sendAlert 在已注入告警发送器时异步发送告警（webhook 未配置时实现侧 no-op）。
+// 异步执行避免阻塞主流程；内部 recover 防止告警逻辑异常影响业务。
+func sendAlert(ctx context.Context, title, content string) {
+	if defaultAlertSender == nil {
+		return
+	}
+	goroutines.GoAsync(func(params ...any) {
+		defaultAlertSender.SendAlert(ctx, title, content)
+	})
 }

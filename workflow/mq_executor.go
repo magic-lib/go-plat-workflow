@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-curl/curl"
-	"github.com/magic-lib/go-plat-utils/crypto"
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/templates"
@@ -14,6 +13,7 @@ import (
 	"github.com/samber/lo"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
@@ -335,6 +335,51 @@ func toLogString(v any) string {
 	return string(b)
 }
 
+// feishuAlertSender 飞书自定义机器人告警发送器，实现 commnode.AlertSender。
+// webhook 为空时 SendAlert 静默 no-op（即"配置了机器人地址才发"）。
+type feishuAlertSender struct {
+	webhook string
+}
+
+func (s *feishuAlertSender) SendAlert(ctx context.Context, title, content string) {
+	if s == nil || s.webhook == "" {
+		return
+	}
+	payload := map[string]any{
+		"msg_type": "text",
+		"content":  map[string]any{"text": title + "\n\n" + content},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("feishu alert: marshal payload failed: %v", err)
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.webhook, strings.NewReader(string(body)))
+	if err != nil {
+		log.Printf("feishu alert: new request failed: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("feishu alert: send failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("feishu alert: unexpected status %d", resp.StatusCode)
+	}
+}
+
+// SetFeiShuAlertWebhook 设置飞书自定义机器人 webhook 地址并注入 commnode 告警发送器。
+// webhook 为空时注入的发送器会静默 no-op（即"配置了机器人地址才发"）。
+func SetFeiShuAlertWebhook(webhook string) {
+	if webhook == "" {
+		return
+	}
+	commnode.SetAlertSender(&feishuAlertSender{webhook: webhook})
+}
+
 func (e *MQExecutor) BuildWorker(env string, projectName string, redisCfg *RedisConfig) (*rulegox.MQWorker, error) {
 	c, err := Redis2Connect(redisCfg)
 	if err != nil {
@@ -586,6 +631,14 @@ func NewMQExecutorWithLogAndEnv(logStore ActivityLogStore, envConfigStore EnvCon
 		envConfigStore: envConfigStore,
 	}
 }
+func getSignMap(secret string) map[string]any {
+	timestamp := time.Now().Unix()
+	sign := httputil.GenFeiShuSign(timestamp, secret)
+	return map[string]any{
+		"sign":      sign,
+		"timestamp": timestamp,
+	}
+}
 
 // NewWfWorkerFromRedisConfigAPI 通过配置中心接口（domain + 项目 + 环境）获取 Redis 配置，并据此创建 WfWorker。
 func NewWfWorkerFromRedisConfigAPI(ctx context.Context, project, env string, domain string, apiToken string) (*WfWorker, error) {
@@ -605,14 +658,9 @@ func NewWfWorkerFromRedisConfigAPI(ctx context.Context, project, env string, dom
 		return nil, err
 	}
 	newUrl = fmt.Sprintf("%s%s", domain, newUrl)
-	timestamp := time.Now().Unix()
-	key := crypto.Md5(fmt.Sprintf("%d%s", timestamp, apiToken))
 	resp := curl.NewClient().NewRequest(&curl.Request{
-		Url: newUrl,
-		Data: map[string]any{
-			"key":       key,
-			"timestamp": timestamp,
-		},
+		Url:    newUrl,
+		Data:   getSignMap(apiToken),
 		Method: http.MethodPost,
 	}).Submit(ctx)
 	if resp.Error != nil {
@@ -676,16 +724,17 @@ func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string
 		return nil, err
 	}
 	newUrl = fmt.Sprintf("%s%s", domain, newUrl)
-	timestamp := time.Now().Unix()
-	key := crypto.Md5(fmt.Sprintf("%d%s", timestamp, apiToken))
 
 	postData := map[string]any{}
 	err = conv.Unmarshal(invokeRequest, &postData)
 	if err != nil {
 		return nil, err
 	}
-	postData["key"] = key
-	postData["timestamp"] = timestamp
+
+	newMap := getSignMap(apiToken)
+	for k, v := range newMap {
+		postData[k] = v
+	}
 
 	resp := curl.NewClient().NewRequest(&curl.Request{
 		Url:    newUrl,

@@ -3428,6 +3428,118 @@ function clearAllLogFilters() {
   loadAllLogs();
 }
 
+// ===================== 统计页：Node 日志按天统计 =====================
+// 加载「统计」页数据并渲染柱状图：每个 node 每天的访问量与错误量。
+async function loadStatistics() {
+  const statNode = document.getElementById('stat-node');
+  const statEnv = document.getElementById('stat-env');
+  const statDays = document.getElementById('stat-days');
+  const chart = document.getElementById('stat-chart');
+  if (!chart) return;
+  const curProject = getProject();
+  if (!curProject) {
+    chart.innerHTML = '<div class="log-empty">请先在右上角选择一个项目</div>';
+    return;
+  }
+  // 确保 Node 缓存已加载（首次进入统计页时可能尚未访问 Nodes 页，下拉才会只有「全部 Node」）
+  if (!window._nodesForEdit || window._nodesForEdit.length === 0) {
+    try {
+      const ns = await api('/api/nodes');
+      if (ns && ns.length) window._nodesForEdit = ns;
+    } catch (e) { /* 忽略 */ }
+  }
+  // 重建 Node 下拉（保留当前选中值）
+  if (statNode) {
+    const sel = statNode.value;
+    statNode.innerHTML = '<option value="">全部 Node</option>';
+    (window._nodesForEdit || []).forEach(n => {
+      if (n && n.node_id) {
+        const o = document.createElement('option');
+        o.value = n.node_id;
+        o.textContent = (n.name || n.node_id) + ' (' + n.node_id + ')';
+        statNode.appendChild(o);
+      }
+    });
+    if (sel) statNode.value = sel;
+  }
+  // 重建 Env 下拉（保留当前选中值）
+  let envList = [];
+  try {
+    envList = await api('/api/env-configs');
+  } catch (e) { /* 忽略：env 可选 */ }
+  if (statEnv) {
+    const sel = statEnv.value;
+    statEnv.innerHTML = '<option value="">全部环境</option>';
+    (envList || []).forEach(e => {
+      const v = e.env_name || e.name || e.env || '';
+      if (!v) return;
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = v;
+      statEnv.appendChild(o);
+    });
+    if (sel) statEnv.value = sel;
+  }
+  const params = new URLSearchParams();
+  params.set('project', curProject);
+  if (statEnv && statEnv.value) params.set('env', statEnv.value);
+  if (statNode && statNode.value) params.set('node_id', statNode.value);
+  if (statDays && statDays.value) params.set('days', statDays.value);
+  chart.innerHTML = '<div class="log-empty">加载中…</div>';
+  let data;
+  try {
+    data = await api('/api/node-logs/stats?' + params.toString());
+  } catch (e) {
+    chart.innerHTML = '<div class="log-empty">加载失败：' + escHtml(String((e && e.message) || e)) + '</div>';
+    return;
+  }
+  const list = (data && data.list) || [];
+  renderStatChart(chart, list, statNode && statNode.value);
+}
+
+// 纯 CSS 柱状图渲染：横轴为日期，每日期两根柱（访问量蓝 / 错误量红）。
+function renderStatChart(container, list, singleNode) {
+  if (!list.length) {
+    container.innerHTML = '<div class="log-empty">所选条件下暂无统计数据</div>';
+    return;
+  }
+  // 按日期聚合（全部 Node 模式需对多 node 同日求和）
+  const byDate = {};
+  list.forEach(s => {
+    const d = s.date || '';
+    if (!byDate[d]) byDate[d] = { date: d, total: 0, errors: 0 };
+    byDate[d].total += (s.total || 0);
+    byDate[d].errors += (s.errors || 0);
+  });
+  const dates = Object.keys(byDate).sort();
+  let maxV = 1;
+  dates.forEach(d => { if (byDate[d].total > maxV) maxV = byDate[d].total; });
+  const h = 200;
+  let html = '<div style="display:flex;align-items:flex-end;gap:12px;min-height:' + (h + 40) + 'px;padding:14px 6px 6px;border-bottom:1px solid var(--border)">';
+  dates.forEach(d => {
+    const item = byDate[d];
+    const totalH = Math.max(2, Math.round((item.total / maxV) * h));
+    const errH = Math.max(0, Math.round((item.errors / maxV) * h));
+    html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;flex:1 1 40px;min-width:36px">';
+    html += '<div style="font-size:.7rem;color:var(--text-muted);margin-bottom:3px">' + item.total + '</div>';
+    html += '<div style="display:flex;align-items:flex-end;height:' + h + 'px;width:100%;justify-content:center;gap:4px">';
+    html += '<div title="访问量: ' + item.total + '" style="width:16px;background:#3b82f6;border-radius:3px 3px 0 0;height:' + totalH + 'px"></div>';
+    html += '<div title="错误量: ' + item.errors + '" style="width:16px;background:#ef4444;border-radius:3px 3px 0 0;height:' + errH + 'px"></div>';
+    html += '</div>';
+    html += '<div style="font-size:.68rem;color:var(--text-muted);margin-top:5px;white-space:nowrap">' + escHtml(String(d).slice(5)) + '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  if (!singleNode) {
+    const nodeNames = {};
+    list.forEach(s => { nodeNames[s.node_id] = s.node_name || s.node_id; });
+    const names = Object.keys(nodeNames).map(k => escHtml(nodeNames[k])).join('、');
+    html += '<div style="font-size:.75rem;color:var(--text-muted);margin-top:10px;line-height:1.6">统计范围：全部 Node（共 ' +
+      Object.keys(nodeNames).length + ' 个：' + names + '），按天汇总各 Node 的访问量与错误量。</div>';
+  }
+  container.innerHTML = html;
+}
+
 // ============================================================
 // 测试单个 Activity（MQ 分布式执行）
 // ============================================================
@@ -4697,6 +4809,93 @@ async function loadReleaseTable() {
   } catch (e) {
     tbody.innerHTML = '<tr><td colspan="6" style="color:#ef4444">加载失败: ' + esc(e.message) + '</td></tr>';
   }
+}
+
+// ===================== 发布记录版本 DSL 对比 =====================
+
+// openCompareModal 打开版本对比弹窗，填充左右版本下拉（默认左=最新、右=次新），并渲染 diff。
+function openCompareModal() {
+  const leftSel = document.getElementById('compare-left');
+  const rightSel = document.getElementById('compare-right');
+  const cache = window._releasesCache || {};
+  const versions = Object.keys(cache).sort((x, y) => Number(y) - Number(x)); // 版本号降序
+  if (!versions.length) { showToast('无发布记录可对比', 'error'); return; }
+  const fill = (sel, defIdx) => {
+    sel.innerHTML = versions.map(v => {
+      const r = cache[v];
+      const suffix = (r && r.is_current) ? ' (当前生效)' : '';
+      const name = (r && r.name) ? (' · ' + r.name) : '';
+      return '<option value="' + escAttr(v) + '">v' + escHtml(v) + escHtml(name) + escHtml(suffix) + '</option>';
+    }).join('');
+    if (versions[defIdx] != null) sel.value = versions[defIdx];
+  };
+  fill(leftSel, 0);
+  fill(rightSel, Math.min(1, versions.length - 1));
+  document.getElementById('compare-modal-overlay').classList.add('show');
+  renderCompareDiff();
+}
+
+function closeCompareModal() {
+  document.getElementById('compare-modal-overlay').classList.remove('show');
+}
+
+// diffLines 行级 LCS diff：返回 [{type:'same'|'del'|'add', text}]，用于 GitHub 风格统一视图展示。
+function diffLines(a, b) {
+  const aArr = (a || '').split('\n');
+  const bArr = (b || '').split('\n');
+  const n = aArr.length, m = bArr.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = aArr[i] === bArr[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const res = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (aArr[i] === bArr[j]) { res.push({ type: 'same', text: aArr[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { res.push({ type: 'del', text: aArr[i] }); i++; }
+    else { res.push({ type: 'add', text: bArr[j] }); j++; }
+  }
+  while (i < n) { res.push({ type: 'del', text: aArr[i] }); i++; }
+  while (j < m) { res.push({ type: 'add', text: bArr[j] }); j++; }
+  return res;
+}
+
+// renderCompareDiff 取左右版本的 dsl_json（美化后）做行级 diff，以左右双栏（split）展示：
+// 左框显示左版本、右框显示右版本，与上方下拉一一对应；两版本不一致的行标红。
+async function renderCompareDiff() {
+  const leftSel = document.getElementById('compare-left');
+  const rightSel = document.getElementById('compare-right');
+  const box = document.getElementById('compare-diff');
+  if (!leftSel || !rightSel || !box) return;
+  const lv = leftSel.value, rv = rightSel.value;
+  if (!lv || !rv) { box.innerHTML = '<div style="padding:12px;color:#94a3b8">请选择左右两个版本</div>'; return; }
+  if (lv === rv) { box.innerHTML = '<div style="padding:12px;color:#94a3b8">左右版本相同，无需对比</div>'; return; }
+  const cache = window._releasesCache || {};
+  const leftRel = cache[lv], rightRel = cache[rv];
+  if (!leftRel || !rightRel) { box.innerHTML = '<div style="padding:12px;color:#f87171">版本数据缺失，请刷新发布记录后重试</div>'; return; }
+  const pretty = (j) => { try { return JSON.stringify(JSON.parse(j || '{}'), null, 2); } catch (e) { return j || ''; } };
+  const a = pretty(leftRel.dsl_json);
+  const b = pretty(rightRel.dsl_json);
+  const diff = diffLines(a, b);
+  // 转换为左右对齐的行：same->{left,right,changed:false}；del->{left,right:null}；add->{left:null,right}
+  const rows = diff.map(d => {
+    if (d.type === 'same') return { left: d.text, right: d.text, changed: false };
+    if (d.type === 'del') return { left: d.text, right: null, changed: true };
+    return { left: null, right: d.text, changed: true };
+  });
+  const html = rows.map(r => {
+    const lCls = r.changed ? 'background:#7f1d1d;color:#fecaca' : '';
+    const rCls = r.changed ? 'background:#7f1d1d;color:#fecaca' : '';
+    const lTxt = escHtml(r.left != null ? r.left : '');
+    const rTxt = escHtml(r.right != null ? r.right : '');
+    return '<div style="display:flex">' +
+      '<div style="flex:1;min-height:1.5em;padding:0 10px;border-right:1px solid #334155;' + lCls + '">' + lTxt + '</div>' +
+      '<div style="flex:1;min-height:1.5em;padding:0 10px;' + rCls + '">' + rTxt + '</div>' +
+    '</div>';
+  }).join('');
+  box.innerHTML = html;
 }
 
 async function rollbackRelease(version) {
@@ -7239,11 +7438,26 @@ async function bootstrapAuth() {
     if (res.ok) {
       currentUser = await res.json();
       onLoginSuccess(currentUser);
+      printVersion();
       return;
     }
   } catch (_) {}
-  // 未登录：显示遮罩
+  // 未登录：显示遮罩；仍打印版本（供发布后直观确认）
   document.getElementById('login-overlay').classList.remove('hidden');
+  printVersion();
+}
+
+// printVersion 在浏览器控制台打印当前构建版本（git commit id），便于直观确认版本是否更新成功。
+async function printVersion() {
+  try {
+    const res = await fetch('/api/version');
+    if (!res.ok) return;
+    const d = await res.json();
+    const id = d && d.git_commit_id;
+    if (id) {
+      console.log('%c[app-version] git_commit_id: ' + id, 'color:#0e7490;font-weight:bold');
+    }
+  } catch (_) {}
 }
 
 async function onLoginSuccess(u) {
@@ -7275,6 +7489,7 @@ function switchTab(tab) {
   else if (tab === 'sub-chains') loadSubChains();
   else if (tab === 'root-chains') loadRootChains();
   else if (tab === 'logs') openAllLogsTab();
+  else if (tab === 'statistics') loadStatistics();
   else if (tab === 'orchestrate') loadOrchData();
   else if (tab === 'execute') {
     refreshConnSuggestions();
@@ -7288,7 +7503,7 @@ function switchTab(tab) {
 function applyInitialTab() {
   const tab = new URLSearchParams(location.search).get('tab');
   if (!tab) return;
-  const valid = ['activities', 'nodes', 'sub-chains', 'root-chains', 'logs', 'orchestrate'];
+  const valid = ['activities', 'nodes', 'sub-chains', 'root-chains', 'logs', 'statistics', 'orchestrate'];
   if (valid.includes(tab)) switchTab(tab);
 }
 

@@ -80,6 +80,9 @@ func (ws *WebServer) registerRoutes() {
 	// 健康检查
 	ws.mux.HandleFunc("GET /api/health", ws.handleHealth)
 
+	// 构建版本（git commit id），供前端 console.log 直观确认版本是否更新
+	ws.mux.HandleFunc("GET /api/version", ws.handleVersion)
+
 	// 登录 / 登出 / 当前用户
 	ws.mux.HandleFunc("POST /api/login", ws.handleLogin)
 	ws.mux.HandleFunc("POST /api/logout", ws.handleLogout)
@@ -179,6 +182,8 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("GET /api/activity-logs", ws.handleListActivityLogsGlobal)
 	// 跨 Node 日志查询（按 trace_id 等字段全局查询 node 运行日志）
 	ws.mux.HandleFunc("GET /api/node-logs", ws.handleListNodeLogsGlobal)
+	// Node 日志按天统计（每个 node 每日访问量与错误量），用于「统计」页柱状图
+	ws.mux.HandleFunc("GET /api/node-logs/stats", ws.handleNodeLogStats)
 }
 
 // projectParam 从 URL query 中提取 project 参数，未传则返回空字符串。
@@ -509,6 +514,25 @@ func (ws *WebServer) handleDeleteProjectSecret(w http.ResponseWriter, r *http.Re
 
 func (ws *WebServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// gitCommitID 构建时由 main 包注入（读取 Dockerfile 生成的 /app/git_commit_id）。
+// 为空表示本地开发未注入版本信息。
+var gitCommitID string
+
+// SetGitCommitID 由 main 包在启动时注入构建版本号。
+func SetGitCommitID(id string) {
+	gitCommitID = id
+}
+
+// GetGitCommitID 返回当前构建版本号（供其它包使用）。
+func GetGitCommitID() string {
+	return gitCommitID
+}
+
+// handleVersion 返回构建版本（git commit id），供前端在 console.log 直观确认版本是否更新。
+func (ws *WebServer) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"git_commit_id": gitCommitID})
 }
 
 // ============================================================
@@ -2141,6 +2165,37 @@ func (ws *WebServer) handleListNodeLogsGlobal(w http.ResponseWriter, r *http.Req
 		"total":     total,
 		"page":      page,
 		"page_size": pageSize,
+	})
+}
+
+// handleNodeLogStats 按 node + 天聚合统计每个 node 每天的访问量与错误量。
+// 查询参数：project(必填)、env(可选)、node_id(可选，空表示全部 node)、days(可选，默认 7，范围 1~365)。
+func (ws *WebServer) handleNodeLogStats(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	q := r.URL.Query()
+	env := q.Get("env")
+	nodeID := q.Get("node_id")
+	days, _ := strconv.Atoi(q.Get("days"))
+	if days <= 0 {
+		days = 7
+	}
+	if days > 365 {
+		days = 365
+	}
+	stats, err := ws.svc.NodeLogStats(r.Context(), project, env, nodeID, days)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if stats == nil {
+		stats = []workflow.NodeLogDayStat{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"list": stats,
 	})
 }
 

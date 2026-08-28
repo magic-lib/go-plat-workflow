@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/logs"
 	"github.com/magic-lib/go-plat-utils/logs/mysqllog"
+	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"os"
@@ -70,8 +71,9 @@ func main() {
 		log.Info().Msg("config file:" + userConfigPath)
 	}
 
-	// 启动时打印构建时写入的 git commit id（由 Dockerfile 生成 /app/git_commit_id）
-	printGitCommitID()
+	// 启动时打印构建时写入的 git commit id（由 Dockerfile 生成 /app/git_commit_id），
+	// 并注入 web 包，供前端 /api/version 在页面 console 直观确认版本是否更新。
+	web.SetGitCommitID(printGitCommitID())
 
 	// 按优先级兜底解析 dbDSN 与 listenAddr：
 	// 命令行 flag 已显式传入则不再覆盖；否则依次回退到环境变量、配置文件、内置默认值。
@@ -112,6 +114,12 @@ func main() {
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create web server")
 		return
+	}
+
+	// 将配置文件（config/app.yaml）中的飞书告警 Webhook 注入 workflow，
+	// 使 Node 执行失败时异步推送告警到群（地址为空则不告警）。
+	if cfg := loadAppConfig(); cfg != nil {
+		workflow.SetFeiShuAlertWebhook(cfg.FeishuAlertWebhook)
 	}
 
 	// 优雅退出
@@ -214,18 +222,19 @@ func maskDSN(dsn string) string {
 // gitCommitIDFile 构建时由 Dockerfile 生成的 commit id 文件路径。
 const gitCommitIDFile = "/app/git_commit_id"
 
-// printGitCommitID 读取构建时写入的 git commit id 并打印到控制台。
-// 文件不存在（本地开发）时静默跳过。
-func printGitCommitID() {
+// printGitCommitID 读取构建时写入的 git commit id 并返回。
+// 文件不存在（本地开发）或为空时返回空字符串，由调用方决定是否注入。
+func printGitCommitID() string {
 	data, err := os.ReadFile(gitCommitIDFile)
 	if err != nil {
-		return
+		return ""
 	}
 	commitID := strings.TrimSpace(string(data))
 	if commitID == "" {
-		return
+		return ""
 	}
 	log.Info().Str("git_commit_id", commitID).Msg("build info")
+	return commitID
 }
 
 func initMysqlLogger(db *sql.DB) (logs.ILogger, error) {
