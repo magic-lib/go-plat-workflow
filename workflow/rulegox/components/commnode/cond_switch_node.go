@@ -110,7 +110,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		ctx.TellNext(msg) //结束流程了
 		return
 	}
-	nodeParams, err := NodeParams(allParams, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
+	nodeParams, err := NodeArguments(allParams, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
 	if err != nil {
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, 0, nodeStr, x.nodeName, "fail", "error", types.Failure, allParams, nil, nil, err)
 		if cliErr == nil && x.nodeLogCli == nil {
@@ -119,8 +119,11 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		ctx.TellFailure(msg, err)
 		return
 	}
+	allParams.SetStepArguments(currNodeId, nodeParams)
+	stepData := allParams.GetStep(currNodeId)
+	stepDataMap, _ := stepData.ToMaps()
 
-	relationType, conResult, err := routeByCondition(x.ruleObj, condStr, nodeParams)
+	relationType, conResult, err := routeByCondition(x.ruleObj, condStr, stepDataMap)
 	if err != nil {
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, 0, nodeStr, x.nodeName, "fail", "error", types.Failure, allParams, nil, nil, err)
 		if cliErr == nil && x.nodeLogCli == nil {

@@ -165,7 +165,7 @@ func TestRuleGoCondNode11(t *testing.T) {
 	nodeOldParam := allParams.GetStepArguments("N000004")
 	newParam1 := &paramx.FlowContext{Arguments: nodeOldParam}
 
-	newParam, err := commnode.NodeParams(newParam1, "N000004", nil, []*param.BindConfig{
+	newParam, err := commnode.NodeArguments(newParam1, "N000004", nil, []*param.BindConfig{
 		{
 			Key:    "audit_order_id",
 			Value:  "",

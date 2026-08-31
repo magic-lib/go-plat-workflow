@@ -33,8 +33,8 @@ type CommConfiguration struct {
 	RetTemplate map[string]any      `json:"ret_template"` //返回值映射，动态配置的，是在配置主或子链的时候添加的
 }
 
-// NodeParams 根据传入的参数和节点配置，生成节点执行所需的参数映射
-func NodeParams(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTemplate map[string]any, arguments []*param.BindConfig) (map[string]any, error) {
+// NodeArguments 根据传入的参数和节点配置，生成节点执行所需的参数映射
+func NodeArguments(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTemplate map[string]any, arguments []*param.BindConfig) (map[string]any, error) {
 	// 这里需要复制一下 arguments，因为 arguments 是引用传递，会导致后续的修改影响到原始的 arguments
 	if len(arguments) > 0 {
 		cloned := make([]*param.BindConfig, len(arguments))

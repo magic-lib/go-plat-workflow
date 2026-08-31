@@ -942,57 +942,34 @@ function onNodeTypeChange() {
     syncActivityConfig();
     document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
   }
-  // condSwitch / Activity 共用 node-cond-section：condSwitch 填 condition，Activity 填 switch_condition（执行后路由条件）
+  // condSwitch / Activity 共用 node-cond-section 与 switch_condition 输入框
   const isCond = type === 'custom/CondSwitch';
   document.getElementById('node-cond-section').style.display = (isCond || isActivity) ? '' : 'none';
-  if (isCond) {
+  if (isCond || isActivity) {
     let cfg = {};
     try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
-    const cond = (cfg.node_config && cfg.node_config.condition) || '';
-    document.getElementById('node-condition').value = cond;
-    // Activity 的 switch_condition 输入框在切换走时清空，避免残留
-    document.getElementById('node-switch-condition').value = '';
-    syncCondConfig();
-  } else if (isActivity) {
-    let cfg = {};
-    try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
-    const sw = (cfg.node_config && cfg.node_config.switch_condition) || '';
-    document.getElementById('node-switch-condition').value = sw;
-    // 执行条件：优先读 enable_condition，兼容旧 node_condition（当前页无该输入框时跳过回填）
-    const ecEl = document.getElementById('node-enable-condition');
-    if (ecEl) {
-      ecEl.value = (cfg.node_config && (cfg.node_config.enable_condition || cfg.node_config.node_condition)) || '';
+    const ncfg = cfg.node_config || {};
+    // 只读新字段 switch_condition（旧 condition 已完全废弃，不做回退兼容）
+    document.getElementById('node-switch-condition').value = ncfg.switch_condition || '';
+    if (isActivity) {
+      // 执行条件：只读新字段 enable_condition（旧 node_condition 已完全废弃，不做回退兼容）
+      const ecEl = document.getElementById('node-enable-condition');
+      if (ecEl) {
+        ecEl.value = (cfg.node_config && cfg.node_config.enable_condition) || '';
+      }
+      syncEnableConfig();
     }
-    // condSwitch 的 condition 输入框在切换走时清空，避免残留
-    document.getElementById('node-condition').value = '';
     syncSwitchConfig();
-    syncEnableConfig();
   } else {
-    document.getElementById('node-condition').value = '';
     document.getElementById('node-switch-condition').value = '';
   }
 }
 
-// 将条件串输入框的内容写入 Configuration（CommConfiguration 结构：node_config.condition 等）
-function syncCondConfig() {
-  if (document.getElementById('node-type').value !== 'custom/CondSwitch') return;
-  let cfg;
-  try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
-  if (typeof cfg !== 'object' || cfg === null) cfg = {};
-  if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
-  cfg.node_config.condition = document.getElementById('node-condition').value;
-  // 保证 CommConfiguration 各字段存在
-  if (typeof cfg.arg_mapping === 'undefined') cfg.arg_mapping = {};
-  if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
-  if (typeof cfg.arguments === 'undefined') cfg.arguments = [];
-  if (typeof cfg.responses === 'undefined') cfg.responses = {};
-  document.getElementById('node-configuration').value = prettyJson(cfg);
-}
-
-// 将「执行后路由条件」输入框的内容写入 Configuration（Activity 专用：node_config.switch_condition）。
-// 活动执行成功后按本节点返回值对表达式求值，bool→True/False 分支，string→自定义 relationType 分支。
+// 将「路由条件」输入框的内容写入 Configuration（node_config.switch_condition）。
+// condSwitch / Activity 共用该字段：condSwitch 按返回值路由分支，Activity 执行成功后按返回值路由分支。
 function syncSwitchConfig() {
-  if (document.getElementById('node-type').value !== 'custom/Activity') return;
+  const t = document.getElementById('node-type').value;
+  if (t !== 'custom/CondSwitch' && t !== 'custom/Activity') return;
   let cfg;
   try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
   if (typeof cfg !== 'object' || cfg === null) cfg = {};
@@ -1003,11 +980,55 @@ function syncSwitchConfig() {
   if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
   if (typeof cfg.arguments === 'undefined') cfg.arguments = [];
   if (typeof cfg.responses === 'undefined') cfg.responses = {};
+  // 旧字段 condition 已废弃：保存时直接丢弃，统一使用 switch_condition
+  if (cfg.node_config.condition !== undefined) {
+    delete cfg.node_config.condition;
+  }
   document.getElementById('node-configuration').value = prettyJson(cfg);
 }
 
+// 路由条件下方的「可用变量」提示：实时列出本节点的全部参数与返回值，
+// 格式为 [arguments.参数key] / [responses.返回值key]，点击即可复制，供编写条件表达式使用。
+function renderCondVarSnippets() {
+  const box = document.getElementById('node-cond-var-snippets');
+  if (!box) return;
+  const items = [];
+  // 节点参数：来自「参数定义」表单，格式 [arguments.<key>]
+  nodeParamDefs().forEach(p => {
+    if (!p.key) return;
+    items.push({ ref: '[arguments.' + p.key + ']', label: p.label || '', type: p.type || '' });
+  });
+  // 节点返回值：来自「返回值定义」表单，格式 [responses.<key>]
+  const outRows = document.querySelectorAll('#node-outputs-container .param-row');
+  outRows.forEach(row => {
+    const keyEl = row.querySelector('.output-key');
+    const key = keyEl ? keyEl.value.trim() : '';
+    if (!key) return;
+    const labelEl = row.querySelector('.output-label');
+    const typeEl = row.querySelector('.output-type');
+    items.push({
+      ref: '[responses.' + key + ']',
+      label: labelEl ? labelEl.value.trim() : '',
+      type: typeEl ? typeEl.value : ''
+    });
+  });
+  if (items.length === 0) {
+    box.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted)">暂无可用变量：请先在下方「参数定义」或「返回值定义」中添加条目</div>';
+    return;
+  }
+  const rows = items.map(it => {
+    const meta = [it.label, it.type].filter(Boolean).join(' / ');
+    return '<div class="cond-var-snippet" onclick="copyToClipboard(' + JSON.stringify(it.ref) + ')" title="点击复制" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0;padding:3px 8px;border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:.74rem;color:var(--accent);background:#f3f6fb">' +
+      '<span>' + escHtml(it.ref) + '</span>' +
+      (meta ? '<span style="color:var(--text-muted);font-size:.7rem;font-family:inherit">' + escHtml(meta) + '</span>' : '') +
+      '</div>';
+  }).join('');
+  box.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">可用变量（点击复制）：</div>' +
+    '<div style="display:flex;flex-wrap:wrap">' + rows + '</div>';
+}
+
 // 将 Activity 节点的「执行条件」输入框内容写入 Configuration（node_config.enable_condition）。
-// 满足才执行该节点，否则跳过（不执行活动）。兼容旧字段 node_condition（读取时已优先读 enable_condition）。
+// 满足才执行该节点，否则跳过（不执行活动）。旧字段 node_condition 已完全废弃。
 function syncEnableConfig() {
   if (document.getElementById('node-type').value !== 'custom/Activity') return;
   const ecEl = document.getElementById('node-enable-condition');
@@ -1017,7 +1038,7 @@ function syncEnableConfig() {
   if (typeof cfg !== 'object' || cfg === null) cfg = {};
   if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
   cfg.node_config.enable_condition = ecEl.value;
-  // 兼容旧字段：同步清空旧的 node_condition，避免历史数据残留导致歧义
+  // 旧字段 node_condition 已废弃：保存时直接丢弃，统一使用 enable_condition
   if (cfg.node_config.node_condition !== undefined) {
     delete cfg.node_config.node_condition;
   }
@@ -1880,6 +1901,17 @@ async function saveNode() {
       return;
     }
   }
+  // 路由条件（switch_condition）：condSwitch / Activity 共用，将输入框内容写入 Configuration.node_config，确保落库。
+  // 必须放在 Activity 分支之前，否则 CondSwitch 节点不会走 Activity 分支导致 switch_condition 丢失。
+  if (body.type === 'custom/CondSwitch' || body.type === 'custom/Activity') {
+    if (typeof body.configuration !== 'object' || body.configuration === null) body.configuration = {};
+    if (!body.configuration.node_config || typeof body.configuration.node_config !== 'object') body.configuration.node_config = {};
+    body.configuration.node_config.switch_condition = document.getElementById('node-switch-condition')?.value || '';
+    // 旧字段 condition 已废弃：保存时直接丢弃，统一使用 switch_condition
+    if (body.configuration.node_config.condition !== undefined) {
+      delete body.configuration.node_config.condition;
+    }
+  }
   // activity 类型：校验 activity 编排，并写入 Configuration
   if (body.type === 'custom/Activity') {
     if (typeof body.configuration !== 'object' || body.configuration === null) body.configuration = {};
@@ -1890,8 +1922,6 @@ async function saveNode() {
     if (body.configuration.node_config.node_condition !== undefined) {
       delete body.configuration.node_config.node_condition; // 清理旧字段
     }
-    // 执行后路由条件（switch_condition）：将输入框内容写入 Configuration.node_config，确保落库
-    body.configuration.node_config.switch_condition = document.getElementById('node-switch-condition')?.value || '';
     const stages = collectStages();
     const flat = [];
     stages.forEach(s => s.forEach(it => flat.push(it)));

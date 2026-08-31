@@ -36,7 +36,7 @@ type ActivityNode struct {
 	Configuration *CommConfiguration     `json:"configuration"`
 	activities    [][]*activity.Activity // 执行阶段列表
 	// enableCondition 节点执行前判断条件：满足条件才执行该节点，否则跳过（不执行）。
-	// 对应 node_config.enable_condition（旧字段 node_condition 仍兼容读取）。
+	// 对应 node_config.enable_condition（旧字段 node_condition 已废弃，不再兼容）。
 	enableCondition string
 	// switchCondition 配置后，活动执行成功不再固定 TellSuccess，而是对本节点返回值求值该表达式，
 	// 按结果分支路由（bool→True/False；string→自定义 relationType；其他→Success/Failure），
@@ -154,7 +154,7 @@ func (x *ActivityNode) Init(_ types.Config, configuration types.Configuration) e
 
 	cfgActs := new(activityCfg)
 	_ = conv.Unmarshal(x.Configuration.NodeConfig, cfgActs)
-	// 解析执行前判断条件（node_config.enable_condition，旧字段 node_condition 兼容）：满足才执行，否则跳过
+	// 解析执行前判断条件（node_config.enable_condition）：满足才执行，否则跳过
 	x.enableCondition = cfgActs.EnableCondition
 	// 解析执行后路由条件（node_config.switch_condition）：活动成功后按返回值分支路由
 	x.switchCondition = cfgActs.SwitchCondition
@@ -453,7 +453,7 @@ func (x *ActivityNode) getNodeFlowContext(ctx types.RuleContext, allParam *param
 	}
 
 	// 合并 ArgMapping 和 BindArgs 到 allParam 中
-	nodeParams, err := NodeParams(allParam, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
+	nodeParams, err := NodeArguments(allParam, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
 	if err != nil {
 		return nil, err
 	}
