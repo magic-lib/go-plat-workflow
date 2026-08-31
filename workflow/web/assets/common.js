@@ -4215,9 +4215,10 @@ function outputRenderRefFieldSlot(prevs, prevId, type, selectedField) {
     const opts = rvs.map(rv => {
       const rvName = rv.name || '';
       const rvKey = rv.key || '';
-      // return_value 的 key 为空表示返回活动返回的全部内容：选中后等价「返回值整体」，
-      // 选项 value 置空，拼路径时回退为 {{id.responses}}（与返回全部数据完全一致）
-      const val = rvKey === '' ? '' : rvName;
+      // 引用字段名统一用 name（与 outputRefSnippetHTML 一致）：name 是 Activity 返回值 JSON 里的实际字段名。
+      // 不再因 key 为空而把选项 value 置空——否则选中后字段输入框为空，拼路径时回退为整体
+      // {{id.responses}}，导致选了「返回值.字段」却保存不上（表现为未提交）。
+      const val = rvName;
       // 选项文本括号里展示经 Activity 修改后的中文名（label/name），而非数据原始返回的 key
       const dispName = rv.label || rv.name || '';
       const label = rvName + (dispName ? ' (' + dispName + ')' : '');
@@ -7511,9 +7512,10 @@ function argRenderRefFieldSlot(prevs, prevId, type, selectedField) {
     const opts = rvs.map(rv => {
       const rvName = rv.name || '';
       const rvKey = rv.key || '';
-      // return_value 的 key 为空表示返回活动返回的全部内容：选中后等价「返回值整体」，
-      // 选项 value 置空，拼路径时回退为 {{id.responses}}（与返回全部数据完全一致）
-      const val = rvKey === '' ? '' : rvName;
+      // 引用字段名统一用 name（与 outputRefSnippetHTML 一致）：name 是 Activity 返回值 JSON 里的实际字段名。
+      // 不再因 key 为空而把选项 value 置空——否则选中后字段输入框为空，拼路径时回退为整体
+      // {{id.responses}}，导致选了「返回值.字段」却保存不上（表现为未提交）。
+      const val = rvName;
       // 选项文本括号里展示经 Activity 修改后的中文名（label/name），而非数据原始返回的 key
       const dispName = rv.label || rv.name || '';
       const label = rvName + (dispName ? ' (' + dispName + ')' : '');

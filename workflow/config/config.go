@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/magic-lib/go-plat-startupcfg/startupcfg"
 	"github.com/magic-lib/go-plat-utils/conv"
@@ -24,6 +25,8 @@ const (
 	feishuAlertWebhookKey = "feishu_alert_webhook"
 	// normalKey 配置文件中 custom.normal 段的 key 名。
 	normalKey = "normal"
+
+	DefaultTimeout = 60 * time.Second
 )
 
 type ReturnValue struct {

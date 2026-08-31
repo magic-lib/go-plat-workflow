@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
+	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/samber/lo"
 	"io"
@@ -1486,7 +1487,7 @@ func (s *WorkflowService) testHTTPActivity(ctx context.Context, req *TestActivit
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: config.DefaultTimeout}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		result := &TestActivityResult{Status: "fail", ErrorMsg: err.Error()}

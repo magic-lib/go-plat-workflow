@@ -10,6 +10,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
+	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	"github.com/samber/lo"
 	"log"
 	"net/http"
@@ -630,7 +631,7 @@ func (e *MQExecutor) getRedisConfig(ctx context.Context, project, env string) (*
 func NewMQExecutorWithLogAndEnv(logStore ActivityLogStore, envConfigStore EnvConfigStore) *MQExecutor {
 	return &MQExecutor{
 		Namespace:      "workflow",
-		Timeout:        30 * time.Second,
+		Timeout:        config.DefaultTimeout,
 		logStore:       logStore,
 		envConfigStore: envConfigStore,
 	}

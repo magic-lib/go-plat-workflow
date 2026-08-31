@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"strconv"
 	"strings"
@@ -31,7 +32,7 @@ const (
 	// heartbeatScanInterval 周期扫描单个 redis 心跳 hash 的间隔
 	heartbeatScanInterval = 5 * time.Second
 	// reconcileInterval 重新发现环境 Redis 配置的间隔（增删监听任务）
-	reconcileInterval = 30 * time.Second
+	reconcileInterval = config.DefaultTimeout
 	// logBatchSize 单次从 redis list 拉取的日志条数
 	logBatchSize = 100
 )

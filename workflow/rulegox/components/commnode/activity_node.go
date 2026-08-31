@@ -12,6 +12,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"go.uber.org/multierr"
 	"log"
@@ -244,10 +245,20 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	nodeStr := string(currNodeId)
 	// 上报 node 入参日志（落库 wf_node_logs，便于前端查看运行情况）
 	//x.pushNodeLog(actMetaData, nodeStr, nodeStr, "request", "info", allParam, stepFlowCtx.Arguments, nil)
+
 	startTime := time.Now().UnixMilli()
+
+	goroutines.GoAsync(func(param ...any) {
+		engine.MysqlLogger.Info("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d", actMetaData.TraceId, nodeStr, 0)
+	})
+
 	nodeSpanId := id.GetUUID(nodeStr)
 	err = x.execNode(ctx, nodeSpanId, actMetaData, stepFlowCtx)
 	durationMs := time.Now().UnixMilli() - startTime
+
+	goroutines.GoAsync(func(param ...any) {
+		engine.MysqlLogger.Info("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d", actMetaData.TraceId, nodeStr, time.Now().UnixMilli()-startTime)
+	})
 
 	nodeStep := &paramx.Step{
 		Arguments:   stepFlowCtx.Arguments,

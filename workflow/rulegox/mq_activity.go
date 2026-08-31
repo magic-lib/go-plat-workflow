@@ -26,10 +26,9 @@ import (
 )
 
 const (
-	workflowTopic   = "workflow"
-	workflowTimeout = 30 * time.Second
-	activityTopic   = "activity"
-	maxLogsSize     = 10000
+	workflowTopic = "workflow"
+	activityTopic = "activity"
+	maxLogsSize   = 10000
 
 	// 心跳上报间隔：每 10s 统一上报一次，多个 actName 只需一次 HSET 即可完成，减少请求量
 	heartbeatInterval = 10 * time.Second
@@ -131,7 +130,7 @@ type activityHeartbeat struct {
 func NewMQWorker(projectName, env string, redisCfg *conn.Connect) (*MQWorker, error) {
 	cfg := &mq.AsynqMessageQueue{
 		Namespace: GetMQNamespace(projectName, env), //项目+环境命名空间
-		Timeout:   workflowTimeout,
+		Timeout:   config.DefaultTimeout,
 	}
 	client, err := mq.NewAsynqMessageQueue(redisCfg, cfg)
 	if err != nil {
