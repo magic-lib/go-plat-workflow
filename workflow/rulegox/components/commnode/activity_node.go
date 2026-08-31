@@ -317,8 +317,9 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		allParam.SetStep(currNodeId, nodeStep)
 		msg.SetData(conv.String(allParam))
 		if x.switchCondition != "" {
+			nodeStepMap, _ := allParam.StepMaps(currNodeId)
 			// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
-			relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam, stepFlowCtx.Arguments, nodeStep)
+			relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam, stepFlowCtx.Arguments, nodeStepMap)
 			if err != nil {
 				ctx.TellFailure(msg, err)
 				return
@@ -343,7 +344,8 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	if x.switchCondition != "" {
 		// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
-		relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam, stepFlowCtx.Arguments, nodeStep)
+		nodeStepMap, _ := allParam.StepMaps(currNodeId)
+		relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam, stepFlowCtx.Arguments, nodeStepMap)
 		if err != nil {
 			ctx.TellFailure(msg, err)
 			return
@@ -601,9 +603,7 @@ func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*p
 // 求值参数：整体 allParam（data/Steps/Arguments 等）+ 顶层 responses（本节点返回值 dataMap），
 // 因此表达式可写 `responses.in_blacklist == true`（走 True 分支）或 `responses.code`（走自定义 relationType）。
 // 路由语义与 condSwitchNode 一致：bool→True/False；string→自定义 relationType；其他→Success/Failure。
-func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeStr string, allParam *paramx.FlowContext, arguments map[string]any, stepData *paramx.Step) (string, error) {
-	stepDataMap, _ := stepData.ToMaps()
-
+func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeStr string, allParam *paramx.FlowContext, arguments map[string]any, stepDataMap map[string]any) (string, error) {
 	relationType, conResult, err := routeByCondition(x.ruleObj, x.switchCondition, stepDataMap)
 	if err != nil {
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParam, arguments, stepDataMap, err)

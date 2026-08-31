@@ -120,8 +120,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 	allParams.SetStepArguments(currNodeId, nodeParams)
-	stepData := allParams.GetStep(currNodeId)
-	stepDataMap, _ := stepData.ToMaps()
+	stepDataMap, _ := allParams.StepMaps(currNodeId)
 
 	relationType, conResult, err := routeByCondition(x.ruleObj, condStr, stepDataMap)
 	if err != nil {
