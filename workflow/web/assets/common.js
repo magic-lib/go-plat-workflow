@@ -958,9 +958,15 @@ function onNodeTypeChange() {
     try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
     const sw = (cfg.node_config && cfg.node_config.switch_condition) || '';
     document.getElementById('node-switch-condition').value = sw;
+    // 执行条件：优先读 enable_condition，兼容旧 node_condition（当前页无该输入框时跳过回填）
+    const ecEl = document.getElementById('node-enable-condition');
+    if (ecEl) {
+      ecEl.value = (cfg.node_config && (cfg.node_config.enable_condition || cfg.node_config.node_condition)) || '';
+    }
     // condSwitch 的 condition 输入框在切换走时清空，避免残留
     document.getElementById('node-condition').value = '';
     syncSwitchConfig();
+    syncEnableConfig();
   } else {
     document.getElementById('node-condition').value = '';
     document.getElementById('node-switch-condition').value = '';
@@ -992,6 +998,29 @@ function syncSwitchConfig() {
   if (typeof cfg !== 'object' || cfg === null) cfg = {};
   if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
   cfg.node_config.switch_condition = document.getElementById('node-switch-condition').value;
+  // 保证 CommConfiguration 各字段存在
+  if (typeof cfg.arg_mapping === 'undefined') cfg.arg_mapping = {};
+  if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
+  if (typeof cfg.arguments === 'undefined') cfg.arguments = [];
+  if (typeof cfg.responses === 'undefined') cfg.responses = {};
+  document.getElementById('node-configuration').value = prettyJson(cfg);
+}
+
+// 将 Activity 节点的「执行条件」输入框内容写入 Configuration（node_config.enable_condition）。
+// 满足才执行该节点，否则跳过（不执行活动）。兼容旧字段 node_condition（读取时已优先读 enable_condition）。
+function syncEnableConfig() {
+  if (document.getElementById('node-type').value !== 'custom/Activity') return;
+  const ecEl = document.getElementById('node-enable-condition');
+  if (!ecEl) return; // 当前页面无该输入框（如仅管理页未含此区块）则跳过
+  let cfg;
+  try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
+  if (typeof cfg !== 'object' || cfg === null) cfg = {};
+  if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
+  cfg.node_config.enable_condition = ecEl.value;
+  // 兼容旧字段：同步清空旧的 node_condition，避免历史数据残留导致歧义
+  if (cfg.node_config.node_condition !== undefined) {
+    delete cfg.node_config.node_condition;
+  }
   // 保证 CommConfiguration 各字段存在
   if (typeof cfg.arg_mapping === 'undefined') cfg.arg_mapping = {};
   if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
@@ -1855,8 +1884,14 @@ async function saveNode() {
   if (body.type === 'custom/Activity') {
     if (typeof body.configuration !== 'object' || body.configuration === null) body.configuration = {};
     if (!body.configuration.node_config || typeof body.configuration.node_config !== 'object') body.configuration.node_config = {};
+    // 执行前判断条件（enable_condition）：将输入框内容写入 Configuration.node_config，确保落库
+    // 用可选链保护：仅编排页(orch.html)含该输入框，管理页(index.html)无此 UI 时跳过取值。
+    body.configuration.node_config.enable_condition = document.getElementById('node-enable-condition')?.value || '';
+    if (body.configuration.node_config.node_condition !== undefined) {
+      delete body.configuration.node_config.node_condition; // 清理旧字段
+    }
     // 执行后路由条件（switch_condition）：将输入框内容写入 Configuration.node_config，确保落库
-    body.configuration.node_config.switch_condition = document.getElementById('node-switch-condition').value;
+    body.configuration.node_config.switch_condition = document.getElementById('node-switch-condition')?.value || '';
     const stages = collectStages();
     const flat = [];
     stages.forEach(s => s.forEach(it => flat.push(it)));

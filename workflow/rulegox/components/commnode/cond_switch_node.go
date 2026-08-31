@@ -17,14 +17,14 @@ import (
 )
 
 type condSwitchCfg struct {
-	Condition string `json:"condition"`
+	SwitchCondition string `json:"switch_condition"`
 }
 
 type CondSwitchNode struct {
-	Configuration *CommConfiguration `json:"configuration"`
-	condition     string
-	nodeLogCli    *redis.Client
-	ruleObj       *templates.RuleExprEngine
+	Configuration   *CommConfiguration `json:"configuration"`
+	switchCondition string
+	nodeLogCli      *redis.Client
+	ruleObj         *templates.RuleExprEngine
 	// nodeName node 中文名（来自 DSL 中 ruleNode.Name，由管理端 builder 写入 NodeDef.Name），
 	// 在 Init 时从 SelfDefinition 解析并缓存，用于上报 node 运行日志的 node_name 字段。
 	nodeName string
@@ -63,16 +63,16 @@ func (x *CondSwitchNode) Init(_ types.Config, configuration types.Configuration)
 
 // getCondition 解析配置中的 condition 表达式
 func (x *CondSwitchNode) getCondition() string {
-	if x.condition != "" {
-		return x.condition
+	if x.switchCondition != "" {
+		return x.switchCondition
 	}
 	newCond := new(condSwitchCfg)
 	if err := conv.Unmarshal(x.Configuration.NodeConfig, newCond); err != nil {
 		panic(fmt.Errorf("condRouter error parsing configuration: %s, %v", conv.String(x.Configuration), err))
 	}
-	x.condition = newCond.Condition
-	log.Println("condRouter init, condition: ", x.condition)
-	return x.condition
+	x.switchCondition = newCond.SwitchCondition
+	log.Println("condRouter init, condition: ", x.switchCondition)
+	return x.switchCondition
 }
 
 // OnMsg 处理消息，通过评估编译的表达式来过滤消息

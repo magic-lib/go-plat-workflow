@@ -544,13 +544,15 @@
       <textarea id="node-configuration">{}</textarea>
     </div>
     <div class="form-group" id="node-cond-section" style="display:none">
-      <label>条件串 (condition) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（condSwitch 专用，填入后写入 Configuration.node_config.condition）</span></label>
-      <textarea id="node-condition" placeholder="例如：msg.age > 18 && msg.vip == true" style="min-height:60px" oninput="syncCondConfig()"></textarea>
-      <label style="margin-top:10px">执行后路由条件 (switch_condition) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（Activity 专用：活动执行成功后，按返回值分支路由，替代默认成功走向）</span></label>
+      <label>路由条件 (switch_condition) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（condSwitch / Activity 共用，填入后写入 Configuration.node_config.switch_condition）</span></label>
       <textarea id="node-switch-condition" placeholder="例如：responses.in_blacklist == true  → 走 True 分支；responses.code  → 走 code 分支" style="min-height:60px" oninput="syncSwitchConfig()"></textarea>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;line-height:1.5">
         表达式可用 <code>responses.&lt;返回值键&gt;</code> 引用本节点返回值；结果为 bool 时走 True/False 分支，结果为字符串时走同名的自定义分支（即 relationType），其他类型按 Success/Failure 处理。
       </div>
+    </div>
+    <div class="form-group" id="node-condition-section">
+      <label>执行条件 (enable_condition) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（可选；配置了则该节点进入前先判断是否满足，满足才执行、否则跳过不执行；表达式变量来自流程参数与节点参数，如 age &gt; 18）</span></label>
+      <textarea id="node-enable-condition" placeholder="例如：age > 18 && vip == true" style="min-height:60px" oninput="syncEnableConfig()"></textarea>
     </div>
     <div class="form-group">
       <label>Additional Info (JSON, 可选)</label>

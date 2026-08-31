@@ -35,7 +35,9 @@ type ActivityGroup [][]*activity.Activity
 type ActivityNode struct {
 	Configuration *CommConfiguration     `json:"configuration"`
 	activities    [][]*activity.Activity // 执行阶段列表
-	nodeCondition string                 // 配置该node执行的条件，如果条件判断为true，则该node可以执行，否则不执行
+	// enableCondition 节点执行前判断条件：满足条件才执行该节点，否则跳过（不执行）。
+	// 对应 node_config.enable_condition（旧字段 node_condition 仍兼容读取）。
+	enableCondition string
 	// switchCondition 配置后，活动执行成功不再固定 TellSuccess，而是对本节点返回值求值该表达式，
 	// 按结果分支路由（bool→True/False；string→自定义 relationType；其他→Success/Failure），
 	// 从而将 activity_node 与 cond_switch_node 合二为一。为空时行为与原 TellSuccess 一致。
@@ -55,7 +57,7 @@ type ActivityNode struct {
 
 type activityCfg struct {
 	Activities      [][]*activity.Activity `json:"activities"`
-	NodeCondition   string                 `json:"node_condition"`
+	EnableCondition string                 `json:"enable_condition"`
 	SwitchCondition string                 `json:"switch_condition"`
 }
 
@@ -101,7 +103,7 @@ func (x *ActivityNode) New() types.Node {
 	return &ActivityNode{
 		Configuration:   cfg,
 		activities:      cloneStages(x.activities),
-		nodeCondition:   x.nodeCondition,
+		enableCondition: x.enableCondition,
 		switchCondition: x.switchCondition,
 		ruleObj:         x.ruleObj,
 		mqExecutor:      defaultActivityMQExecutor,
@@ -152,8 +154,8 @@ func (x *ActivityNode) Init(_ types.Config, configuration types.Configuration) e
 
 	cfgActs := new(activityCfg)
 	_ = conv.Unmarshal(x.Configuration.NodeConfig, cfgActs)
-	// 解析执行条件（node_config.node_condition）：进入前判断是否执行，不满足则跳过
-	x.nodeCondition = cfgActs.NodeCondition
+	// 解析执行前判断条件（node_config.enable_condition，旧字段 node_condition 兼容）：满足才执行，否则跳过
+	x.enableCondition = cfgActs.EnableCondition
 	// 解析执行后路由条件（node_config.switch_condition）：活动成功后按返回值分支路由
 	x.switchCondition = cfgActs.SwitchCondition
 	if len(cfgActs.Activities) == 0 {
@@ -204,21 +206,20 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
-	// 执行条件（node_config.node_condition）判断：配置了则在进入前先求值，
-	// 不满足则跳过该节点（不执行活动），但流程继续向下传递。
-	if x.nodeCondition != "" {
+	// 执行前判断条件（enable_condition）：满足才执行该节点，否则跳过（不执行活动），流程继续向下传递。
+	if x.enableCondition != "" {
 		condParams, _ := allParam.ToMaps()
 		for k, v := range stepFlowCtx.Arguments {
 			condParams[k] = v
 		}
-		condRes, cErr := x.ruleObj.RunString(x.nodeCondition, condParams)
+		condRes, cErr := x.ruleObj.RunString(x.enableCondition, condParams)
 		if cErr != nil {
-			ctx.TellFailure(msg, fmt.Errorf("node_condition 表达式执行错误: %v", cErr))
+			ctx.TellFailure(msg, fmt.Errorf("enable_condition 表达式执行错误: %v", cErr))
 			return
 		}
 		ok, bErr := conv.Convert[bool](condRes)
 		if bErr != nil {
-			ctx.TellFailure(msg, fmt.Errorf("node_condition 表达式结果不是布尔值: %v", condRes))
+			ctx.TellFailure(msg, fmt.Errorf("enable_condition 表达式结果不是布尔值: %v", condRes))
 			return
 		}
 		if !ok {
