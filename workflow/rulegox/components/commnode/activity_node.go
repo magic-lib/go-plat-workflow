@@ -36,6 +36,10 @@ type ActivityNode struct {
 	Configuration *CommConfiguration     `json:"configuration"`
 	activities    [][]*activity.Activity // 执行阶段列表
 	nodeCondition string                 // 配置该node执行的条件，如果条件判断为true，则该node可以执行，否则不执行
+	// switchCondition 配置后，活动执行成功不再固定 TellSuccess，而是对本节点返回值求值该表达式，
+	// 按结果分支路由（bool→True/False；string→自定义 relationType；其他→Success/Failure），
+	// 从而将 activity_node 与 cond_switch_node 合二为一。为空时行为与原 TellSuccess 一致。
+	switchCondition string
 
 	// mqExecutor 包级默认 MQ 执行器（通过 commnode.SetActivityMQExecutor 注入）。
 	// 非空且执行环境（metaData.Env）非空时，单个 Activity 优先走 MQ 远程执行；
@@ -50,8 +54,9 @@ type ActivityNode struct {
 }
 
 type activityCfg struct {
-	Activities    [][]*activity.Activity `json:"activities"`
-	NodeCondition string                 `json:"node_condition"`
+	Activities      [][]*activity.Activity `json:"activities"`
+	NodeCondition   string                 `json:"node_condition"`
+	SwitchCondition string                 `json:"switch_condition"`
 }
 
 // cloneActivityList 深拷贝一组 Activity。
@@ -94,11 +99,12 @@ func (x *ActivityNode) New() types.Node {
 	cfg := new(CommConfiguration)
 	_ = conv.Unmarshal(x.Configuration, cfg)
 	return &ActivityNode{
-		Configuration: cfg,
-		activities:    cloneStages(x.activities),
-		nodeCondition: x.nodeCondition,
-		ruleObj:       x.ruleObj,
-		mqExecutor:    defaultActivityMQExecutor,
+		Configuration:   cfg,
+		activities:      cloneStages(x.activities),
+		nodeCondition:   x.nodeCondition,
+		switchCondition: x.switchCondition,
+		ruleObj:         x.ruleObj,
+		mqExecutor:      defaultActivityMQExecutor,
 	}
 }
 
@@ -148,6 +154,8 @@ func (x *ActivityNode) Init(_ types.Config, configuration types.Configuration) e
 	_ = conv.Unmarshal(x.Configuration.NodeConfig, cfgActs)
 	// 解析执行条件（node_config.node_condition）：进入前判断是否执行，不满足则跳过
 	x.nodeCondition = cfgActs.NodeCondition
+	// 解析执行后路由条件（node_config.switch_condition）：活动成功后按返回值分支路由
+	x.switchCondition = cfgActs.SwitchCondition
 	if len(cfgActs.Activities) == 0 {
 		return nil // 沿用注册时的原型阶段列表
 	}
@@ -296,6 +304,16 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		nodeStep.Status = paramx.StepStatusSuccess
 		allParam.SetStep(currNodeId, nodeStep)
 		msg.SetData(conv.String(allParam))
+		if x.switchCondition != "" {
+			// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
+			relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam, stepFlowCtx.Arguments, nodeStep)
+			if err != nil {
+				ctx.TellFailure(msg, err)
+				return
+			}
+			ctx.TellNext(msg, relationType)
+			return
+		}
 		// 上报 node 返回值日志（落库 wf_node_logs）
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success, allParam, stepFlowCtx.Arguments, dataMap, nil)
 		if cliErr == nil && x.nodeLogCli == nil {
@@ -311,16 +329,22 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	allParam.SetStep(currNodeId, nodeStep)
 	msg.SetData(conv.String(allParam))
 
+	if x.switchCondition != "" {
+		// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
+		relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam, stepFlowCtx.Arguments, nodeStep)
+		if err != nil {
+			ctx.TellFailure(msg, err)
+			return
+		}
+		ctx.TellNext(msg, relationType)
+		return
+	}
+
 	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "response", "error", types.Success, allParam, stepFlowCtx.Arguments, dataMap, err)
 	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli
 	}
 	ctx.TellSuccess(msg)
-}
-
-func createNodeResponse(allDataMap map[string]any, responseList []*param.BindConfig) map[string]any {
-	//
-	return nil
 }
 
 type NodeLogDef struct {
@@ -558,6 +582,30 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 
 func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
 	return GetActivityParam(x.ruleObj, allParam, bindConfig)
+}
+
+// routeBySwitchCondition 当该节点配置了 switch_condition 时，在活动成功执行后
+// 对本节点返回值求值表达式，并按结果分支路由出去（替代默认的 TellSuccess）。
+// 求值参数：整体 allParam（data/Steps/Arguments 等）+ 顶层 responses（本节点返回值 dataMap），
+// 因此表达式可写 `responses.in_blacklist == true`（走 True 分支）或 `responses.code`（走自定义 relationType）。
+// 路由语义与 condSwitchNode 一致：bool→True/False；string→自定义 relationType；其他→Success/Failure。
+func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeStr string, allParam *paramx.FlowContext, arguments map[string]any, stepData *paramx.Step) (string, error) {
+	stepDataMap, _ := stepData.ToMaps()
+
+	relationType, conResult, err := routeByCondition(x.ruleObj, x.switchCondition, stepDataMap)
+	if err != nil {
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParam, arguments, stepDataMap, err)
+		if cliErr == nil && x.nodeLogCli == nil {
+			x.nodeLogCli = nodeCli
+		}
+		return "", err
+	}
+
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", relationType, allParam, arguments, conResult, nil)
+	if cliErr == nil && x.nodeLogCli == nil {
+		x.nodeLogCli = nodeCli
+	}
+	return relationType, nil
 }
 
 func GetActivityParam(ruleEngine *templates.RuleExprEngine, allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {

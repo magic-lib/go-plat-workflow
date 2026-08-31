@@ -2,7 +2,6 @@ package commnode
 
 import (
 	"fmt"
-	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
@@ -121,7 +120,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
-	conResult, err := x.ruleObj.RunString(condStr, nodeParams)
+	relationType, conResult, err := routeByCondition(x.ruleObj, condStr, nodeParams)
 	if err != nil {
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, 0, nodeStr, x.nodeName, "fail", "error", types.Failure, allParams, nil, nil, err)
 		if cliErr == nil && x.nodeLogCli == nil {
@@ -133,59 +132,10 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	durationMs := time.Now().UnixMilli() - startTime
 
-	isBool := cond.IsBool(conResult)
-	if isBool {
-		boolResult, err := conv.Convert[bool](conResult)
-		if err != nil {
-			nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParams, nodeParams, conResult, err)
-			if cliErr == nil && x.nodeLogCli == nil {
-				x.nodeLogCli = nodeCli
-			}
-			ctx.TellFailure(msg, err)
-			return
-		}
-		relationType := types.True
-		if !boolResult {
-			relationType = types.False
-		}
-
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", relationType, allParams, nodeParams, boolResult, nil)
-		if cliErr == nil && x.nodeLogCli == nil {
-			x.nodeLogCli = nodeCli
-		}
-		ctx.TellNext(msg, relationType)
-		return
-	}
-	if relationTypeTemp, ok := conResult.(string); ok {
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", relationTypeTemp, allParams, nodeParams, relationTypeTemp, nil)
-		if cliErr == nil && x.nodeLogCli == nil {
-			x.nodeLogCli = nodeCli
-		}
-		ctx.TellNext(msg, relationTypeTemp)
-		return
-	}
-	// 默认使用Success和Failure
-	changeBool, err := conv.Convert[bool](conResult)
-	if err != nil {
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", conv.String(conResult), allParams, nodeParams, conResult, err)
-		if cliErr == nil && x.nodeLogCli == nil {
-			x.nodeLogCli = nodeCli
-		}
-		// 如果出错，则采用转为字符串来进行处理
-		ctx.TellNext(msg, conv.String(conResult))
-		return
-	}
-
-	relationType := types.Success
-	if !changeBool {
-		relationType = types.Failure
-	}
-
-	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", relationType, allParams, nodeParams, relationType, nil)
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", relationType, allParams, nodeParams, conResult, nil)
 	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli
 	}
-	// 默认采用Success和Failure
 	ctx.TellNext(msg, relationType)
 }
 

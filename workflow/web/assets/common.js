@@ -942,15 +942,28 @@ function onNodeTypeChange() {
     syncActivityConfig();
     document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
   }
-  // condSwitch：显示条件串输入，并回填已有条件
+  // condSwitch / Activity 共用 node-cond-section：condSwitch 填 condition，Activity 填 switch_condition（执行后路由条件）
   const isCond = type === 'custom/CondSwitch';
-  document.getElementById('node-cond-section').style.display = isCond ? '' : 'none';
+  document.getElementById('node-cond-section').style.display = (isCond || isActivity) ? '' : 'none';
   if (isCond) {
     let cfg = {};
     try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
     const cond = (cfg.node_config && cfg.node_config.condition) || '';
     document.getElementById('node-condition').value = cond;
+    // Activity 的 switch_condition 输入框在切换走时清空，避免残留
+    document.getElementById('node-switch-condition').value = '';
     syncCondConfig();
+  } else if (isActivity) {
+    let cfg = {};
+    try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
+    const sw = (cfg.node_config && cfg.node_config.switch_condition) || '';
+    document.getElementById('node-switch-condition').value = sw;
+    // condSwitch 的 condition 输入框在切换走时清空，避免残留
+    document.getElementById('node-condition').value = '';
+    syncSwitchConfig();
+  } else {
+    document.getElementById('node-condition').value = '';
+    document.getElementById('node-switch-condition').value = '';
   }
 }
 
@@ -962,6 +975,23 @@ function syncCondConfig() {
   if (typeof cfg !== 'object' || cfg === null) cfg = {};
   if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
   cfg.node_config.condition = document.getElementById('node-condition').value;
+  // 保证 CommConfiguration 各字段存在
+  if (typeof cfg.arg_mapping === 'undefined') cfg.arg_mapping = {};
+  if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
+  if (typeof cfg.arguments === 'undefined') cfg.arguments = [];
+  if (typeof cfg.responses === 'undefined') cfg.responses = {};
+  document.getElementById('node-configuration').value = prettyJson(cfg);
+}
+
+// 将「执行后路由条件」输入框的内容写入 Configuration（Activity 专用：node_config.switch_condition）。
+// 活动执行成功后按本节点返回值对表达式求值，bool→True/False 分支，string→自定义 relationType 分支。
+function syncSwitchConfig() {
+  if (document.getElementById('node-type').value !== 'custom/Activity') return;
+  let cfg;
+  try { cfg = JSON.parse(document.getElementById('node-configuration').value || '{}'); } catch(e) { cfg = {}; }
+  if (typeof cfg !== 'object' || cfg === null) cfg = {};
+  if (!cfg.node_config || typeof cfg.node_config !== 'object') cfg.node_config = {};
+  cfg.node_config.switch_condition = document.getElementById('node-switch-condition').value;
   // 保证 CommConfiguration 各字段存在
   if (typeof cfg.arg_mapping === 'undefined') cfg.arg_mapping = {};
   if (typeof cfg.ret_mapping === 'undefined') cfg.ret_mapping = {};
@@ -1825,6 +1855,8 @@ async function saveNode() {
   if (body.type === 'custom/Activity') {
     if (typeof body.configuration !== 'object' || body.configuration === null) body.configuration = {};
     if (!body.configuration.node_config || typeof body.configuration.node_config !== 'object') body.configuration.node_config = {};
+    // 执行后路由条件（switch_condition）：将输入框内容写入 Configuration.node_config，确保落库
+    body.configuration.node_config.switch_condition = document.getElementById('node-switch-condition').value;
     const stages = collectStages();
     const flat = [];
     stages.forEach(s => s.forEach(it => flat.push(it)));

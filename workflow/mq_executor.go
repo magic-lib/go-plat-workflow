@@ -585,6 +585,10 @@ func (e *MQExecutor) testNodeForActivity(ctx context.Context, payload *TestNodeP
 		return nil, execErr
 	}
 
+	if resultParam == nil {
+		resultParam = new(paramx.FlowContext)
+	}
+
 	arguments := make(map[string]any)
 	var response any
 	for _, v := range resultParam.Steps {
