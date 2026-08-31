@@ -960,6 +960,8 @@ function onNodeTypeChange() {
       syncEnableConfig();
     }
     syncSwitchConfig();
+    // 刷新路由条件下方的「可用变量」提示（列出本节点参数与返回值引用）
+    renderCondVarSnippets();
   } else {
     document.getElementById('node-switch-condition').value = '';
   }
@@ -1025,6 +1027,21 @@ function renderCondVarSnippets() {
   }).join('');
   box.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">可用变量（点击复制）：</div>' +
     '<div style="display:flex;flex-wrap:wrap">' + rows + '</div>';
+  bindCondVarSnippetWatch();
+}
+
+// 事件委托：监听参数/返回值容器的输入与增删，实时刷新「可用变量」列表。
+// 只绑定一次（标记在容器上），避免每次渲染重复绑定。
+function bindCondVarSnippetWatch() {
+  ['node-params-container', 'node-outputs-container'].forEach(id => {
+    const box = document.getElementById(id);
+    if (!box || box.dataset.condVarBound === '1') return;
+    box.dataset.condVarBound = '1';
+    box.addEventListener('input', renderCondVarSnippets);
+    // 增删行不触发 input，用 MutationObserver 覆盖
+    const mo = new MutationObserver(() => renderCondVarSnippets());
+    mo.observe(box, { childList: true, subtree: false });
+  });
 }
 
 // 将 Activity 节点的「执行条件」输入框内容写入 Configuration（node_config.enable_condition）。
