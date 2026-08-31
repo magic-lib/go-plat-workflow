@@ -547,6 +547,26 @@ function showToast(msg, type) {
   setTimeout(() => t.remove(), 3000);
 }
 
+// 复制文本到剪贴板（优先 navigator.clipboard，降级 execCommand）
+function copyToClipboard(text) {
+  const done = () => showToast('已复制: ' + text, 'success');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { showToast('复制失败', 'error'); }
+  ta.remove();
+}
+
 // ============================================================
 // Table filter
 // ============================================================
@@ -3556,6 +3576,8 @@ async function openTestActivityModal(activityId) {
   // 显示名称
   const taNameEl = document.getElementById('test-activity-name');
   if (taNameEl) taNameEl.textContent = '';
+  const taDescEl = document.getElementById('test-activity-desc');
+  if (taDescEl) { taDescEl.textContent = ''; taDescEl.style.display = 'none'; }
   document.getElementById('test-activity-result').textContent = '点击"执行测试"后显示结果';
   document.getElementById('test-activity-save').value = 'true';
 
@@ -3589,6 +3611,18 @@ async function openTestActivityModal(activityId) {
     // 显示 activity 名称
     const taNameEl = document.getElementById('test-activity-name');
     if (taNameEl) taNameEl.textContent = act.name || '';
+
+    // 显示 activity 描述
+    const taDescEl = document.getElementById('test-activity-desc');
+    if (taDescEl) {
+      if (act.description) {
+        taDescEl.textContent = act.description;
+        taDescEl.style.display = '';
+      } else {
+        taDescEl.textContent = '';
+        taDescEl.style.display = 'none';
+      }
+    }
 
     // 根据大类型调整环境要求与提示
     const kind = act.kind || 'redis';
@@ -3941,7 +3975,7 @@ function addOutputRow(opts) {
   row.className = 'param-row';
   row.id = 'output-row-' + outputSeq;
   row.innerHTML = `
-    <span class="output-input-wrap" style="flex:1;display:flex;gap:6px;align-items:center;min-width:0"></span>
+    <span class="output-input-wrap" style="flex:1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0"></span>
     <button class="btn-remove-param" onclick="removeOutputRow('output-row-${outputSeq}')" title="删除此返回值">&times;</button>
   `;
   container.appendChild(row);
@@ -4100,6 +4134,42 @@ function outputSourceSelectHTML(source) {
     '</select>';
 }
 
+// 固定配置分支下：列出本节点全部上游 Activity 的返回值引用路径，供用户点选复制。
+// 形如 {{steps.A000014__no3m7.responses.source_key_list}}
+function outputRefSnippetHTML() {
+  const prevs = outputAllActivities();
+  const items = [];
+  prevs.forEach(p => {
+    const rvs = Array.isArray(p.returnValues) ? p.returnValues : [];
+    if (rvs.length === 0) {
+      // 该 Activity 未配置 ReturnValues：仍给出整体引用 {{steps.id.responses}}
+      items.push({ act: p, ref: '{{steps.' + p.id + '.responses}}', label: p.act_name + '（整体）' });
+      return;
+    }
+    rvs.forEach(rv => {
+      const rvName = (rv.name || '').trim();
+      const rvKey = rv.key || '';
+      // 已配置 ReturnValues：把列表中每个项的 name 都作为可引用字段展示（数组即全部展开）。
+      // 若 name 为空则回退为整体引用 {{steps.id.responses}}。
+      if (rvName === '') {
+        items.push({ act: p, ref: '{{steps.' + p.id + '.responses}}', label: p.act_name + '（整体）' });
+      } else {
+        items.push({ act: p, ref: '{{steps.' + p.id + '.responses.' + rvName + '}}', label: p.act_name + ' / ' + (rv.label || rvKey || rvName) });
+      }
+    });
+  });
+  if (items.length === 0) return '';
+  const rows = items.map(it =>
+    '<div class="output-ref-snippet" onclick="copyToClipboard(' + JSON.stringify(it.ref) + ')" title="点击复制" style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;padding:3px 6px;border-radius:4px;font-family:monospace;font-size:.74rem;color:var(--accent);background:#f3f6fb">' +
+      '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(it.ref) + '</span>' +
+      '<span style="flex:0 0 auto;color:var(--text-muted);font-size:.7rem">' + escHtml(it.label) + '</span>' +
+    '</div>'
+  ).join('');
+  return '<div class="output-ref-snippet-box" style="flex-basis:100%;margin-top:6px">' +
+    '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">上游 Activity 返回值引用路径（点击复制）：</div>' +
+    rows + '</div>';
+}
+
 // 渲染单行输入控件（按来源）
 function outputRenderInput(bind) {
   bind = bind || {};
@@ -4161,7 +4231,8 @@ function outputRenderInput(bind) {
     '<input class="output-label" placeholder="显示名 (label)" value="' + esc(label) + '" style="flex:1 1 90px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' +
     '<select class="output-type" title="返回值类型/计算类型" style="flex:0 0 78px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + outputTypeHTML(type) + '</select>' +
     outputSourceSelectHTML(bind.source) +
-    '<input class="output-value" placeholder="配置值/表达式" value="' + esc(value) + '" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">';
+    '<input class="output-value" placeholder="配置值/表达式" value="' + esc(value) + '" style="flex:1 1 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' +
+    outputRefSnippetHTML();
 }
 
 // 重建第三级字段下拉
