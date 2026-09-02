@@ -10,7 +10,10 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 )
 
 // ============================================================
@@ -40,6 +43,10 @@ var (
 	ErrRootChainHasReleases = fmt.Errorf("workflow: root chain has releases, cannot delete")
 	// ErrActivityNotFound activity 未找到
 	ErrActivityNotFound = fmt.Errorf("workflow: activity not found")
+	// ErrNodePublishedInRootChain 节点已被发布到根链（生产快照引用），禁止编辑/删除
+	ErrNodePublishedInRootChain = fmt.Errorf("workflow: node already published in root chain, cannot edit or delete")
+	// ErrActivityPublishedInRootChain activity 已被发布到根链（生产快照引用），禁止编辑/删除
+	ErrActivityPublishedInRootChain = fmt.Errorf("workflow: activity already published in root chain, cannot edit or delete")
 )
 
 // ============================================================
@@ -166,6 +173,34 @@ type NodeDef struct {
 	// 仅当列表接口传入 env 参数时填充，用于前端在 node 名称后显示聚合心跳图标，
 	// 以及悬停 pop 层展示每个 activity 的心跳状态。
 	NodeHeartbeats []*NodeActivityHeartbeat `json:"node_heartbeats,omitempty"`
+	// PublishedInRootChain 节点是否已被发布到根链（含子链传递引用），为 true 时禁止编辑/删除。
+	// 由列表接口按发布快照实时计算填充，不入库。
+	PublishedInRootChain bool `json:"published_in_root_chain,omitempty"`
+	// HasSwitchCondition 节点是否配置了路由条件 switch_condition，为 true 表示该节点带路由分支功能。
+	// 由列表/详情接口按节点配置实时计算填充，不入库。
+	HasSwitchCondition bool `json:"has_switch_condition,omitempty"`
+}
+
+// HasSwitchConditionExpr 判断节点是否配置了路由条件 switch_condition（非空即表示带路由功能）。
+// 路由条件由 custom/Activity 与 custom/CondSwitch 两类节点共用，
+// 落库于 configuration.node_config.switch_condition，执行后按返回值路由分支。
+func (n *NodeDef) HasSwitchConditionExpr() bool {
+	if n == nil || len(n.Configuration) == 0 {
+		return false
+	}
+	// 仅 Activity 与 CondSwitch 支持路由分支
+	if n.Type != common.ActivityNodeTypeName && n.Type != common.CondSwitchNodeTypeName {
+		return false
+	}
+	var cfg struct {
+		NodeConfig struct {
+			SwitchCondition string `json:"switch_condition"`
+		} `json:"node_config"`
+	}
+	if err := json.Unmarshal(n.Configuration, &cfg); err != nil {
+		return false
+	}
+	return strings.TrimSpace(cfg.NodeConfig.SwitchCondition) != ""
 }
 
 // NodeActivityHeartbeat node 内单个 activity 的心跳存活信息（带 activity 标识）。
@@ -601,6 +636,9 @@ type ActivityDef struct {
 	TestStatus string `json:"test_status,omitempty"`
 	// Heartbeat 心跳存活信息（管理端收集器实时计算，不入库）
 	Heartbeat *ActivityHeartbeatInfo `json:"heartbeat,omitempty"`
+	// PublishedInRootChain activity 是否已被发布到根链（含子链传递引用），为 true 时禁止编辑/删除。
+	// 由列表接口按发布快照实时计算填充，不入库。
+	PublishedInRootChain bool `json:"published_in_root_chain,omitempty"`
 	// CreatedAt 创建时间
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt 更新时间

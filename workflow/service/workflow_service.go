@@ -353,12 +353,20 @@ func (s *WorkflowService) BatchRegisterNodes(ctx context.Context, defs []*workfl
 
 // GetNode 获取指定项目下的单个节点。
 func (s *WorkflowService) GetNode(ctx context.Context, project, nodeID string) (*workflow.NodeDef, error) {
-	return s.nodeRepo.GetByID(ctx, project, nodeID)
+	def, err := s.nodeRepo.GetByID(ctx, project, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	// 标注是否带路由功能（配置了 switch_condition），供前端展示
+	if def != nil {
+		def.HasSwitchCondition = def.HasSwitchConditionExpr()
+	}
+	return def, nil
 }
 
 // ListNodes 列出指定项目下的节点，可按命名空间与 tag 过滤（为空表示不过滤）。
 // onlyEnabled=true 时仅返回启用状态（用于编排选择），false 时返回全部（含禁用，用于管理列表）。
-func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag string, onlyEnabled bool) ([]*workflow.NodeDef, error) {
+func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag string, onlyEnabled, isAdmin bool) ([]*workflow.NodeDef, error) {
 	all, err := s.nodeRepo.List(ctx, project, namespace, onlyEnabled)
 	if err != nil {
 		return nil, err
@@ -378,16 +386,49 @@ func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag
 		}
 		all = filtered
 	}
+	// 标注路由功能：配置了 switch_condition 的节点带路由分支，前端据此展示标记
+	for _, n := range all {
+		n.HasSwitchCondition = n.HasSwitchConditionExpr()
+	}
+	// 标注已发布引用：已被发布到根链（含子链传递引用）的节点禁止编辑/删除，前端据此禁用按钮。
+	// 超级管理员不受限制，不标注。
+	if !isAdmin && len(all) > 0 {
+		idx, err := s.buildPublishedRefIndex(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range all {
+			if _, ok := idx.nodes[n.NodeID]; ok {
+				n.PublishedInRootChain = true
+			}
+		}
+	}
 	return all, nil
 }
 
 // UpdateNode 更新节点配置。
-func (s *WorkflowService) UpdateNode(ctx context.Context, def *workflow.NodeDef) error {
+// 节点已被发布到根链（生产快照引用）时禁止更新，避免影响线上调用。
+func (s *WorkflowService) UpdateNode(ctx context.Context, def *workflow.NodeDef, isAdmin bool) error {
+	published, err := s.NodePublishedInRootChain(ctx, def.Project, def.NodeID, isAdmin)
+	if err != nil {
+		return err
+	}
+	if published {
+		return workflow.ErrNodePublishedInRootChain
+	}
 	return s.nodeRepo.Update(ctx, def)
 }
 
 // DeleteNode 软删除节点。
-func (s *WorkflowService) DeleteNode(ctx context.Context, project, nodeID string) error {
+// 节点已被发布到根链（当前生效快照引用）时禁止删除，避免影响线上调用。超级管理员不受限。
+func (s *WorkflowService) DeleteNode(ctx context.Context, project, nodeID string, isAdmin bool) error {
+	published, err := s.NodePublishedInRootChain(ctx, project, nodeID, isAdmin)
+	if err != nil {
+		return err
+	}
+	if published {
+		return workflow.ErrNodePublishedInRootChain
+	}
 	return s.nodeRepo.Delete(ctx, project, nodeID)
 }
 
@@ -1782,7 +1823,7 @@ func (s *WorkflowService) GetActivity(ctx context.Context, project, activityID s
 
 // ListActivities 列出指定项目下所有可用 activity，可按 tag 与环境(env)过滤（为空表示不过滤）。
 // env 用于限定测试状态统计与心跳计算的范围。
-func (s *WorkflowService) ListActivities(ctx context.Context, project string, tag string, env string) ([]*workflow.ActivityDef, error) {
+func (s *WorkflowService) ListActivities(ctx context.Context, project string, tag string, env string, isAdmin bool) ([]*workflow.ActivityDef, error) {
 	activities, err := s.activityRepo.List(ctx, project)
 	if err != nil {
 		return nil, err
@@ -1815,11 +1856,32 @@ func (s *WorkflowService) ListActivities(ctx context.Context, project string, ta
 			}
 		}
 	}
+	// 标注已发布引用：已被发布到根链（含子链传递引用）的 activity 禁止编辑/删除，前端据此禁用按钮。
+	// 标注已发布引用：超级管理员不受限制，不标注。
+	if !isAdmin && len(activities) > 0 {
+		idx, err := s.buildPublishedRefIndex(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range activities {
+			if _, ok := idx.activities[a.ActNamespace+"\x00"+a.ActName]; ok {
+				a.PublishedInRootChain = true
+			}
+		}
+	}
 	return activities, nil
 }
 
 // UpdateActivity 更新 activity 模板。
-func (s *WorkflowService) UpdateActivity(ctx context.Context, def *workflow.ActivityDef) error {
+// activity 已被发布到根链（当前生效快照引用）时禁止更新，避免影响线上调用。超级管理员不受限。
+func (s *WorkflowService) UpdateActivity(ctx context.Context, def *workflow.ActivityDef, isAdmin bool) error {
+	published, err := s.ActivityPublishedInRootChain(ctx, def.Project, def.ActNamespace, def.ActName, isAdmin)
+	if err != nil {
+		return err
+	}
+	if published {
+		return workflow.ErrActivityPublishedInRootChain
+	}
 	// 项目 + 命名空间 + 活动名称 必须全局唯一（排除自身）
 	exists, err := s.activityRepo.ExistsByNamespaceName(ctx, def.Project, def.ActNamespace, def.ActName, def.ActivityID)
 	if err != nil {
@@ -1832,7 +1894,22 @@ func (s *WorkflowService) UpdateActivity(ctx context.Context, def *workflow.Acti
 }
 
 // DeleteActivity 删除 activity 模板。
-func (s *WorkflowService) DeleteActivity(ctx context.Context, project, activityID string) error {
+// activity 已被发布到根链（当前生效快照引用）时禁止删除，避免影响线上调用。超级管理员不受限。
+func (s *WorkflowService) DeleteActivity(ctx context.Context, project, activityID string, isAdmin bool) error {
+	// 先查出 activity 的 namespace+name 用于发布引用检查
+	existing, err := s.activityRepo.GetByID(ctx, project, activityID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		published, err := s.ActivityPublishedInRootChain(ctx, project, existing.ActNamespace, existing.ActName, isAdmin)
+		if err != nil {
+			return err
+		}
+		if published {
+			return workflow.ErrActivityPublishedInRootChain
+		}
+	}
 	return s.activityRepo.Delete(ctx, project, activityID)
 }
 

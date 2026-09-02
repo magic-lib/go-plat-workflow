@@ -6,7 +6,7 @@ require (
 	github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf
 	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260818104838-b0b8fe892941
 	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260825040110-6192d2ff6d57
-	github.com/magic-lib/go-plat-utils v1.20260210.2-0.20260831112831-10dfed272f6c
+	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20260902103929-eaf39d765e1a
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.35.1
@@ -118,6 +118,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
+	github.com/petermattis/goid v0.0.0-20260820044319-269ab09b5261 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect

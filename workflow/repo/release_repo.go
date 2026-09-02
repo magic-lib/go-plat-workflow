@@ -78,7 +78,7 @@ func (r *RootChainReleaseRepo) GetCurrent(ctx context.Context, project, chainID 
 func (r *RootChainReleaseRepo) ListCurrentByProject(ctx context.Context, project string) ([]*workflow.RootChainReleaseDef, error) {
 	var modelsList []models.RootChainReleaseModel
 	err := r.db.WithContext(ctx).
-		Where("project = ? AND is_current = ?", project, true).
+		Where("project = ? AND is_current = ? and chain_id in (select chain_id from wf_root_chains where project = ?)", project, true, project).
 		Find(&modelsList).Error
 	if err != nil {
 		return nil, err

@@ -67,6 +67,49 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .badge-off { background: #fee2e2; color: #991b1b; }
 .badge-warning { background: #fef3c7; color: #92400e; }
 .badge-info { background: #dbeafe; color: #1e40af; }
+/* 已发布到根链（生产快照引用）的 node / activity 锁定标记 */
+.published-lock {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: .68rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: #fef3c7;
+  color: #92400e;
+  cursor: help;
+}
+/* 已配置路由条件（switch_condition）的节点标记 */
+.route-badge {
+  display: inline-block;
+  margin-left: 4px;
+  margin-right: 4px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: .68rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: #dbeafe;
+  color: #1e40af;
+  cursor: help;
+}
+/* 标记位于名称前（单元格/容器开头）时不需要左间距 */
+.route-badge:first-child { margin-left: 0; }
+/* 编排页节点列表：flex 容器已用 gap 控制间距，去掉两侧边距并禁止收缩 */
+.orch-select-item .route-badge {
+  margin-left: 0;
+  margin-right: 0;
+  flex-shrink: 0;
+  font-size: .65rem;
+  padding: 1px 6px;
+}
+/* 禁用态按钮：已发布保护 */
+.actions .btn:disabled,
+.btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
 .tag-c0 { background: #d1fae5; color: #065f46; }
 .tag-c1 { background: #dbeafe; color: #1e40af; }
 .tag-c2 { background: #fef3c7; color: #92400e; }

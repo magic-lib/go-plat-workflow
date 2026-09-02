@@ -763,8 +763,8 @@ async function loadNodes() {
     refreshNodeTagFilter(); // 同步标签过滤下拉（基于当前列表已有标签）
     tbody.innerHTML = nodes.map((n, i) => `
       <tr>
-        <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
-        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span></td>
+        <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}${n.published_in_root_chain ? publishedLockBadge('已发布到根链') : ''}</td>
+        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}</td>
         <td><span class="code-cell">${esc(n.type)}</span></td>
         <td><span class="badge ${n.kind==='condition'?'badge-warning':'badge-info'}">${n.kind==='condition'?'查询获取':'策略执行'}</span></td>
         <td>${esc(n.category || '-')}</td>
@@ -774,10 +774,10 @@ async function loadNodes() {
         <td>${esc(n.version || '-')}</td>
         <td title="${esc(n.description||'')}">${esc(trunc(n.description, 30))}</td>
         <td class="actions">
-          <button class="btn btn-sm btn-outline edit-only" onclick="editNodeByIndex(${i})">编辑</button>
+          <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">编辑</button>
           <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
           <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
-          <button class="btn btn-sm btn-danger edit-only" onclick="deleteNode('${esc(n.node_id)}')">删除</button>
+          <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">删除</button>
         </td>
       </tr>`).join('');
   } catch (e) { showToast('加载节点失败: ' + e.message, 'error'); }
@@ -1994,9 +1994,15 @@ async function saveNode() {
   } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
 }
 
-function editNodeByIndex(i) { openNodeModal(window._nodesForEdit[i]); }
+function editNodeByIndex(i) {
+  const n = window._nodesForEdit[i];
+  if (n && n.published_in_root_chain) { showPublishedLockedToast('该节点'); return; }
+  openNodeModal(n);
+}
 
 async function deleteNode(id) {
+  const n = (window._nodesForEdit || []).find(x => x.node_id === id);
+  if (n && n.published_in_root_chain) { showPublishedLockedToast('该节点'); return; }
   if (!confirm('确定删除节点 ' + id + ' 吗？')) return;
   try {
     await api('/api/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
@@ -2208,18 +2214,18 @@ function renderActivityTable(list) {
     }
     return `<tr>
       <td><span class="code-cell">${escHtml(a.activity_id)}</span></td>
-      <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span></td>
+      <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span>${a.published_in_root_chain ? publishedLockBadge('已发布到根链') : ''}</td>
       <td>${tagsHtml}</td>
       <td><span class="code-cell">${escHtml(a.act_namespace)}</span></td>
       <td><span class="code-cell">${escHtml(a.act_name)}</span></td>
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
       <td>${escHtml(a.created_at ? a.created_at.substring(0,10) : '-')}</td>
       <td><div class="actions">
-        <button class="btn btn-sm btn-outline edit-only" onclick="editActivity('${escHtml(a.activity_id)}')">编辑</button>
+        <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(a.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editActivity('${escHtml(a.activity_id)}')">编辑</button>
         <button class="btn btn-sm btn-primary" onclick="openTestActivityModal('${escHtml(a.activity_id)}')">测试</button>
         <button class="btn btn-sm btn-outline" onclick="showActivityListenerCode('${escHtml(a.activity_id)}')">监听代码</button>
         <button class="btn btn-sm btn-outline" onclick="openActivityLogsModal('${escHtml(a.activity_id)}', '${escHtml(a.act_name)}')">日志</button>
-        <button class="btn btn-sm btn-danger edit-only" onclick="deleteActivityById('${escHtml(a.activity_id)}')">删除</button>
+        <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(a.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteActivityById('${escHtml(a.activity_id)}')">删除</button>
       </div></td>
     </tr>`;
   }).join('');
@@ -2680,6 +2686,7 @@ async function saveActivity() {
 // 编辑指定 activity
 function editActivity(activityID) {
   const a = window._activityCache.find(x => x.activity_id === activityID);
+  if (a && a.published_in_root_chain) { showPublishedLockedToast('该 activity'); return; }
   if (a) openActivityModal(a);
 }
 
@@ -2811,6 +2818,8 @@ function closeActivityListenerCode() {
 
 // 删除 activity
 async function deleteActivityById(activityID) {
+  const a = (window._activityCache || []).find(x => x.activity_id === activityID);
+  if (a && a.published_in_root_chain) { showPublishedLockedToast('该 activity'); return; }
   if (!confirm('确定删除 activity ' + activityID + ' 吗？')) return;
   const p = getProject();
   if (!p) { showToast('请先选择项目', 'error'); return; }
@@ -5922,6 +5931,7 @@ function renderOrchNodeListPage() {
     })();
     return `<label class="orch-select-item" title="${esc(n.node_id)} - ${esc(n.description||'')}">
       <span class="node-id">${esc(n.node_id)}</span>
+      ${nodeRouteBadge(n)}
       <span class="node-name">${esc(n.name||n.node_id)}</span>
       <span class="node-type-tag">${esc(n.type)}</span>
       <span class="node-kind badge ${kindClass}">${kindLabel}</span>
@@ -6012,9 +6022,11 @@ function renderOrchNodeSelected() {
   box.innerHTML = `    <table class="data-table" style="width:100%;font-size:.85rem">
       <thead><tr><th>#</th><th>节点名称</th><th>Node ID</th><th>实例 ID</th><th style="text-align:right">操作</th></tr></thead>
       <tbody>${list.map((i, idx) => {
+        // 实例对象只存摘要字段（无 configuration），需按 nodeId 回查完整定义才能判断路由功能
+        const def = (_orchNodes || []).find(n => n.node_id === i.nodeId);
         return `<tr title="${esc(i.instanceId)}">
           <td>${idx + 1}</td>
-          <td>${esc(i.name)}</td>
+          <td>${nodeRouteBadge(def)}${esc(i.name)}</td>
           <td class="code-cell">${esc(i.nodeId)}</td>
           <td class="code-cell">${esc(i.instanceId)}</td>
           <td style="text-align:right"><button class="btn btn-sm btn-danger" type="button" onclick="removeOrchNodeInstance('${esc(i.instanceId)}')">删除</button></td>
@@ -6235,7 +6247,7 @@ function addOrchConnRow(fromId, toId, connType) {
     <select data-role="orch-from">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
     <span class="conn-arrow">→</span>
     <select data-role="orch-to">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
-    <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="True" value="${esc(connType||'True')}" title="连接类型：Success / Failure / True / False / Stream 或自定义">
+    <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'Success')}" title="连接类型：Success / Failure / True / False / Stream 或自定义">
     <button class="btn-remove" onclick="removeOrchConnRow('orch-conn-row-${orchConnSeq}')" title="删除">&times;</button>
   `;
   container.appendChild(row);
@@ -6301,17 +6313,21 @@ function orchBuildMermaid() {
   nodeSet.forEach(id => {
     const safe = idMap[id];
     const inst = (_orchNodeInstances || []).find(i => i.instanceId === id);
-    const n = _orchNodes.find(x => x.node_id === id);
-    const baseId = n ? n.node_id : (inst ? inst.nodeId : id);
+    // id 是实例 ID（nodeId__随机段），需按 nodeId（去后缀）查节点定义，才能取到 has_switch_condition / configuration
+    const nodeId = inst ? inst.nodeId : id.split('__')[0];
+    const n = _orchNodes.find(x => x.node_id === nodeId);
+    const baseId = nodeId;
     const cnName = (inst && inst.name) ? inst.name : (n && n.name ? n.name : id);
     const k = (n && n.kind) || 'action';
-    const clsName = 'nodeKind_' + k.replace(/[^a-zA-Z0-9_]/g, '_');
-    // 标签：第一行中文名，第二行 node ID，第三行 实例 ID（同一节点多次添加时区分）
-    const labelLine = `<b>⚙ ${esc(cnName)}</b>`;
+    const routing = !!(n && (typeof n.has_switch_condition === 'boolean'
+      ? n.has_switch_condition : nodeSwitchConditionText(n) !== ''));
+    const clsName = 'nodeKind_' + k.replace(/[^a-zA-Z0-9_]/g, '_') + (routing ? '_route' : '');
+    // 标签：第一行路由标记 + 中文名，第二行 node ID，第三行 实例 ID（同一节点多次添加时区分）
+    const labelLine = `<b>${orchNodeRouteMark(n)}⚙ ${esc(cnName)}</b>`;
     const idLine = `<small>NodeId: ${esc(baseId)}</small>`;
     const instLine = inst && inst.instanceId !== baseId ? `<small>Id: ${esc(inst.instanceId)}</small>` : '';
     lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}"]`);
-    (kindSafeIds[k] = kindSafeIds[k] || []).push(safe);
+    (kindSafeIds[clsName] = kindSafeIds[clsName] || []).push(safe);
   });
   subSet.forEach(id => {
     const safe = idMap[id];
@@ -6329,20 +6345,24 @@ function orchBuildMermaid() {
   conns.forEach(c => {
     const from = idMap[c.from_id];
     const to = idMap[c.to_id];
-    if (from && to) lines.push(`    ${from} -->|${c.type||'True'}| ${to}`);
+    if (from && to) lines.push(`    ${from} -->|${c.type||'Success'}| ${to}`);
   });
   const subClasses = [...subSet].map(id => idMap[id]).filter(Boolean).join(',');
   // 根据节点 kind 类型动态生成不同背景色（每种 kind 一组 classDef）
+  // condition=查询获取（浅绿）；action=策略执行（淡红）；带路由功能的节点统一用淡蓝背景覆盖
   const kindPalette = {
-    condition: { fill: '#fef3c7', stroke: '#d97706', color: '#78350f' }, // 查询获取=黄
-    action:    { fill: '#dbeafe', stroke: '#2563eb', color: '#1e3a8a' }, // 策略执行=蓝
+    condition: { fill: '#dcfce7', stroke: '#16a34a', color: '#14532d' }, // 查询获取=浅绿
+    action:    { fill: '#fee2e2', stroke: '#dc2626', color: '#7f1d1d' }, // 策略执行=淡红
   };
-  const kindFallback = { fill: '#e0e7ff', stroke: '#4f46e5', color: '#1e1b4b' }; // 未知 kind 默认靛蓝
-  Object.keys(kindSafeIds).forEach(k => {
-    const c = kindPalette[k] || kindFallback;
-    const clsName = 'nodeKind_' + k.replace(/[^a-zA-Z0-9_]/g, '_');
+  const kindFallback = { fill: '#f3f4f6', stroke: '#9ca3af', color: '#374151' }; // 未知 kind 默认灰
+  const routeFill = { fill: '#dbeafe', stroke: '#2563eb', color: '#1e3a8a' }; // 路由=淡蓝
+  Object.keys(kindSafeIds).forEach(clsName => {
+    const routing = clsName.endsWith('_route');
+    // clsName 形如 nodeKind_condition / nodeKind_action / nodeKind_condition_route，需去掉前缀再查 palette
+    const baseKey = clsName.replace(/^nodeKind_/, '').replace(/_route$/, '');
+    const c = routing ? routeFill : (kindPalette[baseKey] || kindFallback);
     lines.push(`    classDef ${clsName} fill:${c.fill},stroke:${c.stroke},color:${c.color},stroke-width:2px,text-align:left`);
-    lines.push(`    class ${kindSafeIds[k].join(',')} ${clsName}`);
+    lines.push(`    class ${kindSafeIds[clsName].join(',')} ${clsName}`);
   });
   lines.push('    classDef subCls fill:#ede9fe,stroke:#7c3aed,color:#4c1d95,stroke-width:2px,text-align:left');
   if (subClasses) lines.push(`    class ${subClasses} subCls`);
@@ -7366,6 +7386,55 @@ function esc(s) { if (s === null || s === undefined) return ''; return String(s)
 function safeVal(id, def) { const el = document.getElementById(id); return el ? el.value.trim() : (def || ''); }
 function safeChecked(id) { const el = document.getElementById(id); return el ? el.checked : false; }
 function trunc(s, n) { if (!s) return '-'; return s.length > n ? s.substring(0, n) + '...' : s; }
+// 已发布到根链（生产快照引用）的 node / activity 禁止编辑与删除，避免影响线上调用。
+// 以下两个辅助用于列表渲染：一个生成锁定角标，一个生成按钮禁用属性。
+function publishedLockBadge(title) {
+  return ' <span class="published-lock" title="' + esc(title || '已发布到根链，禁止编辑/删除') + '">🔒已发布</span>';
+}
+function publishedLockAttrs(published, title) {
+  if (!published) return '';
+  return 'disabled title="' + esc(title || '已发布到根链，禁止编辑/删除') + '"';
+}
+// 统一的已发布保护提示（后端也会拦截，此处用于前端即时反馈）
+function showPublishedLockedToast(kind) {
+  showToast((kind || '该记录') + '已发布到根链，禁止编辑/删除。请先发布新版本或改用新建副本。', 'error');
+}
+// 路由标记：节点配置了 switch_condition 即带路由功能（执行后按返回值路由到不同分支）。
+// 后端列表已回填 has_switch_condition；此处保留本地解析作为兜底（旧数据 / 缓存对象）。
+function nodeSwitchConditionText(n) {
+  if (!n) return '';
+  const t = n.type;
+  if (t !== 'custom/CondSwitch' && t !== 'custom/Activity') return '';
+  let cfg = n.configuration;
+  try {
+    if (typeof cfg === 'string') cfg = JSON.parse(cfg || '{}');
+  } catch (e) { return ''; }
+  const v = (cfg && cfg.node_config && cfg.node_config.switch_condition) || '';
+  return String(v).trim();
+}
+function nodeRouteBadge(n) {
+  if (!n) return '';
+  const has = (typeof n.has_switch_condition === 'boolean')
+    ? n.has_switch_condition
+    : (nodeSwitchConditionText(n) !== '');
+  if (!has) return '';
+  const expr = nodeSwitchConditionText(n);
+  const tip = expr ? ('已配置路由条件（switch_condition）：' + expr) : '已配置路由条件（switch_condition），执行后按返回值路由到不同分支';
+  return ' <span class="route-badge" title="' + esc(tip) + '">🔀路由</span>';
+}
+// 编排 Live Preview（Mermaid 节点标签内）的路由标记。
+// 与 nodeRouteBadge 判定逻辑一致，但 Mermaid 标签整体由双引号包裹且 class 对 SVG 内元素不生效，
+// 故改用内联样式且 HTML 属性一律用单引号；无路由时返回空串。
+function orchNodeRouteMark(n) {
+  if (!n) return '';
+  const has = (typeof n.has_switch_condition === 'boolean')
+    ? n.has_switch_condition
+    : (nodeSwitchConditionText(n) !== '');
+  if (!has) return '';
+  const expr = nodeSwitchConditionText(n);
+  const tip = expr ? ('已配置路由条件（switch_condition）：' + expr) : '已配置路由条件（switch_condition），执行后按返回值路由到不同分支';
+  return ` <span style='display:inline-block;padding:0 5px;border-radius:8px;font-size:.62rem;font-weight:600;background:#dbeafe;color:#1e40af' title='${esc(tip).replace(/'/g, "&#39;")}'>🔀路由</span>`;
+}
 function formatDuration(ms) {
   if (ms === undefined || ms === null || ms < 0) return '-';
   if (ms < 1000) return ms + 'ms';

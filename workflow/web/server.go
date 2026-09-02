@@ -568,7 +568,8 @@ func (ws *WebServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
 		return
 	}
-	nodes, err := ws.svc.ListNodes(r.Context(), project, r.URL.Query().Get("namespace"), r.URL.Query().Get("tag"), onlyEnabledParam(r))
+	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	nodes, err := ws.svc.ListNodes(r.Context(), project, r.URL.Query().Get("namespace"), r.URL.Query().Get("tag"), onlyEnabledParam(r), isAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -730,7 +731,12 @@ func (ws *WebServer) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	def.Project = project
 	def.NodeID = nodeID
-	if err := ws.svc.UpdateNode(r.Context(), &def); err != nil {
+	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	if err := ws.svc.UpdateNode(r.Context(), &def, isAdmin); err != nil {
+		if errors.Is(err, workflow.ErrNodePublishedInRootChain) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -745,7 +751,12 @@ func (ws *WebServer) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
 		return
 	}
-	if err := ws.svc.DeleteNode(r.Context(), project, nodeID); err != nil {
+	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	if err := ws.svc.DeleteNode(r.Context(), project, nodeID, isAdmin); err != nil {
+		if errors.Is(err, workflow.ErrNodePublishedInRootChain) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1836,7 +1847,8 @@ func (ws *WebServer) handleListActivities(w http.ResponseWriter, r *http.Request
 		return
 	}
 	env := r.URL.Query().Get("env")
-	activities, err := ws.svc.ListActivities(r.Context(), project, r.URL.Query().Get("tag"), env)
+	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	activities, err := ws.svc.ListActivities(r.Context(), project, r.URL.Query().Get("tag"), env, isAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -2044,7 +2056,12 @@ func (ws *WebServer) handleUpdateActivity(w http.ResponseWriter, r *http.Request
 	}
 	def.Project = project
 	def.ActivityID = activityID
-	if err := ws.svc.UpdateActivity(r.Context(), &def); err != nil {
+	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	if err := ws.svc.UpdateActivity(r.Context(), &def, isAdmin); err != nil {
+		if errors.Is(err, workflow.ErrActivityPublishedInRootChain) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -2059,7 +2076,12 @@ func (ws *WebServer) handleDeleteActivity(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
 		return
 	}
-	if err := ws.svc.DeleteActivity(r.Context(), project, activityID); err != nil {
+	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	if err := ws.svc.DeleteActivity(r.Context(), project, activityID, isAdmin); err != nil {
+		if errors.Is(err, workflow.ErrActivityPublishedInRootChain) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
