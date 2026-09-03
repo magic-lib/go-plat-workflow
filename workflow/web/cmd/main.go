@@ -241,10 +241,16 @@ func initMysqlLogger(db *sql.DB) (logs.ILogger, error) {
 	if db == nil {
 		return nil, fmt.Errorf("mysql config is nil")
 	}
+	retentionDays := 7
+	if cfg := loadAppConfig(); cfg != nil {
+		retentionDays = cfg.MysqlLogRetentionDays
+	}
+
 	cfg := &mysqllog.Config{
-		DB:          db,
-		TablePrefix: "wf_chain_rule_log",
-		BatchSize:   5,
+		DB:            db,
+		TablePrefix:   "wf_chain_rule_log",
+		RetentionDays: retentionDays,
+		BatchSize:     5,
 		ExtendFields: []mysqllog.ExtendField{
 			{Name: "code", DBType: "INT", Comment: "返回码，非0表示错误"},
 			{Name: "project", DBType: "VARCHAR(100)", Comment: "项目名称"},

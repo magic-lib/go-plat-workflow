@@ -190,8 +190,9 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .param-row .btn-remove-param:hover { color: #dc2626; }
 
 /* Flowchart */
-.flowchart-wrap { background: #fff; border-radius: var(--radius); padding: 16px; overflow: auto; min-height: 300px; display: flex; justify-content: center; align-items: center; }
-.flowchart-wrap svg { max-width: 100%; height: auto; }
+.flowchart-wrap { background: #fff; border-radius: var(--radius); padding: 16px; overflow: auto; min-height: 60vh; max-height: 72vh; display: flex; justify-content: flex-start; align-items: flex-start; }
+.flowchart-wrap .mermaid { font-size: 15px; min-width: 100%; }
+.flowchart-wrap svg { max-width: none; height: auto; }
 
 /* Override section */
 .override-node-block { margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }

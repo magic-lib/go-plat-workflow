@@ -5747,98 +5747,6 @@ async function ensureNameMaps() {
   return nameMap;
 }
 
-function buildMermaidSyntax(chain, nameMap) {
-  nameMap = nameMap || {};
-  const nodeIds = (chain.node_ids || '').split(',').map(s => s.trim()).filter(Boolean);
-  const subIds = (chain.sub_chain_ids || '').split(',').map(s => s.trim()).filter(Boolean);
-  let conns = [];
-  try { conns = JSON.parse(chain.connections_data || '[]'); } catch(e) {}
-
-  const nodeSet = new Set(nodeIds);
-  const subSet = new Set(subIds);
-
-  // 收集所有出现在 connections 中的 ID
-  const allIds = new Set();
-  conns.forEach(c => { allIds.add(c.from_id); allIds.add(c.to_id); });
-  nodeIds.forEach(id => allIds.add(id));
-  subIds.forEach(id => allIds.add(id));
-
-  // 对 ID 做 Mermaid 安全处理：将特殊字符替换为下划线，同时记录映射
-  const idMap = {};
-  const revMap = {};
-  let counter = 0;
-  allIds.forEach(id => {
-    let safe = id.replace(/[^a-zA-Z0-9_\u4e00-\u9fff]/g, '_');
-    if (!safe || /^\d/.test(safe)) safe = 'id' + safe;
-    // 确保唯一
-    while (Object.values(idMap).includes(safe)) safe = safe + '_' + (++counter);
-    idMap[id] = safe;
-    revMap[safe] = id;
-  });
-
-  let lines = ['flowchart TD'];
-
-  // 添加节点定义（不同的形状区分 node 和 subchain），显示中文名 + NodeId + 实例Id（与编排 Live Preview 一致）
-  function baseNodeId(id) {
-    return id.indexOf('__') >= 0 ? id.split('__')[0] : id;
-  }
-  function nodeName(id) {
-    if (nameMap[id]) return nameMap[id];
-    return nameMap[baseNodeId(id)] || '';
-  }
-  nodeSet.forEach(id => {
-    const safe = idMap[id];
-    const cn = nodeName(id);
-    const base = baseNodeId(id);
-    const labelLine = cn ? `<b>⚙ ${esc(cn)}</b>` : `<b>⚙ ${esc(id)}</b>`;
-    const idLine = `<small>NodeId: ${esc(base)}</small>`;
-    const instLine = id !== base ? `<small>Id: ${esc(id)}</small>` : '';
-    lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>' + instLine : ''}"]`);
-  });
-  subSet.forEach(id => {
-    const safe = idMap[id];
-    const cn = nodeName(id);
-    const subLabel = cn ? id : '';
-    lines.push(`    ${safe}(["<b>🔗 ${esc(cn || id)}</b>${subLabel ? '<br/><small>' + esc(subLabel) + '</small>' : ''}"])`);
-  });
-  // 未分类的 ID（只在 connections 中出现）
-  allIds.forEach(id => {
-    if (!nodeSet.has(id) && !subSet.has(id)) {
-      const safe = idMap[id];
-      const cn = nodeName(id);
-      const base = baseNodeId(id);
-      const labelLine = cn ? `<b>? ${esc(cn)}</b>` : `<b>? ${esc(id)}</b>`;
-      const idLine = `<small>NodeId: ${esc(base)}</small>`;
-      const instLine = id !== base ? `<small>Id: ${esc(id)}</small>` : '';
-      lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>' + instLine : ''}"]`);
-    }
-  });
-
-  // 添加连接关系
-  conns.forEach(c => {
-    const from = idMap[c.from_id];
-    const to = idMap[c.to_id];
-    if (from && to) {
-      lines.push(`    ${from} -->|${c.type || 'Success'}| ${to}`);
-    }
-  });
-
-  // 样式
-  const nodeClasses = [...nodeSet].map(id => idMap[id]).filter(Boolean).join(',');
-  const subClasses = [...subSet].map(id => idMap[id]).filter(Boolean).join(',');
-  const otherClasses = [];
-  allIds.forEach(id => { if (!nodeSet.has(id) && !subSet.has(id)) otherClasses.push(idMap[id]); });
-
-  lines.push(`    classDef nodeCls fill:#e0e7ff,stroke:#4f46e5,color:#1e1b4b,stroke-width:2px`);
-  lines.push(`    classDef subCls fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:2px`);
-  if (otherClasses.length) lines.push(`    classDef otherCls fill:#f3f4f6,stroke:#9ca3af,color:#374151,stroke-width:2px`);
-  if (nodeClasses) lines.push(`    class ${nodeClasses} nodeCls`);
-  if (subClasses) lines.push(`    class ${subClasses} subCls`);
-  if (otherClasses.length) lines.push(`    class ${otherClasses.join(',')} otherCls`);
-
-  return lines.join('\n');
-}
-
 async function showFlowchart(chain) {
   const title = document.getElementById('flowchart-modal-title');
   title.textContent = '流程图: ' + esc(chain.chain_id) + (chain.name ? ' - ' + esc(chain.name) : '');
@@ -5848,8 +5756,16 @@ async function showFlowchart(chain) {
   container.innerHTML = '';
   container.removeAttribute('data-processed');
 
-  const nameMap = await ensureNameMaps();
-  const syntax = buildMermaidSyntax(chain, nameMap);
+  // 拉取节点/子链定义（含 kind/name/has_switch_condition），复用与编排 Live Preview 完全相同的渲染逻辑
+  await ensureNameMaps();
+  const nodes = window._nodesForEdit || [];
+  const subChains = window._subChainsForEdit || [];
+  const nodeIds = (chain.node_ids || '').split(',').map(s => s.trim()).filter(Boolean);
+  const subIds = (chain.sub_chain_ids || '').split(',').map(s => s.trim()).filter(Boolean);
+  let conns = [];
+  try { conns = JSON.parse(chain.connections_data || '[]'); } catch(e) {}
+
+  const syntax = buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns);
   container.textContent = syntax;
 
   document.getElementById('flowchart-modal-overlay').classList.add('show');
@@ -6285,11 +6201,12 @@ function collectOrchConnections() {
   return conns;
 }
 
-// Build Mermaid syntax for orchestration preview
-function orchBuildMermaid() {
-  const nodeIds = getSelectedOrchNodeIds();
-  const subIds = getSelectedOrchSubIds();
-  const conns = collectOrchConnections();
+// 通用 Mermaid 流程图构建：编排 Live Preview 与 Root Chains 流程图共用同一套着色/标签逻辑（无重复代码）
+// nodes/subChains 为节点/子链定义数组（需含 node_id/chain_id、kind、name、has_switch_condition 等字段）
+function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
+  nodes = nodes || [];
+  subChains = subChains || [];
+  conns = conns || [];
 
   const allIds = new Set([...nodeIds, ...subIds]);
   conns.forEach(c => { allIds.add(c.from_id); allIds.add(c.to_id); });
@@ -6315,7 +6232,7 @@ function orchBuildMermaid() {
     const inst = (_orchNodeInstances || []).find(i => i.instanceId === id);
     // id 是实例 ID（nodeId__随机段），需按 nodeId（去后缀）查节点定义，才能取到 has_switch_condition / configuration
     const nodeId = inst ? inst.nodeId : id.split('__')[0];
-    const n = _orchNodes.find(x => x.node_id === nodeId);
+    const n = nodes.find(x => x.node_id === nodeId);
     const baseId = nodeId;
     const cnName = (inst && inst.name) ? inst.name : (n && n.name ? n.name : id);
     const k = (n && n.kind) || 'action';
@@ -6331,7 +6248,7 @@ function orchBuildMermaid() {
   });
   subSet.forEach(id => {
     const safe = idMap[id];
-    const s = _orchSubChains.find(x => x.chain_id === id);
+    const s = subChains.find(x => x.chain_id === id);
     const label = s && s.name ? s.name : id;
     const subLabel = s && s.name ? id : '';
     lines.push(`    ${safe}(["<b>🔗 ${esc(label)}</b>${subLabel ? '<br/><small>'+esc(subLabel)+'</small>' : ''}"])`);
@@ -6369,6 +6286,17 @@ function orchBuildMermaid() {
   // 暴露 id 映射供预览图叠加删除叉时反向查询原始实例 ID
   window._orchIdMap = idMap;
   return lines.join('\n');
+}
+
+// Build Mermaid syntax for orchestration preview（复用通用构建函数）
+function orchBuildMermaid() {
+  return buildMermaidFromState(
+    _orchNodes,
+    _orchSubChains,
+    getSelectedOrchNodeIds(),
+    getSelectedOrchSubIds(),
+    collectOrchConnections()
+  );
 }
 
 // Build DSL preview JSON (approximate)

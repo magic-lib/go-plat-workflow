@@ -23,6 +23,8 @@ const (
 	hostPortKey = "host_port"
 	// feishuAlertWebhookKey 配置文件中 custom.normal 下飞书告警机器人地址的 key 名。
 	feishuAlertWebhookKey = "feishu_alert_webhook"
+	// mysqlLogRetentionDaysKey 配置文件中 custom.normal 下数据保留天数的 key 名。
+	mysqlLogRetentionDaysKey = "mysql_log_retention_days"
 	// normalKey 配置文件中 custom.normal 段的 key 名。
 	normalKey = "normal"
 
@@ -54,6 +56,8 @@ type AppConfig struct {
 	ListenAddr string
 	// FeishuAlertWebhook 飞书告警机器人 Webhook 地址（由 custom.normal.feishu_alert_webhook 读取）
 	FeishuAlertWebhook string
+	// MysqlLogRetentionDays 数据保留天数（由 custom.normal.retention_days 读取，缺省默认 7）
+	MysqlLogRetentionDays int
 }
 
 // Load 通过 startupcfg 从配置文件加载应用配置。
@@ -97,6 +101,9 @@ func Load(path ...string) (*AppConfig, error) {
 	// 从 custom.normal.feishu_alert_webhook 读取飞书告警机器人地址
 	cfg.FeishuAlertWebhook = customNormalString(startCfg.Custom, feishuAlertWebhookKey)
 
+	// 从 custom.normal.retention_days 读取数据保留天数，缺省默认 7
+	cfg.MysqlLogRetentionDays = customNormalInt(startCfg.Custom, mysqlLogRetentionDaysKey, 7)
+
 	return cfg, nil
 }
 
@@ -116,6 +123,28 @@ func customNormalString(custom map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+// customNormalInt 从 custom.normal 段读取整数配置项。
+// 找不到、类型不符或值 <= 0 时返回默认值 def。
+func customNormalInt(custom map[string]interface{}, key string, def int) int {
+	normal, ok := custom[normalKey]
+	if !ok {
+		return def
+	}
+	nm, ok := normal.(map[string]interface{})
+	if !ok {
+		return def
+	}
+	v, ok := nm[key]
+	if !ok {
+		return def
+	}
+	n, ok := conv.Int64(v)
+	if !ok || n <= 0 {
+		return def
+	}
+	return int(n)
 }
 
 // secretHandlerOnce 保证敏感信息解密 handler 全局仅初始化一次

@@ -14,3 +14,5 @@ custom: # 自定义配置
     host_port:
       host: 0.0.0.0
       port: 8686
+    feishu_alert_webhook: "" # 飞书告警机器人 Webhook 地址；配置后 Node 执行失败会异步推送告警到群
+    mysql_log_retention_days: 2 # 日志保留天数
