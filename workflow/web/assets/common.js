@@ -6229,7 +6229,7 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
   const kindSafeIds = {};
   nodeSet.forEach(id => {
     const safe = idMap[id];
-    const inst = (_orchNodeInstances || []).find(i => i.instanceId === id);
+    const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
     // id 是实例 ID（nodeId__随机段），需按 nodeId（去后缀）查节点定义，才能取到 has_switch_condition / configuration
     const nodeId = inst ? inst.nodeId : id.split('__')[0];
     const n = nodes.find(x => x.node_id === nodeId);
@@ -6514,7 +6514,7 @@ function renderOrchParamOverrides() {
     let preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || null;
     // 兜底：未单独保存 node_param_overrides 时，从 DSL 节点 arguments 恢复（已写入配置后的值）
     if (!preset) {
-      const inst = (_orchNodeInstances || []).find(i => i.instanceId === nodeId);
+      const inst = (window._orchNodeInstances || []).find(i => i.instanceId === nodeId);
       if (inst && Array.isArray(inst.override)) {
         const bc = inst.override.find(b => (b.Key || b.key) === key);
         if (bc && bc.Value != null && bc.Value !== '') {
