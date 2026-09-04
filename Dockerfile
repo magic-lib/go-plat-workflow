@@ -53,10 +53,10 @@ RUN mkdir -p /app/data && chown -R appuser:appuser /app
 
 USER appuser
 
-EXPOSE 8080
+EXPOSE 8686
 
 # 可通过环境变量覆盖：
 #   DB_DSN / LISTEN_ADDR / CONFIG_PATH / CONFIG_SECRET_KEY
-# 若用 CONFIG_PATH 指定配置文件，可改为 CMD ["-addr", ":8080", "-config", "/app/workflow/etc/app.yaml"]
+# 若用 CONFIG_PATH 指定配置文件，可改为 CMD ["-addr", ":8686", "-config", "/app/workflow/etc/app.yaml"]
 ENTRYPOINT ["/app/workflow"]
-CMD ["-addr", ":8080", "-f", "config/app.yaml"]
+CMD ["-addr", ":8686", "-f", "config/app.yaml"]

@@ -11,6 +11,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/logs"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
+	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"io/fs"
@@ -2294,7 +2295,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func (ws *WebServer) ListenAndServe(addr string) error {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
-		addr = ":8080"
+		addr = config.DefaultListenAddr
 	}
 	log.Info().Str("addr", addr).Msg("workflow web server starting")
 	return http.ListenAndServe(addr, ws.mux)

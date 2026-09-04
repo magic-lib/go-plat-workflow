@@ -16,7 +16,7 @@
 // 环境变量:
 //
 //	DB_DSN            MySQL 连接串，默认: root:root@tcp(127.0.0.1:3306)/workflow?charset=utf8mb4&parseTime=True&loc=Local
-//	LISTEN_ADDR       监听地址，默认: :8080
+//	LISTEN_ADDR       监听地址，默认: :8686
 //	CONFIG_PATH       配置文件路径（可选），默认候选: config/app.yaml 或 workflow/etc/app.yaml
 //	CONFIG_SECRET_KEY 配置文件敏感信息解密 key（可选），为空时使用空 key
 //
@@ -152,9 +152,6 @@ func main() {
 	}
 }
 
-// defaultListenAddr 内置默认监听地址。
-const defaultListenAddr = ":8080"
-
 // appConfigOnce 缓存一次配置文件加载结果，避免多次重复读文件。
 var (
 	appConfigOnce   sync.Once
@@ -208,7 +205,7 @@ func resolveListenAddr(flagVal string) string {
 	if cfg := loadAppConfig(); cfg != nil && cfg.ListenAddr != "" {
 		return cfg.ListenAddr
 	}
-	return defaultListenAddr
+	return config.DefaultListenAddr
 }
 
 // maskDSN 隐藏密码部分用于日志输出。

@@ -29,6 +29,8 @@ const (
 	normalKey = "normal"
 
 	DefaultTimeout = 60 * time.Second
+
+	DefaultListenAddr = ":8686"
 )
 
 type ReturnValue struct {
@@ -166,7 +168,7 @@ func initSecretHandler() error {
 }
 
 // hostPortToAddr 将 custom.normal.host_port（host + port）拼接为 host:port 地址。
-// hp 为 yaml 反序列化后的 map[string]interface{}，形如 {"host":"0.0.0.0","port":8080}。
+// hp 为 yaml 反序列化后的 map[string]interface{}，形如 {"host":"0.0.0.0","port":8686}。
 func hostPortToAddr(hp interface{}) string {
 	m, ok := hp.(map[string]interface{})
 	if !ok {
