@@ -413,7 +413,7 @@ func (s *WorkflowService) UpdateNode(ctx context.Context, def *workflow.NodeDef,
 	if err != nil {
 		return err
 	}
-	if published {
+	if published && !isAdmin {
 		return workflow.ErrNodePublishedInRootChain
 	}
 	return s.nodeRepo.Update(ctx, def)
@@ -426,7 +426,7 @@ func (s *WorkflowService) DeleteNode(ctx context.Context, project, nodeID string
 	if err != nil {
 		return err
 	}
-	if published {
+	if published && !isAdmin {
 		return workflow.ErrNodePublishedInRootChain
 	}
 	return s.nodeRepo.Delete(ctx, project, nodeID)
