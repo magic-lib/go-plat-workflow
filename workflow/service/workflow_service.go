@@ -390,9 +390,9 @@ func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag
 	for _, n := range all {
 		n.HasSwitchCondition = n.HasSwitchConditionExpr()
 	}
-	// 标注已发布引用：已被发布到根链（含子链传递引用）的节点禁止编辑/删除，前端据此禁用按钮。
-	// 超级管理员不受限制，不标注。
-	if !isAdmin && len(all) > 0 {
+	// 标注已发布引用：已被发布到根链（含子链传递引用）的节点，前端据此展示标记并（对普通用户）禁用编辑/删除按钮。
+	// 超级管理员仍可操作，但前端会据此给出二次确认提示，避免误改/误删线上引用。故对所有角色都标注。
+	if len(all) > 0 {
 		idx, err := s.buildPublishedRefIndex(ctx, project)
 		if err != nil {
 			return nil, err
@@ -1857,8 +1857,8 @@ func (s *WorkflowService) ListActivities(ctx context.Context, project string, ta
 		}
 	}
 	// 标注已发布引用：已被发布到根链（含子链传递引用）的 activity 禁止编辑/删除，前端据此禁用按钮。
-	// 标注已发布引用：超级管理员不受限制，不标注。
-	if !isAdmin && len(activities) > 0 {
+	// 标注已发布引用：超级管理员仍可操作，但前端会据此给出二次确认提示，避免误改/误删线上引用。故对所有角色都标注。
+	if len(activities) > 0 {
 		idx, err := s.buildPublishedRefIndex(ctx, project)
 		if err != nil {
 			return nil, err

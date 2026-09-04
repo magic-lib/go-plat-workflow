@@ -1996,14 +1996,27 @@ async function saveNode() {
 
 function editNodeByIndex(i) {
   const n = window._nodesForEdit[i];
-  if (n && n.published_in_root_chain) { showPublishedLockedToast('该节点'); return; }
+  if (n && n.published_in_root_chain) {
+    if (isAdmin()) {
+      if (!confirm('该节点已发布到根链（线上生效版本引用），修改可能影响线上调用。\n\n确认要继续编辑吗？')) return;
+    } else {
+      showPublishedLockedToast('该节点'); return;
+    }
+  }
   openNodeModal(n);
 }
 
 async function deleteNode(id) {
   const n = (window._nodesForEdit || []).find(x => x.node_id === id);
-  if (n && n.published_in_root_chain) { showPublishedLockedToast('该节点'); return; }
-  if (!confirm('确定删除节点 ' + id + ' 吗？')) return;
+  if (n && n.published_in_root_chain) {
+    if (isAdmin()) {
+      if (!confirm('该节点已发布到根链（线上生效版本引用），删除可能影响线上调用。\n\n确认要删除吗？')) return;
+    } else {
+      showPublishedLockedToast('该节点'); return;
+    }
+  } else {
+    if (!confirm('确定删除节点 ' + id + ' 吗？')) return;
+  }
   try {
     await api('/api/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
     showToast('节点已删除', 'success');
@@ -2686,7 +2699,13 @@ async function saveActivity() {
 // 编辑指定 activity
 function editActivity(activityID) {
   const a = window._activityCache.find(x => x.activity_id === activityID);
-  if (a && a.published_in_root_chain) { showPublishedLockedToast('该 activity'); return; }
+  if (a && a.published_in_root_chain) {
+    if (isAdmin()) {
+      if (!confirm('该 activity 已发布到根链（线上生效版本引用），修改可能影响线上调用。\n\n确认要继续编辑吗？')) return;
+    } else {
+      showPublishedLockedToast('该 activity'); return;
+    }
+  }
   if (a) openActivityModal(a);
 }
 
@@ -2819,8 +2838,15 @@ function closeActivityListenerCode() {
 // 删除 activity
 async function deleteActivityById(activityID) {
   const a = (window._activityCache || []).find(x => x.activity_id === activityID);
-  if (a && a.published_in_root_chain) { showPublishedLockedToast('该 activity'); return; }
-  if (!confirm('确定删除 activity ' + activityID + ' 吗？')) return;
+  if (a && a.published_in_root_chain) {
+    if (isAdmin()) {
+      if (!confirm('该 activity 已发布到根链（线上生效版本引用），删除可能影响线上调用。\n\n确认要删除吗？')) return;
+    } else {
+      showPublishedLockedToast('该 activity'); return;
+    }
+  } else {
+    if (!confirm('确定删除 activity ' + activityID + ' 吗？')) return;
+  }
   const p = getProject();
   if (!p) { showToast('请先选择项目', 'error'); return; }
   try {
@@ -3322,6 +3348,7 @@ function renderNodeLogItem(r) {
     '<span class="log-meta">' + esc(t) + '</span>',
     durHtml,
     (r.node_name ? '<span class="log-meta log-node-name">node=' + esc(r.node_name) + '</span>' : ''),
+    (r.node_id ? '<span class="log-meta log-node-id">nodeId=' + esc(r.node_id) + '</span>' : ''),
     (r.env ? '<span class="log-meta">env=' + esc(r.env) + '</span>' : ''),
     (r.trace_id ? '<span class="log-meta">trace_id=' + esc(r.trace_id) + '</span>' : ''),
     (r.relation_type ? '<span class="log-meta log-relation">relation=' + esc(r.relation_type) + '</span>' : ''),
@@ -7321,6 +7348,8 @@ function publishedLockBadge(title) {
 }
 function publishedLockAttrs(published, title) {
   if (!published) return '';
+  // 普通用户禁用；管理员仍可直接操作，但前端会二次确认，故只加提示 title 不禁用
+  if (isAdmin()) return 'title="' + esc(title || '已发布到根链，管理员可直接编辑/删除（操作前会二次确认）') + '"';
   return 'disabled title="' + esc(title || '已发布到根链，禁止编辑/删除') + '"';
 }
 // 统一的已发布保护提示（后端也会拦截，此处用于前端即时反馈）

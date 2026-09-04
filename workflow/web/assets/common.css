@@ -337,6 +337,7 @@ g.node:hover > .orch-node-del { opacity: 1; }
 .log-meta { color: var(--text-muted); font-size: .72rem; }
 .log-duration { color: #b45309; font-weight: 600; }
 .log-node-name { color: #1d4ed8; font-weight: 600; }
+.log-node-id { color: #0f766e; font-weight: 600; font-family: var(--font-mono); }
 .log-relation { color: #7c3aed; font-weight: 600; }
 .log-json { background: #0f172a; color: #e2e8f0; border-radius: 6px; padding: 8px; margin-top: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: .72rem; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
 .log-json .k { color: #93c5fd; }
