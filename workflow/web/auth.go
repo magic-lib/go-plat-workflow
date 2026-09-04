@@ -23,12 +23,26 @@ const sessionDuration = 24 * time.Hour
 // ctxUserKey 用于把当前登录用户存入 request context 的 key。
 type ctxUserKey struct{}
 
-// currentUser 从 context 中取出当前登录用户（未登录则为 nil）。
-func currentUser(r *http.Request) *models.UserModel {
+// currentUserSafe 取当前登录用户：优先取中间件注入到 context 的用户；
+// 若为 nil（Go 1.22 ServeMux 在匹配带路径参数的路由时会重置 request context，
+// 导致中间件注入 context 的用户丢失），则从会话 Cookie 回查兜底，
+// 避免 admin 被误判为普通用户（isAdmin=false）。
+func (ws *WebServer) currentUserSafe(r *http.Request) *models.UserModel {
 	if u, ok := r.Context().Value(ctxUserKey{}).(*models.UserModel); ok {
-		return u
+		if u != nil {
+			return u
+		}
+	}
+	if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
+		if _, su, serr := ws.svc.UserRepo().GetSession(r.Context(), c.Value); serr == nil && su != nil {
+			return su
+		}
 	}
 	return nil
+}
+
+func (ws *WebServer) currentUserIsAdmin(r *http.Request) bool {
+	return ws.currentUserSafe(r) != nil && ws.currentUserSafe(r).Role == "admin"
 }
 
 // genToken 生成随机会话 token。
@@ -135,7 +149,7 @@ func isWriteRequest(r *http.Request) bool {
 
 // projectRoleOf 返回当前用户对 project 的角色：admin -> "admin"；普通用户查授权表，未授权返回空。
 func (ws *WebServer) projectRoleOf(r *http.Request, project string) (string, error) {
-	u := currentUser(r)
+	u := ws.currentUserSafe(r)
 	if u == nil {
 		return "", nil
 	}
@@ -168,20 +182,13 @@ func checkProjectAccessForRequest(ws *WebServer, w http.ResponseWriter, r *http.
 // 在匹配带路径参数的路由时会重置 request context），则回查会话 Cookie，
 // 避免 admin 接口误报 "未登录：请求未携带有效会话"。
 func (ws *WebServer) requireAdmin(w http.ResponseWriter, r *http.Request) *models.UserModel {
-	u := currentUser(r)
-	if u == nil {
-		// 兜底：从会话 Cookie 重新解析当前用户
-		if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
-			if _, su, serr := ws.svc.UserRepo().GetSession(r.Context(), c.Value); serr == nil && su != nil {
-				u = su
-			}
-		}
-	}
+	u := ws.currentUserSafe(r)
 	if u == nil {
 		writeError(w, http.StatusUnauthorized, "未登录：缺少有效会话，请重新登录")
 		return nil
 	}
-	if u.Role != "admin" {
+	isAdmin := ws.currentUserIsAdmin(r)
+	if !isAdmin {
 		writeError(w, http.StatusForbidden, "admin only")
 		return nil
 	}
@@ -191,15 +198,7 @@ func (ws *WebServer) requireAdmin(w http.ResponseWriter, r *http.Request) *model
 // requireProjectAccess 校验当前用户是否可访问指定 project。
 // admin 用户拥有全部项目权限；viewer 需在其 wf_user_projects 授权列表中。
 func (ws *WebServer) requireProjectAccess(w http.ResponseWriter, r *http.Request, project string) bool {
-	u := currentUser(r)
-	if u == nil {
-		// 兜底：从会话 Cookie 重新解析当前用户
-		if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
-			if _, su, serr := ws.svc.UserRepo().GetSession(r.Context(), c.Value); serr == nil && su != nil {
-				u = su
-			}
-		}
-	}
+	u := ws.currentUserSafe(r)
 	if u == nil {
 		writeError(w, http.StatusUnauthorized, "未登录：缺少有效会话，请重新登录")
 		return false
@@ -295,15 +294,7 @@ func (ws *WebServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ws *WebServer) handleMe(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	if u == nil {
-		// 兜底：从会话 Cookie 重新解析当前用户
-		if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
-			if _, su, serr := ws.svc.UserRepo().GetSession(r.Context(), c.Value); serr == nil && su != nil {
-				u = su
-			}
-		}
-	}
+	u := ws.currentUserSafe(r)
 	if u == nil {
 		writeError(w, http.StatusUnauthorized, "未登录：缺少有效会话，请重新登录")
 		return
@@ -339,15 +330,7 @@ func (ws *WebServer) handleChangeMyPassword(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	u := currentUser(r)
-	if u == nil {
-		// 兜底：从会话 Cookie 重新解析当前用户
-		if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
-			if _, su, serr := ws.svc.UserRepo().GetSession(r.Context(), c.Value); serr == nil && su != nil {
-				u = su
-			}
-		}
-	}
+	u := ws.currentUserSafe(r)
 	if u == nil {
 		writeError(w, http.StatusUnauthorized, "未登录：缺少有效会话，请重新登录")
 		return

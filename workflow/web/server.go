@@ -287,7 +287,7 @@ func (ws *WebServer) handleListProjects(w http.ResponseWriter, r *http.Request) 
 		projects = []*workflow.ProjectDef{}
 	}
 	// viewer 仅能看到被授权的项目
-	if u := currentUser(r); u != nil && u.Role != "admin" {
+	if u := ws.currentUserSafe(r); u != nil && u.Role != "admin" {
 		allowed, e := ws.svc.UserRepo().ListProjectsByUser(r.Context(), u.ID)
 		if e != nil {
 			writeError(w, http.StatusInternalServerError, e.Error())
@@ -311,15 +311,7 @@ func (ws *WebServer) handleListProjects(w http.ResponseWriter, r *http.Request) 
 // handleCreateProject 新建项目。任意登录用户均可创建；创建者自动绑定到该项目，
 // 普通用户（viewer）创建后即可在自己的项目列表中看到并访问它。
 func (ws *WebServer) handleCreateProject(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	if u == nil {
-		// 兜底：从会话 Cookie 重新解析当前用户
-		if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
-			if _, su, serr := ws.svc.UserRepo().GetSession(r.Context(), c.Value); serr == nil && su != nil {
-				u = su
-			}
-		}
-	}
+	u := ws.currentUserSafe(r)
 	if u == nil {
 		writeError(w, http.StatusUnauthorized, "未登录：缺少有效会话，请重新登录")
 		return
@@ -569,7 +561,7 @@ func (ws *WebServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
 		return
 	}
-	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	isAdmin := ws.currentUserIsAdmin(r)
 	nodes, err := ws.svc.ListNodes(r.Context(), project, r.URL.Query().Get("namespace"), r.URL.Query().Get("tag"), onlyEnabledParam(r), isAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -732,7 +724,7 @@ func (ws *WebServer) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	def.Project = project
 	def.NodeID = nodeID
-	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	isAdmin := ws.currentUserIsAdmin(r)
 	if err := ws.svc.UpdateNode(r.Context(), &def, isAdmin); err != nil {
 		if errors.Is(err, workflow.ErrNodePublishedInRootChain) {
 			writeError(w, http.StatusConflict, err.Error())
@@ -752,7 +744,7 @@ func (ws *WebServer) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
 		return
 	}
-	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	isAdmin := ws.currentUserIsAdmin(r)
 	if err := ws.svc.DeleteNode(r.Context(), project, nodeID, isAdmin); err != nil {
 		if errors.Is(err, workflow.ErrNodePublishedInRootChain) {
 			writeError(w, http.StatusConflict, err.Error())
@@ -1848,7 +1840,7 @@ func (ws *WebServer) handleListActivities(w http.ResponseWriter, r *http.Request
 		return
 	}
 	env := r.URL.Query().Get("env")
-	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	isAdmin := ws.currentUserIsAdmin(r)
 	activities, err := ws.svc.ListActivities(r.Context(), project, r.URL.Query().Get("tag"), env, isAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -2057,7 +2049,7 @@ func (ws *WebServer) handleUpdateActivity(w http.ResponseWriter, r *http.Request
 	}
 	def.Project = project
 	def.ActivityID = activityID
-	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	isAdmin := ws.currentUserIsAdmin(r)
 	if err := ws.svc.UpdateActivity(r.Context(), &def, isAdmin); err != nil {
 		if errors.Is(err, workflow.ErrActivityPublishedInRootChain) {
 			writeError(w, http.StatusConflict, err.Error())
@@ -2077,7 +2069,7 @@ func (ws *WebServer) handleDeleteActivity(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
 		return
 	}
-	isAdmin := currentUser(r) != nil && currentUser(r).Role == "admin"
+	isAdmin := ws.currentUserIsAdmin(r)
 	if err := ws.svc.DeleteActivity(r.Context(), project, activityID, isAdmin); err != nil {
 		if errors.Is(err, workflow.ErrActivityPublishedInRootChain) {
 			writeError(w, http.StatusConflict, err.Error())
