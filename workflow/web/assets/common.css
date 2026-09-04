@@ -76,9 +76,8 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
   font-size: .68rem;
   font-weight: 600;
   white-space: nowrap;
-  background: #fef3c7;
   color: #92400e;
-  cursor: help;
+  cursor: default;
 }
 /* 已配置路由条件（switch_condition）的节点标记 */
 .route-badge {
@@ -90,7 +89,6 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
   font-size: .68rem;
   font-weight: 600;
   white-space: nowrap;
-  background: #dbeafe;
   color: #1e40af;
   cursor: help;
 }

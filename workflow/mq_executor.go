@@ -747,7 +747,7 @@ func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string
 		Method: http.MethodPost,
 	}).Submit(ctx)
 	if resp.Error != nil {
-		return nil, err
+		return nil, resp.Error
 	}
 	respData := new(httputil.CommResponse)
 	err = conv.Unmarshal(resp.Response, respData)

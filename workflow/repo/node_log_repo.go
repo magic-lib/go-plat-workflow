@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"time"
 
 	"gorm.io/gorm"
@@ -62,7 +63,7 @@ func (r *NodeLogRepo) StatsByDay(ctx context.Context, project, env, nodeID strin
 	if days > 365 {
 		days = 365
 	}
-	since := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02") + " 00:00:00"
+	since := time.Now().AddDate(0, 0, -(days-1)).Format("2006-01-02") + " 00:00:00"
 
 	type row struct {
 		NodeID   string `gorm:"column:node_id"`
@@ -73,7 +74,7 @@ func (r *NodeLogRepo) StatsByDay(ctx context.Context, project, env, nodeID strin
 	}
 	var rows []row
 	query := r.db.WithContext(ctx).Model(&models.NodeLogModel{}).
-		Select("node_id, node_name, DATE(created_at) as date, COUNT(*) as total, " +
+		Select("node_id, node_name, DATE(created_at) as date, COUNT(*) as total, "+
 			"SUM(CASE WHEN error_msg <> '' THEN 1 ELSE 0 END) as errors").
 		Where("project = ? AND created_at >= ?", project, since)
 	if env != "" {
@@ -121,7 +122,7 @@ func (r *NodeLogRepo) ListByFilter(ctx context.Context, project string, f *workf
 		query = query.Where("env = ?", f.Env)
 	}
 	if f.TraceID != "" {
-		query = query.Where("trace_id = ?", f.TraceID)
+		query = query.Where("trace_id = ?", id.GetUUID(f.TraceID))
 	}
 	if f.Keyword != "" {
 		kw := "%" + f.Keyword + "%"

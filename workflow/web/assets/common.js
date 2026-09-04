@@ -533,6 +533,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     else if (tab === 'root-chains') loadRootChains();
     else if (tab === 'logs') openAllLogsTab();
     else if (tab === 'orchestrate') loadOrchData();
+    // 同步地址栏 ?tab=，刷新后停留在当前 tab（保留其它查询参数；用 replaceState 不产生多余后退记录）
+    const url = new URL(location.href);
+    url.searchParams.set('tab', tab);
+    history.replaceState(null, '', url.toString());
   });
 });
 
@@ -763,8 +767,8 @@ async function loadNodes() {
     refreshNodeTagFilter(); // 同步标签过滤下拉（基于当前列表已有标签）
     tbody.innerHTML = nodes.map((n, i) => `
       <tr>
-        <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}${n.published_in_root_chain ? publishedLockBadge('已发布到根链') : ''}</td>
-        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}</td>
+        <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
+        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
         <td><span class="code-cell">${esc(n.type)}</span></td>
         <td><span class="badge ${n.kind==='condition'?'badge-warning':'badge-info'}">${n.kind==='condition'?'查询获取':'策略执行'}</span></td>
         <td>${esc(n.category || '-')}</td>
@@ -2227,7 +2231,7 @@ function renderActivityTable(list) {
     }
     return `<tr>
       <td><span class="code-cell">${escHtml(a.activity_id)}</span></td>
-      <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span>${a.published_in_root_chain ? publishedLockBadge('已发布到根链') : ''}</td>
+      <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span>${a.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
       <td>${tagsHtml}</td>
       <td><span class="code-cell">${escHtml(a.act_namespace)}</span></td>
       <td><span class="code-cell">${escHtml(a.act_name)}</span></td>
@@ -7344,7 +7348,7 @@ function trunc(s, n) { if (!s) return '-'; return s.length > n ? s.substring(0, 
 // 已发布到根链（生产快照引用）的 node / activity 禁止编辑与删除，避免影响线上调用。
 // 以下两个辅助用于列表渲染：一个生成锁定角标，一个生成按钮禁用属性。
 function publishedLockBadge(title) {
-  return ' <span class="published-lock" title="' + esc(title || '已发布到根链，禁止编辑/删除') + '">🔒已发布</span>';
+  return ' <span class="published-lock" title="' + esc(title || '已发布') + '">🔒</span>';
 }
 function publishedLockAttrs(published, title) {
   if (!published) return '';
