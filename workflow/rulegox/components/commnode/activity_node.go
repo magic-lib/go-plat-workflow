@@ -319,7 +319,8 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		if x.switchCondition != "" {
 			nodeStepMap, _ := allParam.StepMaps(currNodeId)
 			// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
-			relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam, stepFlowCtx.Arguments, nodeStepMap)
+			relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam,
+				stepFlowCtx.Arguments, stepFlowCtx.Responses, nodeStepMap)
 			if err != nil {
 				ctx.TellFailure(msg, err)
 				return
@@ -328,7 +329,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			return
 		}
 		// 上报 node 返回值日志（落库 wf_node_logs）
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success, allParam, stepFlowCtx.Arguments, dataMap, nil)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success, allParam, stepFlowCtx.Arguments, nodeStep.Responses, nil)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
@@ -345,7 +346,8 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	if x.switchCondition != "" {
 		// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
 		nodeStepMap, _ := allParam.StepMaps(currNodeId)
-		relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam, stepFlowCtx.Arguments, nodeStepMap)
+		relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam,
+			stepFlowCtx.Arguments, stepFlowCtx.Responses, nodeStepMap)
 		if err != nil {
 			ctx.TellFailure(msg, err)
 			return
@@ -395,7 +397,8 @@ type NodeLogDef struct {
 // 由管理端收集器消费后落库 wf_node_logs，便于在前端查看每个 node 的运行情况。
 // 若已注入 NodeLogSaver，则直接将 NodeLogDef 写入数据库（不经过 redis 中转）；
 // 否则回退为 redis 推送（基于 actMetaData.RedisConfig 惰性建连并缓存），保持兼容。
-func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level, relationType string, payload any, arguments map[string]any, result any, runErr error) (*redis.Client, error) {
+func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeID, nodeName, eventID, level, relationType string,
+	payload any, arguments map[string]any, result any, runErr error) (*redis.Client, error) {
 	if metaData == nil {
 		return nodeLogCli, nil
 	}
@@ -603,17 +606,20 @@ func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*p
 // 求值参数：整体 allParam（data/Steps/Arguments 等）+ 顶层 responses（本节点返回值 dataMap），
 // 因此表达式可写 `responses.in_blacklist == true`（走 True 分支）或 `responses.code`（走自定义 relationType）。
 // 路由语义与 condSwitchNode 一致：bool→True/False；string→自定义 relationType；其他→Success/Failure。
-func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeStr string, allParam *paramx.FlowContext, arguments map[string]any, stepDataMap map[string]any) (string, error) {
+func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeStr string,
+	allParam *paramx.FlowContext, arguments map[string]any, result any, stepDataMap map[string]any) (string, error) {
 	relationType, conResult, err := routeByCondition(x.ruleObj, x.switchCondition, stepDataMap)
 	if err != nil {
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParam, arguments, stepDataMap, err)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, conv.String(conResult), "error", types.Failure,
+			allParam, arguments, result, err)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
 		return "", err
 	}
 
-	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", relationType, allParam, arguments, conResult, nil)
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, conv.String(conResult), "info", relationType,
+		allParam, arguments, result, nil)
 	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli
 	}
