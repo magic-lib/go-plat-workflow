@@ -518,6 +518,10 @@ func (s *WorkflowService) CreateSubChainBuild(ctx context.Context, req *workflow
 		return nil, err
 	}
 	normalizeSubChainDSL(def)
+	// 与 SaveRootChain 一致：创建即落库（project+chain_id upsert，幂等）。
+	if err := s.subChainRepo.Create(ctx, def); err != nil {
+		return nil, err
+	}
 	return def, nil
 }
 

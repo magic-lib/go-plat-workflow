@@ -1018,26 +1018,28 @@ func (ws *WebServer) handleCreateRootChain(w http.ResponseWriter, r *http.Reques
 // ============================================================
 
 type buildSubChainRequest struct {
-	Project     string                   `json:"project"`
-	ChainID     string                   `json:"chain_id"`
-	ChainName   string                   `json:"chain_name"`
-	Description string                   `json:"description"`
-	NodeIDs     []string                 `json:"node_ids"`
-	SubChainIDs []string                 `json:"sub_chain_ids"`
-	Connections []workflow.ConnectionDef `json:"connections"`
-	DebugMode   bool                     `json:"debug_mode"`
+	Project            string                            `json:"project"`
+	ChainID            string                            `json:"chain_id"`
+	ChainName          string                            `json:"chain_name"`
+	Description        string                            `json:"description"`
+	NodeIDs            []string                          `json:"node_ids"`
+	SubChainIDs        []string                          `json:"sub_chain_ids"`
+	Connections        []workflow.ConnectionDef          `json:"connections"`
+	DebugMode          bool                              `json:"debug_mode"`
+	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
 }
 
 func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSubChainRequest {
 	return &workflow.BuildSubChainRequest{
-		Project:     project,
-		ChainID:     r.ChainID,
-		ChainName:   r.ChainName,
-		Description: r.Description,
-		NodeIDs:     r.NodeIDs,
-		SubChainIDs: r.SubChainIDs,
-		Connections: r.Connections,
-		DebugMode:   r.DebugMode,
+		Project:            project,
+		ChainID:            r.ChainID,
+		ChainName:          r.ChainName,
+		Description:        r.Description,
+		NodeIDs:            r.NodeIDs,
+		SubChainIDs:        r.SubChainIDs,
+		Connections:        r.Connections,
+		DebugMode:          r.DebugMode,
+		NodeParamOverrides: r.NodeParamOverrides,
 	}
 }
 

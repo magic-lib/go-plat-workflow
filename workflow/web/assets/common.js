@@ -7130,38 +7130,6 @@ function updateOrchTargetByChainId() {
 }
 
 // 编排新建：切换到 Orchestrate 页，目标设为 Root Chain，清空表单。
-function newSubChainViaOrch() {
-  // 切换到 Orchestrate Tab
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.querySelector('[data-tab="orchestrate"]').classList.add('active');
-  document.getElementById('tab-orchestrate').classList.add('active');
-
-  // 清空表单
-  document.getElementById('orch-chain-id').value = '';
-  document.getElementById('orch-chain-key').value = '';
-  document.getElementById('orch-chain-name').value = '';
-  document.getElementById('orch-chain-desc').value = '';
-  document.getElementById('orch-debug-mode').checked = false;
-  _orchParamPreset = {}; // 重置节点参数配置暂存
-  window._orchNodeInstances = []; // 重置已选节点实例
-  document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
-  const emptyEl = document.getElementById('orch-conn-empty');
-  if (emptyEl) emptyEl.style.display = '';
-  renderOrchNodeSelected();
-
-  // 确保数据已加载再取消勾选
-  loadOrchData().then(() => {
-    document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => cb.checked = false);
-    onOrchSelectionChange();
-  });
-
-  const btn = document.getElementById('orch-generate-btn');
-  btn.dataset.edit = '';
-  setOrchTarget('root');
-  showToast('已切换到编排页，目标为 Sub Chain', 'success');
-}
-
 // 将子链加载到编排页进行编辑（目标设为 Sub Chain）。
 function orchSubChainByIndex(i) {
   const c = window._subChainsForEdit[i];

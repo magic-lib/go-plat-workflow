@@ -36,7 +36,15 @@ func (r *SubChainRepo) NextSubChainID(ctx context.Context) (string, error) {
 func (r *SubChainRepo) Create(ctx context.Context, def *workflow.SubChainDef) error {
 	var m models.SubChainModel
 	m.FromDef(def)
-	return r.db.WithContext(ctx).Create(&m).Error
+	// 以 project + chain_id 为唯一键做 upsert：已存在相同组合时更新全部字段，
+	// 避免“更新却被当成新增”触发 uk_project_chain_id 重复键报错（Error 1062）。
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "project"}, {Name: "chain_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"name", "description", "dsl_json", "status",
+			"node_ids", "sub_chain_ids", "connections_data", "node_param_overrides",
+		}),
+	}).Create(&m).Error
 }
 
 // BatchUpsert 批量 upsert 子链：project + chain_id 冲突时更新全部字段，否则插入。

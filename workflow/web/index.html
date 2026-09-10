@@ -49,7 +49,7 @@
 <div class="tabs">
   <button class="tab-btn active" data-tab="activities">Activities</button>
   <button class="tab-btn" data-tab="nodes">Nodes</button>
-  <button class="tab-btn" data-tab="sub-chains" style="display:none;">Sub Chains</button>
+  <button class="tab-btn" data-tab="sub-chains">Sub Chains</button>
   <button class="tab-btn" data-tab="root-chains">Root Chains</button>
   <button class="tab-btn" data-tab="logs">日志</button>
   <button class="tab-btn" data-tab="statistics">统计</button>
@@ -276,7 +276,6 @@
     <div class="toolbar">
       <input class="search-box" placeholder="搜索子链..." oninput="filterTable('sub-table', this.value)">
       <div style="display:flex;gap:8px">
-        <button class="btn btn-outline edit-only" onclick="newSubChainViaOrch()">&#128736; 编排新建</button>
         <button class="btn btn-primary edit-only" onclick="openSubChainModal()">+ 新增 Sub Chain</button>
       </div>
     </div>
