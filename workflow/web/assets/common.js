@@ -3471,7 +3471,6 @@ function renderLogItem(r) {
   if (r.env) left.push('<span class="log-meta">env=' + esc(r.env) + '</span>');
   if (r.act_namespace) left.push('<span class="log-meta">ns=' + esc(r.act_namespace) + '</span>');
   if (r.act_name) left.push('<span class="log-meta">act=' + esc(r.act_name) + '</span>');
-  if (r.event_id) left.push('<span class="log-meta">event_id=' + esc(r.event_id) + '</span>');
   if (r.trace_id) left.push('<span class="log-meta">trace_id=' + esc(r.trace_id) + '</span>');
   if (r.span_id) left.push('<span class="log-meta">span_id=' + esc(r.span_id) + '</span>');
   if (r.root_chain_id) left.push('<span class="log-meta">rc=' + esc(r.root_chain_id) + '</span>');

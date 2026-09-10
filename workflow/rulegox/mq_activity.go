@@ -185,17 +185,22 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	methodTopic := getActivityTopic(actNamespace, actName)
 	mqHandler := func(ctx context.Context, event *mq.Event) (any, error) {
 		start := time.Now()
-		// 执行前记一条 info 日志
-		//w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), 0, event.Payload, nil, "", nil)
 
 		resp, herr := handler(ctx, event.Payload)
 
 		durationMs := time.Since(start).Milliseconds()
+
+		attributes := map[string]any{
+			"activity_namespace": actNamespace,
+			"activity_name":      actName,
+			"topic":              methodTopic,
+		}
+
 		if herr != nil {
 			// 执行失败记一条 error 日志
-			w.pushActivityLog(actNamespace, actName, event, "error", start.Unix(), durationMs, event.Payload, nil, herr.Error(), nil)
+			w.pushActivityLog(actNamespace, actName, event, "error", start.Unix(), durationMs, event.Payload, resp, herr.Error(), attributes)
 		} else {
-			w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), durationMs, event.Payload, resp, "", nil)
+			w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), durationMs, event.Payload, resp, "", attributes)
 		}
 		return resp, herr
 	}
@@ -412,23 +417,32 @@ func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any,
 		_ = conv.Unmarshal(data, &argMap)
 		// 字段转换
 		lo.ForEach(returnValues, func(returnValue *config.ReturnValue, index int) {
+			var oneValue any
 			if one, ok := argMap[returnValue.Key]; ok {
-				var oneValue = one
+				oneValue = one
 				if returnValue.Type != "" {
 					one2, ok2 := conv.ConvertForTypeString(returnValue.Type, one)
 					if ok2 {
 						oneValue = one2
 					}
 				}
-				if returnValue.Name != "" {
-					argMap[returnValue.Name] = oneValue
-				} else {
+			} else {
+				if returnValue.Type != "" {
+					oneValue = conv.ZeroForTypeString(returnValue.Type)
+				}
+			}
+
+			if returnValue.Name != "" {
+				argMap[returnValue.Name] = oneValue
+			} else {
+				if returnValue.Key != "" {
 					argMap[returnValue.Key] = oneValue
 				}
 			}
 		})
 		return argMap, nil
 	} else {
+		var newData = data //可能需要转换格式
 		var argMap = make(map[string]any)
 		for _, returnValue := range returnValues {
 			if returnValue.Key == "" {
@@ -437,16 +451,19 @@ func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any,
 					one2, ok2 := conv.ConvertForTypeString(returnValue.Type, data)
 					if ok2 {
 						oneValue = one2
+						newData = one2
 					}
 				}
-				argMap[returnValue.Name] = oneValue
+				if returnValue.Name != "" {
+					argMap[returnValue.Name] = oneValue
+				}
 			}
 		}
 		if len(argMap) > 0 {
 			return argMap, nil
 		}
+		return newData, nil
 	}
-	return data, nil
 }
 
 // Stop 停止消费端，并清理心跳协程与 redis 连接。

@@ -1026,6 +1026,7 @@ type buildSubChainRequest struct {
 	SubChainIDs []string                 `json:"sub_chain_ids"`
 	Connections []workflow.ConnectionDef `json:"connections"`
 	DebugMode   bool                     `json:"debug_mode"`
+	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
 }
 
 func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSubChainRequest {
@@ -1038,6 +1039,7 @@ func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSub
 		SubChainIDs: r.SubChainIDs,
 		Connections: r.Connections,
 		DebugMode:   r.DebugMode,
+		NodeParamOverrides: r.NodeParamOverrides,
 	}
 }
 
