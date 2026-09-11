@@ -3036,8 +3036,8 @@ async function loadNodeTestRecords(nodeId) {
           </span>
         </div>
         <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}${(r.duration_ms !== undefined && r.duration_ms !== null)?((' · 耗时: ' + formatDuration(r.duration_ms))):''}${r.trace_id?(' · trace_id: <code style="font-size:.72rem">'+esc(r.trace_id)+'</code>'):''}</div>
-        <div><b>入参:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.input_params||'',200))}</code></div>
-        <div><b>结果:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.result||r.error_msg||'',200))}</code></div>
+        <div><b>入参:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.input_params||'',2000000))}</code></div>
+        <div><b>结果:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.result||r.error_msg||'',2000000))}</code></div>
       </div>`).join('');
   } catch (e) {
     box.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-muted);font-size:.82rem">加载记录失败</div>';
@@ -3481,10 +3481,10 @@ function renderLogItem(r) {
   const resultStr = toStr(r.result);
   const errStr = toStr(r.error_msg);
   if (errStr) segs.push('<div class="log-json" style="background:#3f1d1d;color:#fecaca">' + esc(errStr) + '</div>');
-  if (payloadStr) segs.push('<div class="log-json"><span class="k">payload:</span> ' + esc(trunc(payloadStr, 800)) + '</div>');
-  if (resultStr) segs.push('<div class="log-json"><span class="k">result:</span> ' + esc(trunc(resultStr, 800)) + '</div>');
+  if (payloadStr) segs.push('<div class="log-json"><span class="k">payload:</span> ' + esc(trunc(payloadStr, 2000000)) + '</div>');
+  if (resultStr) segs.push('<div class="log-json"><span class="k">result:</span> ' + esc(trunc(resultStr, 2000000)) + '</div>');
   const attrStr = toStr(r.attributes);
-  if (attrStr) segs.push('<div class="log-json" style="background:#1e293b;color:#cbd5e1"><span class="k">attributes:</span> ' + esc(trunc(attrStr, 800)) + '</div>');
+  if (attrStr) segs.push('<div class="log-json" style="background:#1e293b;color:#cbd5e1"><span class="k">attributes:</span> ' + esc(trunc(attrStr, 2000000)) + '</div>');
   return '<div class="log-item">' + segs.join('') + '</div>';
 }
 
@@ -3922,8 +3922,8 @@ async function loadActivityTestRecords(activityId) {
           <button class="btn btn-sm btn-danger edit-only" onclick="deleteActivityTestRecord('${esc(r.record_id)}','${esc(activityId)}')">删除</button>
         </div>
         <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}</div>
-        <div><b>入参:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.input_params||'',200))}</code></div>
-        <div><b>结果:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.result||r.error_msg||'',200))}</code></div>
+        <div><b>入参:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.input_params||'',2000000))}</code></div>
+        <div><b>结果:</b> <code style="font-size:.72rem;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word;display:block">${esc(trunc(r.result||r.error_msg||'',2000000))}</code></div>
       </div>`).join('');
   } catch (e) {
     box.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-muted);font-size:.82rem">加载记录失败</div>';
