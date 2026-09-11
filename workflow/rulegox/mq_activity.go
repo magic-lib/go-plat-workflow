@@ -194,6 +194,7 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 			"activity_namespace": actNamespace,
 			"activity_name":      actName,
 			"topic":              methodTopic,
+			"desc":               "原子方法，payload和result为原子方法的参数，查看是否正确",
 		}
 
 		if herr != nil {
