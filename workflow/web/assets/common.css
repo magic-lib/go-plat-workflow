@@ -54,6 +54,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .table-wrap { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 #tab-activities .table-wrap > table { min-width: 1100px; max-width: 100%; }
+/* Nodes 列表：分配列宽，避免内容折成两行（描述/分类/状态/版本列已隐藏） */
+#nodes-table { min-width: 1080px; table-layout: fixed; }
+#nodes-table th, #nodes-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#nodes-table th:nth-child(1), #nodes-table td:nth-child(1) { width: 15%; } /* Node ID */
+#nodes-table th:nth-child(2), #nodes-table td:nth-child(2) { width: 18%; } /* 名称 */
+#nodes-table th:nth-child(3), #nodes-table td:nth-child(3) { width: 13%; } /* 类型 */
+#nodes-table th:nth-child(4), #nodes-table td:nth-child(4) { width: 9%; }  /* 大类 */
+#nodes-table th:nth-child(5), #nodes-table td:nth-child(5) { width: 12%; } /* 标签 */
+#nodes-table th:nth-child(6), #nodes-table td:nth-child(6) { width: 12%; } /* 命名空间 */
+#nodes-table th:nth-child(7), #nodes-table td:nth-child(7) { width: 21%; } /* 操作 */
+/* 操作列按钮保持单行、不换行 */
+#nodes-table td.actions { display: flex; gap: 6px; white-space: nowrap; overflow: visible; }
 th, td { padding: 12px 16px; text-align: left; font-size: .875rem; }
 th { background: #f9fafb; font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; border-bottom: 2px solid var(--border); }
 td { border-bottom: 1px solid var(--border); }

@@ -338,6 +338,10 @@ func (s *WorkflowService) GetProjectRedisConfig(ctx context.Context, project, en
 
 // RegisterNode 注册节点到数据库。
 func (s *WorkflowService) RegisterNode(ctx context.Context, def *workflow.NodeDef) error {
+	// 保存前为 activities 缺失的 arg_template / ret_template 补齐元定义数据，避免落库后运行时解析参数出错
+	if err := s.fillNodeActivityTemplates(ctx, def); err != nil {
+		log.Warn().Err(err).Str("node_id", def.NodeID).Msg("fillNodeActivityTemplates skipped due to error")
+	}
 	return s.nodeRepo.Create(ctx, def)
 }
 
@@ -416,7 +420,111 @@ func (s *WorkflowService) UpdateNode(ctx context.Context, def *workflow.NodeDef,
 	if published && !isAdmin {
 		return workflow.ErrNodePublishedInRootChain
 	}
+	// 保存前为 activities 缺失的 arg_template / ret_template 补齐元定义数据，避免落库后运行时解析参数出错
+	if err := s.fillNodeActivityTemplates(ctx, def); err != nil {
+		log.Warn().Err(err).Str("node_id", def.NodeID).Msg("fillNodeActivityTemplates skipped due to error")
+	}
 	return s.nodeRepo.Update(ctx, def)
+}
+
+// isEmptyTemplateValue 判断 arg_template / ret_template 是否被当成「空」处理（缺失、空串、空对象、空数组）。
+func isEmptyTemplateValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		return s == "" || s == "{}" || s == "null"
+	case map[string]any:
+		return len(t) == 0
+	case []any:
+		return len(t) == 0
+	}
+	return false
+}
+
+// fillNodeActivityTemplates 在保存节点前，为 node_config.activities 中缺失 arg_template /
+// ret_template 的 activity，从对应的 activity 元定义（项目内按 act_namespace+act_name 定位）
+// 补齐这两个字段，确保落库的节点配置带有完整的参数/返回值模板，运行时解析不再出错。
+// 仅当对应字段缺失或为空时才补齐，已显式配置的字段保留原值（支持节点级自定义覆盖）。
+func (s *WorkflowService) fillNodeActivityTemplates(ctx context.Context, def *workflow.NodeDef) error {
+	if len(def.Configuration) == 0 {
+		return nil
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(def.Configuration, &cfg); err != nil {
+		return err
+	}
+	nc, ok := cfg["node_config"].(map[string]any)
+	if !ok {
+		nc = map[string]any{}
+		cfg["node_config"] = nc
+	}
+	actsRaw, ok := nc["activities"]
+	if !ok {
+		return nil
+	}
+	// activities 按阶段分组：[][]activity；也兼容扁平 []activity
+	stages, ok := actsRaw.([]any)
+	if !ok {
+		return nil
+	}
+	changed := false
+	for si := range stages {
+		stage, ok := stages[si].([]any)
+		if !ok {
+			// 扁平结构：把单个 activity 当成单元素阶段处理
+			if actMap, ok := stages[si].(map[string]any); ok {
+				stage = []any{actMap}
+			} else {
+				continue
+			}
+		}
+		for ai := range stage {
+			actMap, ok := stage[ai].(map[string]any)
+			if !ok {
+				continue
+			}
+			ns, _ := actMap["act_namespace"].(string)
+			name, _ := actMap["act_name"].(string)
+			if ns == "" || name == "" {
+				continue
+			}
+			actDef, err := s.activityRepo.GetByNamespaceName(ctx, def.Project, ns, name)
+			if err != nil {
+				// 找不到对应 activity 元定义，跳过补齐（不阻断保存）
+				continue
+			}
+			// 补齐 arg_template（缺省或空时），来源为 activity 的 arg_template 字符串
+			if v, ok := actMap["arg_template"]; !ok || isEmptyTemplateValue(v) {
+				if actDef.ArgTemplate != "" {
+					actMap["arg_template"] = actDef.ArgTemplate
+					changed = true
+				}
+			}
+			// 补齐 ret_template（缺省或空时），来源为 activity 的 return_values
+			if v, ok := actMap["ret_template"]; !ok || isEmptyTemplateValue(v) {
+				if len(actDef.ReturnValues) > 0 && string(actDef.ReturnValues) != "null" {
+					var rv any
+					if err := json.Unmarshal(actDef.ReturnValues, &rv); err == nil {
+						actMap["ret_template"] = rv
+						changed = true
+					}
+				}
+			}
+			stage[ai] = actMap
+		}
+		stages[si] = stage
+	}
+	if changed {
+		b, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		def.Configuration = b
+	}
+	return nil
 }
 
 // DeleteNode 软删除节点。

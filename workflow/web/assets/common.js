@@ -760,7 +760,7 @@ async function loadNodes() {
     const nodes = await api('/api/nodes' + envQ);
     const tbody = document.querySelector('#nodes-table tbody');
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
       return;
     }
     window._nodesForEdit = nodes; // 缓存供编辑按钮索引使用
@@ -772,12 +772,8 @@ async function loadNodes() {
         <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
         <td><span class="code-cell">${esc(n.type)}</span></td>
         <td><span class="badge ${n.kind==='condition'?'badge-warning':'badge-info'}">${n.kind==='condition'?'查询获取':'策略执行'}</span></td>
-        <td>${esc(n.category || '-')}</td>
         <td>${renderTagChipsHtml(n.tags)}</td>
         <td>${esc(n.namespace || '-')}</td>
-        <td><span class="badge ${n.status==1?'badge-on':'badge-off'}">${n.status==1?'启用':'禁用'}</span></td>
-        <td>${esc(n.version || '-')}</td>
-        <td title="${esc(n.description||'')}">${esc(trunc(n.description, 30))}</td>
         <td class="actions">
           <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">编辑</button>
           <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
@@ -1079,12 +1075,17 @@ function collectStages() {
   document.querySelectorAll('#node-activity-stages .stage').forEach(stageEl => {
     const acts = [];
     stageEl.querySelectorAll('.act-item').forEach(row => {
+      let argTpl = null, retTpl = null;
+      try { const v = row.getAttribute('data-arg-template'); if (v && v !== '{}') argTpl = JSON.parse(v); } catch (e) {}
+      try { const v = row.getAttribute('data-ret-template'); if (v && v !== '{}') retTpl = JSON.parse(v); } catch (e) {}
       acts.push({
         act_namespace: row.getAttribute('data-ns') || '',
         act_name: row.getAttribute('data-name') || '',
         id: row.getAttribute('data-id') || '',
         name: row.getAttribute('data-display-name') || (row.getAttribute('data-ns') + '/' + row.getAttribute('data-name')),
-        args: collectActivityArgBinds(row)
+        args: collectActivityArgBinds(row),
+        arg_template: argTpl,
+        ret_template: retTpl
       });
     });
     stages.push(acts);
@@ -1114,7 +1115,9 @@ function parseStagesFromConfig(nodeCfg, nc) {
         act_name: it.act_name || '',
         id: it.id || '',
         name: it.name || (it.act_namespace + '/' + it.act_name),
-        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {})
+        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {}),
+        arg_template: it.arg_template || null,
+        ret_template: it.ret_template || null
       })));
     }
   }
@@ -1126,7 +1129,9 @@ function parseStagesFromConfig(nodeCfg, nc) {
         act_name: it.act_name || '',
         id: it.id || '',
         name: it.name || (it.act_namespace + '/' + it.act_name),
-        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {})
+        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {}),
+        arg_template: it.arg_template || null,
+        ret_template: it.ret_template || null
       })));
     }
   }
@@ -1140,7 +1145,9 @@ function parseStagesFromConfig(nodeCfg, nc) {
         act_name: it.act_name || '',
         id: it.id || '',
         name: it.name || (it.act_namespace + '/' + it.act_name),
-        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {})
+        args: it.args || (it.arguments ? convertArgumentsToArgs(it.arguments) : {}),
+        arg_template: it.arg_template || null,
+        ret_template: it.ret_template || null
       };
       if (mode === 'serial' || cur === null) {
         cur = [item];
@@ -1362,6 +1369,20 @@ function addActivityItemRow(item, stage) {
   row.setAttribute('data-id', instId || '');
   row.setAttribute('data-display-name', dispName);
   try { row.setAttribute('data-args', JSON.stringify(item.args || {})); } catch(e) { row.setAttribute('data-args', '{}'); }
+  // 携带该 activity 的 arg_template / ret_template（节点执行时用于参数解析）。
+  // 若 item 未带（新增时），则从 activity 缓存取活动定义模板填充，避免保存时被丢弃。
+  let argTpl = item.arg_template;
+  let retTpl = item.ret_template;
+  if (cacheAct) {
+    if (!argTpl && cacheAct.arg_template) {
+      try { argTpl = typeof cacheAct.arg_template === 'string' ? JSON.parse(cacheAct.arg_template) : cacheAct.arg_template; } catch (e) { argTpl = null; }
+    }
+    if (!retTpl && cacheAct.return_values) {
+      try { retTpl = typeof cacheAct.return_values === 'string' ? JSON.parse(cacheAct.return_values) : cacheAct.return_values; } catch (e) { retTpl = null; }
+    }
+  }
+  try { row.setAttribute('data-arg-template', JSON.stringify(argTpl || {})); } catch (e) { row.setAttribute('data-arg-template', '{}'); }
+  try { row.setAttribute('data-ret-template', JSON.stringify(retTpl || {})); } catch (e) { row.setAttribute('data-ret-template', '{}'); }
   row.style.cssText = 'padding:8px 10px;border:1px solid #e2e8f0;border-left:4px solid #94a3b8;border-radius:var(--radius);background:#ffffff';
   const title = dispName ? (dispName + '  ') : '';
   // 该 activity 配置的输出返回值（执行后会返回的值），从缓存同步展示，方便配置人理解
@@ -1857,12 +1878,16 @@ function syncActivityConfig() {
             type: b.type || 'string'
           };
         });
-      return {
+      const entry = {
         act_namespace: it.act_namespace,
         act_name: it.act_name,
         id: it.id || it.act_name,
         arguments: argumentsArr
       };
+      // 保留每个 activity 的 arg_template / ret_template（节点执行时用于参数解析），避免保存时被丢弃
+      if (it.arg_template && Object.keys(it.arg_template).length > 0) entry.arg_template = it.arg_template;
+      if (it.ret_template && Object.keys(it.ret_template).length > 0) entry.ret_template = it.ret_template;
+      return entry;
     }));
     delete cfg.node_config.stages; // 废弃旧的 stages 结构
     delete cfg.activities; // 废弃旧的扁平 activities 结构
@@ -1964,12 +1989,16 @@ async function saveNode() {
             type: b.type || 'string'
           };
         });
-        return {
+        const entry = {
           act_namespace: it.act_namespace,
           act_name: it.act_name,
           id: it.id || it.act_name,
           arguments: argumentsArr
         };
+        // 保留每个 activity 的 arg_template / ret_template（节点执行时用于参数解析），避免保存时被丢弃
+        if (it.arg_template && Object.keys(it.arg_template).length > 0) entry.arg_template = it.arg_template;
+        if (it.ret_template && Object.keys(it.ret_template).length > 0) entry.ret_template = it.ret_template;
+        return entry;
       }));
       delete body.configuration.node_config.stages;
       delete body.configuration.activities;
