@@ -921,7 +921,7 @@ func (s *WorkflowService) DeleteRootChainRelease(ctx context.Context, project, c
 }
 
 // executeRootChainByIDTimeout 流程同步执行的超时时间，避免长时间取不到结果导致调用方永久阻塞。
-const executeRootChainByIDTimeout = 300000 * time.Second
+const executeRootChainByIDTimeout = 3600 * time.Second
 
 // ExecuteRootChainByID 基于已解析的根链 DSL（ruleChain）同步执行流程。
 // 从根链 flow 节点提取子链 ID 并通过 project 查询子链 DSL，组装 ActivityFlowConfig 后
