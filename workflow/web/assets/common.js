@@ -7269,24 +7269,29 @@ function enhanceOrchPreviewNodes(container) {
     const del = document.createElementNS(SVGNS, 'g');
     del.setAttribute('class', 'orch-node-del');
     del.setAttribute('transform', `translate(${px},${py})`);
+    // 透明矩形扩大点击热区，避免误触节点本体打开编辑器
+    const hit = document.createElementNS(SVGNS, 'rect');
+    hit.setAttribute('x', '-9'); hit.setAttribute('y', '-9');
+    hit.setAttribute('width', '18'); hit.setAttribute('height', '18');
+    hit.setAttribute('fill', 'transparent');
     const x1 = document.createElementNS(SVGNS, 'line');
     const x2 = document.createElementNS(SVGNS, 'line');
     x1.setAttribute('x1', '-4'); x1.setAttribute('y1', '-4'); x1.setAttribute('x2', '4'); x1.setAttribute('y2', '4');
     x2.setAttribute('x1', '-4'); x2.setAttribute('y1', '4'); x2.setAttribute('x2', '4'); x2.setAttribute('y2', '-4');
     x1.setAttribute('class', 'orch-node-del-x'); x2.setAttribute('class', 'orch-node-del-x');
-    del.appendChild(x1); del.appendChild(x2);
-    del.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      removeOrchNodeInstanceConfirm(instId);
-    });
+    del.appendChild(hit); del.appendChild(x1); del.appendChild(x2);
     g.appendChild(del);
 
     // Live Preview 任意节点点击均可打开编辑器（改本链实例名称；Activity/CondSwitch 还可改路由条件）
+    // 命中删除叉则删除，否则打开编辑器（用 target 判定，避免热区外误触或 stopPropagation 失效导致误开编辑器）
     g.style.cursor = 'pointer';
     g.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      if (e.target && e.target.closest && e.target.closest('.orch-node-del')) {
+        removeOrchNodeInstanceConfirm(instId);
+        return;
+      }
       orchOpenNodeSwitchEditor(instId);
     });
     // 具备 switch_condition 的节点（Activity / CondSwitch）：悬停弹泡泡层展示路由条件
