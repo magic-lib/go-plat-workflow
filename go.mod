@@ -4,7 +4,7 @@ go 1.24.3
 
 require (
 	github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf
-	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260818104838-b0b8fe892941
+	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260914130353-9a9316e49ba7
 	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260908085532-bcf290ddeea0
 	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20260911010325-865d53fc88f5
 	github.com/orcaman/concurrent-map/v2 v2.0.1
