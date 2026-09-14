@@ -16,7 +16,7 @@ COPY go.mod go.sum ./
 # 复制 .git 以便读取当前 commit id（仅需 .git，不需要工作区源码）
 COPY .git/ ./.git/
 
-ENV GOPROXY="https://goproxy.cn,direct"
+ENV GOPROXY="https://goproxy.io,direct"
 ENV GOSUMDB="off"
 ENV CGO_ENABLED=0
 ENV GO111MODULE=on
