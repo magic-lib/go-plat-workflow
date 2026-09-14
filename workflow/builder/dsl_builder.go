@@ -12,6 +12,7 @@ import (
 
 	param "github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow"
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 )
 
 // DSLBuilder 规则链 DSL 组装器，实现 workflow.DSLBuilder 接口。
@@ -83,6 +84,12 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	// 序列化 node_param_overrides 以便保存到根链，后续可恢复
 	nodeParamOverridesJSON, _ := json.Marshal(req.NodeParamOverrides)
 
+	// 序列化 node_switch_overrides 以便保存到根链，后续可恢复
+	nodeSwitchOverridesJSON, _ := json.Marshal(req.NodeSwitchOverrides)
+
+	// 序列化 node_name_overrides 以便保存到根链，后续可恢复
+	nodeNameOverridesJSON, _ := json.Marshal(req.NodeNameOverrides)
+
 	// 6. 存储到数据库
 	def := &workflow.RootChainDef{
 		Project:            req.Project,
@@ -96,6 +103,8 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		SubChainIDs:        strings.Join(req.SubChainIDs, ","),
 		ConnectionsData:    string(connectionsJSON),
 		NodeParamOverrides: string(nodeParamOverridesJSON),
+		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
+		NodeNameOverrides:  string(nodeNameOverridesJSON),
 	}
 	// 先尝试更新（按 project+chain_id），不存在再创建。
 	// 避免每次保存都物理删除重建导致自增主键 id 持续增长。
@@ -178,6 +187,8 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		Configuration:      req.Configuration,
 		FirstNodeIndex:     req.FirstNodeIndex,
 		NodeParamOverrides: req.NodeParamOverrides,
+		NodeSwitchOverrides: req.NodeSwitchOverrides,
+		NodeNameOverrides:  req.NodeNameOverrides,
 	}
 	ruleChain := b.buildRuleChain(fullReq, nodes, subChains)
 	// 子链标记为非 Root
@@ -191,6 +202,8 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 	// 序列化溯源字段
 	connectionsJSON, _ := json.Marshal(req.Connections)
 	nodeParamOverridesJSON, _ := json.Marshal(req.NodeParamOverrides)
+	nodeSwitchOverridesJSON, _ := json.Marshal(req.NodeSwitchOverrides)
+	nodeNameOverridesJSON, _ := json.Marshal(req.NodeNameOverrides)
 
 	return &workflow.SubChainDef{
 		Project:            req.Project,
@@ -203,6 +216,8 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		NodeIDs:            strings.Join(req.NodeIDs, ","),
 		ConnectionsData:    string(connectionsJSON),
 		NodeParamOverrides: string(nodeParamOverridesJSON),
+		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
+		NodeNameOverrides:  string(nodeNameOverridesJSON),
 	}, nil
 }
 
@@ -250,7 +265,7 @@ func parseInstanceRefs(ids []string) []instanceRef {
 // buildRuleNodes 将节点实例引用转换为 rulego RuleNode 列表（含参数覆盖策略合并）。
 // 同一节点定义可出现多次，每次使用各自的 instanceId 作为 RuleNode ID，
 // 参数覆盖 override key 也以 instanceId 匹配，从而实现同一节点在编排中添加多次。
-func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]*workflow.NodeDef, overrides map[string]map[string]interface{}) []*types.RuleNode {
+func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]*workflow.NodeDef, overrides map[string]map[string]interface{}, switchOverrides map[string]string, nameOverrides map[string]string) []*types.RuleNode {
 	ruleNodes := make([]*types.RuleNode, 0, len(instances))
 	for _, inst := range instances {
 		node, ok := defById[inst.baseId]
@@ -355,10 +370,30 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			addInfo["node_private_params"] = string(privJSON)
 		}
 
+		// 应用每节点 switch_condition 覆盖（仅本链生效）：写入该 DSL 节点 configuration.node_config.switch_condition，不改节点定义。
+		// 覆盖键为节点实例 instanceId（形如 baseId__random），仅 Activity / CondSwitch 节点有意义。
+		if sw, ok := switchOverrides[inst.instanceId]; ok && strings.TrimSpace(sw) != "" {
+			if node.Type == common.ActivityNodeTypeName || node.Type == common.CondSwitchNodeTypeName {
+				nc, _ := config["node_config"].(map[string]any)
+				if nc == nil {
+					nc = make(map[string]any)
+				}
+				nc["switch_condition"] = strings.TrimSpace(sw)
+				config["node_config"] = nc
+			}
+		}
+
+		// 应用每节点实例名称覆盖（仅本链生效）：写入该 DSL 节点 Name，不改节点定义。
+		// 覆盖键为节点实例 instanceId（形如 baseId__random）。
+		nodeName := node.Name
+		if nm, ok := nameOverrides[inst.instanceId]; ok && strings.TrimSpace(nm) != "" {
+			nodeName = strings.TrimSpace(nm)
+		}
+
 		ruleNodes = append(ruleNodes, &types.RuleNode{
 			Id:             inst.instanceId,
 			Type:           node.Type,
-			Name:           node.Name,
+			Name:           nodeName,
 			DebugMode:      node.DebugMode,
 			Configuration:  config,
 			AdditionalInfo: addInfo,
@@ -379,7 +414,7 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 		defById[nd.NodeID] = nd
 	}
 	instances := parseInstanceRefs(req.NodeIDs)
-	mainNodes := b.buildRuleNodes(instances, defById, req.NodeParamOverrides)
+	mainNodes := b.buildRuleNodes(instances, defById, req.NodeParamOverrides, req.NodeSwitchOverrides, req.NodeNameOverrides)
 	for _, n := range mainNodes {
 		idMap[n.Id] = true
 	}

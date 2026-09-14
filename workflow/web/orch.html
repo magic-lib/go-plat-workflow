@@ -180,7 +180,10 @@
         <div class="orch-section" style="margin-bottom:0">
           <h3 style="display:flex;justify-content:space-between;align-items:center">
             DSL Preview
-            <button class="btn btn-sm btn-outline" onclick="toggleOrchDsl()" type="button" id="orch-dsl-toggle">展开</button>
+            <span style="display:inline-flex;gap:8px">
+              <button class="btn btn-sm btn-outline" onclick="copyOrchDsl()" type="button" id="orch-dsl-copy">复制</button>
+              <button class="btn btn-sm btn-outline" onclick="toggleOrchDsl()" type="button" id="orch-dsl-toggle">展开</button>
+            </span>
           </h3>
           <div class="orch-dsl-preview" id="orch-dsl-preview"></div>
         </div>
@@ -574,6 +577,31 @@
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="copyDslContent()">复制</button>
       <button class="btn btn-outline" onclick="closeDslModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 编排节点路由条件（switch_condition）编辑器：仅修改本 DSL 中该节点实例，不改节点定义本身 -->
+<div class="modal-overlay" id="orch-switch-modal" style="display:none">
+  <div class="modal" style="width:720px;max-width:96vw">
+    <h2>编辑节点<button class="modal-close" onclick="document.getElementById('orch-switch-modal').style.display='none';_orchSwitchEditId='';" title="关闭">&times;</button></h2>
+    <p style="margin:0 0 8px;color:var(--text-muted);font-size:.82rem">该设置<b>仅对当前链生效</b>，只修改本 DSL 中该节点实例的<b>名称</b>与 <code>node_config.switch_condition</code>，不会修改节点定义本身，也不影响其它节点。</p>
+    <div style="margin:-4px 0 10px;color:var(--primary);font-size:.92rem;font-weight:600" id="orch-switch-node-name"></div>
+    <div style="margin:0 0 8px;font-size:.78rem;color:#92400e" id="orch-switch-override-flag"></div>
+    <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">节点名称（仅本链实例生效，不影响节点定义）</label>
+    <input id="orch-switch-name" type="text" style="width:100%;font-size:.85rem;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:10px" placeholder="节点显示名称" />
+    <div id="orch-switch-cond-wrap">
+      <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">路由条件（switch_condition，仅 Activity / CondSwitch 适用）</label>
+      <textarea id="orch-switch-text" rows="5" style="width:100%;font-family:var(--font-mono);font-size:.82rem;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical" placeholder="例如：In('K1', [responses.tag_list])"></textarea>
+      <div style="margin-top:12px;border-top:1px dashed var(--border);padding-top:10px">
+        <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">输入参数（点击复制）：</div>
+        <div id="orch-switch-input-vars" style="display:flex;flex-wrap:wrap;min-height:18px;margin-bottom:10px"></div>
+        <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">输出返回值（点击复制）：</div>
+        <div id="orch-switch-output-vars" style="display:flex;flex-wrap:wrap;min-height:18px"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn btn-sm btn-primary" onclick="saveOrchSwitchOverride()">保存</button>
     </div>
   </div>
 </div>

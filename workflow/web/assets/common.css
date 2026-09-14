@@ -284,6 +284,12 @@ g.node:hover > .orch-node-del { opacity: 1; }
 .orch-actions { display: flex; gap: 10px; margin-top: 16px; }
 .orch-actions .btn { flex: 1; }
 
+/* Live Preview 节点悬停弹出的 switch_condition 泡泡层 */
+.orch-switch-popover { position: absolute; z-index: 50; display: none; background: #fffbeb; border: 1px solid #f59e0b; border-radius: 6px; padding: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.18); max-width: 380px; pointer-events: none; }
+.orch-switch-popover .osp-title { font-size: .72rem; color: #92400e; font-weight: 600; margin-bottom: 4px; }
+.orch-switch-popover .osp-text { width: 360px; max-width: 100%; height: 84px; font-family: var(--font-mono); font-size: .74rem; line-height: 1.35; border: 1px solid #fcd34d; border-radius: 4px; background: #fffdf5; color: #92400e; padding: 4px 6px; resize: none; box-sizing: border-box; }
+
+
 /* Responsive */
 @media (max-width: 768px) {
   .header, .tabs, .container { padding-left: 16px; padding-right: 16px; }

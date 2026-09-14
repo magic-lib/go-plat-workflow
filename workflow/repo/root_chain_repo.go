@@ -127,6 +127,8 @@ func (r *RootChainRepo) Update(ctx context.Context, def *workflow.RootChainDef) 
 			"sub_chain_ids":        def.SubChainIDs,
 			"connections_data":     def.ConnectionsData,
 			"node_param_overrides": def.NodeParamOverrides,
+			"node_switch_overrides": def.NodeSwitchOverrides,
+			"node_name_overrides":  def.NodeNameOverrides,
 		})
 	if result.Error != nil {
 		return result.Error

@@ -54,7 +54,7 @@ func (r *SubChainRepo) BatchUpsert(ctx context.Context, defs []*workflow.SubChai
 		Columns:   []clause.Column{{Name: "project"}, {Name: "chain_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"name", "description", "dsl_json", "status",
-			"node_ids", "sub_chain_ids", "connections_data", "node_param_overrides",
+			"node_ids", "sub_chain_ids", "connections_data", "node_param_overrides", "node_switch_overrides", "node_name_overrides",
 		}),
 	}).Create(&modelsList).Error
 }
@@ -127,6 +127,8 @@ func (r *SubChainRepo) Update(ctx context.Context, def *workflow.SubChainDef) er
 			"sub_chain_ids":      def.SubChainIDs,
 			"connections_data":    def.ConnectionsData,
 			"node_param_overrides": def.NodeParamOverrides,
+			"node_switch_overrides": def.NodeSwitchOverrides,
+			"node_name_overrides":  def.NodeNameOverrides,
 		})
 	if result.Error != nil {
 		return result.Error

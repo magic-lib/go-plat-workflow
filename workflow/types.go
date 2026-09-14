@@ -240,6 +240,10 @@ type SubChainDef struct {
 	ConnectionsData string `json:"connections_data,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖值 JSON，保存后可在下次编辑时恢复
 	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖 JSON（map[instanceId]expr），仅本链生效，不影响节点定义
+	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
+	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
 }
 
 // RootChainDef 根规则链定义。
@@ -267,6 +271,10 @@ type RootChainDef struct {
 	ConnectionsData string `json:"connections_data,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖值 JSON，保存后可在下次编辑时恢复
 	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖 JSON（map[instanceId]expr），仅本链生效，不影响节点定义
+	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
+	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
 	// HasReleases 是否存在发布记录（存在时不允许删除该根链）
 	HasReleases bool `json:"has_releases"`
 }
@@ -295,6 +303,10 @@ type RootChainReleaseDef struct {
 	ConnectionsData string `json:"connections_data,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖值 JSON
 	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖 JSON（map[instanceId]expr），仅本链生效，不影响节点定义
+	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
+	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
 	// IsCurrent 是否为生产环境当前使用的版本
 	IsCurrent bool `json:"is_current"`
 	// PublishedAt 发布时间
@@ -459,6 +471,10 @@ type BuildRequest struct {
 	// NodeParamOverrides 节点实例参数覆盖，key=nodeID, value=覆盖的配置键值对
 	// 例: {"N000001": {"url": "https://real-api.example.com", "timeout": 30}}
 	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖，key=node 实例 instanceId，value=路由表达式
+	NodeSwitchOverrides map[string]string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖，key=node 实例 instanceId，value=节点显示名称
+	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
 }
 
 // BuildSubChainRequest 编排方式组装子链请求。
@@ -487,6 +503,10 @@ type BuildSubChainRequest struct {
 	FirstNodeIndex int `json:"first_node_index,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖，key=nodeID, value=覆盖的配置键值对
 	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖，key=node 实例 instanceId，value=路由表达式
+	NodeSwitchOverrides map[string]string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖，key=node 实例 instanceId，value=节点显示名称
+	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
 }
 
 // ============================================================

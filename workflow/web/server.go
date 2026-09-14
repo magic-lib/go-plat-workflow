@@ -962,6 +962,8 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 		Connections:        req.Connections,
 		DebugMode:          req.DebugMode,
 		NodeParamOverrides: req.NodeParamOverrides,
+		NodeSwitchOverrides: req.NodeSwitchOverrides,
+		NodeNameOverrides:  req.NodeNameOverrides,
 	}
 
 	def, err := ws.svc.SaveRootChain(r.Context(), buildReq)
@@ -1027,6 +1029,8 @@ type buildSubChainRequest struct {
 	Connections []workflow.ConnectionDef `json:"connections"`
 	DebugMode   bool                     `json:"debug_mode"`
 	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
+	NodeSwitchOverrides map[string]string `json:"node_switch_overrides"`
+	NodeNameOverrides  map[string]string `json:"node_name_overrides"`
 }
 
 func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSubChainRequest {
@@ -1040,6 +1044,8 @@ func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSub
 		Connections: r.Connections,
 		DebugMode:   r.DebugMode,
 		NodeParamOverrides: r.NodeParamOverrides,
+		NodeSwitchOverrides: r.NodeSwitchOverrides,
+		NodeNameOverrides:  r.NodeNameOverrides,
 	}
 }
 
@@ -1256,6 +1262,8 @@ type executeRequest struct {
 	UseRelease         bool                              `json:"use_release"`
 	EnvName            string                            `json:"env_name"`
 	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
+	NodeSwitchOverrides map[string]string                `json:"node_switch_overrides"`
+	NodeNameOverrides  map[string]string                `json:"node_name_overrides"`
 }
 
 // parsePayload 将请求中的 payload 解析为 map。

@@ -552,8 +552,9 @@ function showToast(msg, type) {
 }
 
 // 复制文本到剪贴板（优先 navigator.clipboard，降级 execCommand）
-function copyToClipboard(text) {
-  const done = () => showToast('已复制: ' + text, 'success');
+// silent=true 时不弹出包含完整内容的提示，仅由调用方自行反馈（避免大段文本刷屏）
+function copyToClipboard(text, silent) {
+  const done = () => { if (!silent) showToast('已复制: ' + text, 'success'); };
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
   } else {
@@ -5820,6 +5821,12 @@ let orchConnSeq = 0;
 let _orchNodeListFiltered = [];  // 当前过滤后的节点列表（供分页复用）
 let _orchNodeListPage = 1;       // 当前页码
 let _orchNodeListPageSize = 20;  // 每页条数
+let _orchSwitchExprByInstance = {}; // Live Preview 用：实例ID -> 生效的 switch_condition 表达式
+let _orchSwitchPopover = null;   // 鼠标悬停弹出的 switch_condition 泡泡层 DOM
+let _orchSwitchOverrides = {};   // 每节点实例的 switch_condition 覆盖（key=实例 instanceId，仅本链生效，不改节点定义）
+let _orchNameOverrides = {};     // 每节点实例的名称覆盖（key=实例 instanceId，仅本链生效，不改节点定义）
+let _orchSwitchEditId = '';      // 当前正在编辑 switch_condition 的节点实例 ID
+let _orchSwitchDefaultName = ''; // 当前编辑节点的节点定义默认名称（用于「用节点默认值」复位）
 
 async function loadOrchData() {
   try {
@@ -6023,10 +6030,14 @@ function restoreOrchNodeInstances(nodeIds, dslJson) {
     const baseId = raw.indexOf('__') >= 0 ? raw.split('__')[0] : raw;
     const seq = raw.indexOf('__') >= 0 ? (raw.split('__')[1] || '') : '';
     const n = (_orchNodes || []).find(x => x.node_id === baseId);
+    // 应用每节点实例名称覆盖（仅本链生效，不影响节点定义）
+    const instName = Object.prototype.hasOwnProperty.call(_orchNameOverrides, raw) && _orchNameOverrides[raw]
+      ? _orchNameOverrides[raw]
+      : (n ? (n.name || baseId) : baseId);
     return {
       instanceId: raw,
       nodeId: baseId,
-      name: n ? (n.name || baseId) : baseId,
+      name: instName,
       type: n ? n.type : '',
       kind: n ? (n.kind || 'action') : 'action',
       outputs: n ? (n.outputs || []) : [],
@@ -6237,6 +6248,8 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
   nodes = nodes || [];
   subChains = subChains || [];
   conns = conns || [];
+  // 重置 Live Preview 的 switch_condition 表达式映射（每次重绘重建）
+  window._orchSwitchExprByInstance = {};
 
   const allIds = new Set([...nodeIds, ...subIds]);
   conns.forEach(c => { allIds.add(c.from_id); allIds.add(c.to_id); });
@@ -6275,6 +6288,14 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     const instLine = inst && inst.instanceId !== baseId ? `<small>Id: ${esc(inst.instanceId)}</small>` : '';
     lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}"]`);
     (kindSafeIds[clsName] = kindSafeIds[clsName] || []).push(safe);
+    // 记录该实例生效的 switch_condition 表达式（覆盖值优先，其次节点默认），供悬停弹层与点击编辑展示。
+    // 仅对具备 switch_condition 能力的节点类型（Activity / CondSwitch）有意义。
+    if (n && (n.type === 'custom/Activity' || n.type === 'custom/CondSwitch')) {
+      const defExpr = nodeSwitchConditionText(n);
+      const effExpr = Object.prototype.hasOwnProperty.call(_orchSwitchOverrides, id)
+        ? _orchSwitchOverrides[id] : defExpr;
+      if (effExpr) window._orchSwitchExprByInstance[id] = effExpr;
+    }
   });
   subSet.forEach(id => {
     const safe = idMap[id];
@@ -6372,7 +6393,16 @@ function orchBuildDslPreview() {
       else { arr.push({ key, value: finalVal }); }
       config.arguments = arr;
     });
-    return { id, type: n.type, name: n.name, configuration: config };
+    // 应用 Live Preview 中对该实例的名称覆盖，使 DSL Preview 与图上编辑联动
+    const nameOv = (_orchNameOverrides || {})[id];
+    const finalName = (nameOv && nameOv.trim()) ? nameOv.trim() : n.name;
+    // 应用 Live Preview 中对该实例的 switch_condition 覆盖（仅 Activity/CondSwitch 生效，与后端一致）
+    const swOv = (_orchSwitchOverrides || {})[id];
+    if (swOv && swOv.trim() && (n.type === 'custom/Activity' || n.type === 'custom/CondSwitch')) {
+      config.node_config = config.node_config || {};
+      config.node_config.switch_condition = swOv.trim();
+    }
+    return { id, type: n.type, name: finalName, configuration: config };
   });
 
   const subNodes = subIds.map(id => {
@@ -6902,6 +6932,203 @@ function applyOrchParamOverrides(saved) {
   } catch(e) { /* ignore */ }
 }
 
+// ============ 每个节点实例的 switch_condition 覆盖（仅本链生效，不改节点定义）============
+
+// 回显已保存的 node_switch_overrides（编辑加载时调用）。结构：{ instanceId: expr }
+// 可直接是对象或 JSON 字符串。
+function applyOrchSwitchOverrides(saved) {
+  _orchSwitchOverrides = {};
+  if (!saved) return;
+  try {
+    const obj = typeof saved === 'string' ? JSON.parse(saved) : saved;
+    Object.keys(obj || {}).forEach(k => {
+      const v = obj[k];
+      if (v != null && String(v) !== '') _orchSwitchOverrides[k] = String(v);
+    });
+  } catch (e) { /* ignore */ }
+}
+
+// 收集当前所有节点的 switch_condition 覆盖，返回 { instanceId: expr }
+function collectOrchSwitchOverrides() {
+  const out = {};
+  Object.keys(_orchSwitchOverrides || {}).forEach(k => {
+    const v = _orchSwitchOverrides[k];
+    if (v != null && String(v).trim() !== '') out[k] = String(v).trim();
+  });
+  return out;
+}
+
+// 回显已保存的 node_name_overrides（编辑加载时调用）。结构：{ instanceId: name }
+function applyOrchNameOverrides(saved) {
+  _orchNameOverrides = {};
+  if (!saved) return;
+  try {
+    const obj = typeof saved === 'string' ? JSON.parse(saved) : saved;
+    Object.keys(obj || {}).forEach(k => {
+      const v = obj[k];
+      if (v != null && String(v).trim() !== '') _orchNameOverrides[k] = String(v).trim();
+    });
+  } catch (e) { /* ignore */ }
+}
+
+// 收集当前所有节点的名称覆盖，返回 { instanceId: name }
+function collectOrchNameOverrides() {
+  const out = {};
+  Object.keys(_orchNameOverrides || {}).forEach(k => {
+    const v = _orchNameOverrides[k];
+    if (v != null && String(v).trim() !== '') out[k] = String(v).trim();
+  });
+  return out;
+}
+
+// 生成「可用变量（点击复制）」样式的小块 HTML（与节点编辑页一致）
+// 注意：点击复制的值放在 data-clip 属性中，由 copyOrchVarSnippet 读取，
+// 避免 inline onclick 里 JSON.stringify 产生的双引号破坏属性导致复制失效。
+function orchSwitchVarSnippetHtml(ref, meta) {
+  return '<div class="cond-var-snippet" data-clip="' + escAttr(ref) + '" onclick="copyOrchVarSnippet(this)" title="点击复制" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0;padding:3px 8px;border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:.74rem;color:var(--accent);background:#f3f6fb">' +
+    '<span>' + escHtml(ref) + '</span>' +
+    (meta ? '<span style="color:var(--text-muted);font-size:.7rem;font-family:inherit">' + escHtml(meta) + '</span>' : '') +
+    '</div>';
+}
+
+// 读取 data-clip 属性中的值并复制到剪贴板（供 Live Preview 编辑节点弹窗的变量小块使用）
+function copyOrchVarSnippet(el) {
+  const t = el.getAttribute('data-clip');
+  if (t != null && t !== '') copyToClipboard(t);
+}
+
+// 渲染 switch 编辑器里的「输入参数 / 输出返回值」可复制列表（与节点编辑页「可用变量」一致）
+function renderOrchSwitchVarBoxes(inBox, outBox, n) {
+  const parseVarArr = (v) => {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch(e) { return []; }
+  };
+  const inItems = [], outItems = [];
+  if (n) {
+    parseVarArr(n.params).forEach(p => {
+      if (!p || !p.key) return;
+      inItems.push({ ref: '[arguments.' + p.key + ']', meta: [p.label, p.type].filter(Boolean).join(' / ') });
+    });
+    parseVarArr(n.outputs).forEach(o => {
+      if (!o || !o.key) return;
+      outItems.push({ ref: '[responses.' + o.key + ']', meta: [o.label, o.type].filter(Boolean).join(' / ') });
+    });
+  }
+  inBox.innerHTML = inItems.length
+    ? inItems.map(it => orchSwitchVarSnippetHtml(it.ref, it.meta)).join('')
+    : '<div style="font-size:.72rem;color:var(--text-muted)">该节点无输入参数定义</div>';
+  outBox.innerHTML = outItems.length
+    ? outItems.map(it => orchSwitchVarSnippetHtml(it.ref, it.meta)).join('')
+    : '<div style="font-size:.72rem;color:var(--text-muted)">该节点无输出返回值定义</div>';
+}
+
+// 打开某个节点实例（instanceId）的 switch_condition 编辑器。
+// 支持 Activity / CondSwitch 节点：有节点定义时回填默认值，缺失时直接编辑本链值。
+// 参数列表（输入参数/输出返回值）直接从节点详情接口拉取，确保与节点编辑页一致、不漏参数。
+async function orchOpenNodeSwitchEditor(instanceId) {
+  if (!instanceId) { showToast('未指定节点', 'error'); return; }
+  _orchSwitchEditId = instanceId;
+  const modal = document.getElementById('orch-switch-modal');
+  if (!modal) { showToast('编辑器未找到', 'error'); return; }
+
+  // 尝试从已选实例/节点定义取默认值（缺失也不影响保存）
+  const inst = (window._orchNodeInstances || []).find(x => x.instanceId === instanceId);
+  const nodeId = inst ? inst.nodeId : (instanceId.split('__')[0] || instanceId);
+  const n = (window._orchNodes || []).find(x => x.node_id === nodeId);
+  const hasDef = !!n;
+  const defExpr = hasDef ? nodeSwitchConditionText(n) : '';
+  const hasOverride = Object.prototype.hasOwnProperty.call(_orchSwitchOverrides, instanceId);
+  const curExpr = hasOverride ? _orchSwitchOverrides[instanceId] : defExpr;
+
+  document.getElementById('orch-switch-node-name').textContent =
+    ((hasDef ? n.name : (inst ? inst.name : nodeId)) || nodeId) + '（' + instanceId + '）';
+  document.getElementById('orch-switch-override-flag').textContent = hasOverride
+    ? '当前为覆盖值（仅本链生效，不影响节点定义）'
+    : (hasDef ? '当前为节点默认值（未覆盖）' : '节点定义不在列表中，直接编辑本链中的路由条件');
+  // 判断节点类型是否支持路由条件（仅 Activity / CondSwitch 适用）
+  const nodeType = (inst && inst.type) ? inst.type : (hasDef ? n.type : '');
+  const isSwitchable = (nodeType === 'custom/Activity' || nodeType === 'custom/CondSwitch');
+  const condWrap = document.getElementById('orch-switch-cond-wrap');
+  if (condWrap) condWrap.style.display = isSwitchable ? 'block' : 'none';
+
+  const ta = document.getElementById('orch-switch-text');
+  ta.value = isSwitchable ? ((curExpr === undefined || curExpr === null) ? '' : curExpr) : '';
+  ta.placeholder = '例如：In(\'K1\', [responses.tag_list])';
+  // 名称输入框：回填当前实例生效名称（已含名称覆盖）；并缓存节点定义默认名用于「用节点默认值」
+  _orchSwitchDefaultName = hasDef ? (n.name || '') : (inst ? (inst.name || '') : '');
+  const nameInput = document.getElementById('orch-switch-name');
+  const curName = (inst && inst.name) ? inst.name : _orchSwitchDefaultName;
+  if (nameInput) nameInput.value = curName || '';
+  // 先用缓存渲染，再用节点详情接口校准（保证参数/输出列表准确，不受列表接口过滤影响）
+  const inBox = document.getElementById('orch-switch-input-vars');
+  const outBox = document.getElementById('orch-switch-output-vars');
+  renderOrchSwitchVarBoxes(inBox, outBox, hasDef ? n : null);
+  modal.style.display = 'flex';
+
+  // 直接拉取节点详情（含 params/outputs/switch_condition），覆盖缓存结果，确保展示该节点真实参数与路由条件
+  if (nodeId) {
+    try {
+      const detail = await api('/api/nodes/' + encodeURIComponent(nodeId));
+      if (detail) {
+        renderOrchSwitchVarBoxes(inBox, outBox, detail);
+        _orchSwitchDefaultName = detail.name || _orchSwitchDefaultName;
+        // 若缓存未取到节点名，用详情补充标题
+        if (!hasDef) {
+          document.getElementById('orch-switch-node-name').textContent =
+            ((detail.name || nodeId) + '（' + instanceId + '）');
+          const ni2 = document.getElementById('orch-switch-name');
+          if (ni2 && !ni2.value) ni2.value = detail.name || '';
+        }
+        // 用详情回填 switch_condition 文本框（缓存缺失时也能显示该节点真实路由条件）
+        const detailType = detail.type;
+        const isSwitchableDetail = (detailType === 'custom/Activity' || detailType === 'custom/CondSwitch');
+        const ta2 = document.getElementById('orch-switch-text');
+        if (ta2 && isSwitchableDetail) {
+          const hasOverride = Object.prototype.hasOwnProperty.call(_orchSwitchOverrides, instanceId);
+          if (!hasOverride) {
+            const defExpr = nodeSwitchConditionText(detail);
+            ta2.value = (defExpr === undefined || defExpr === null) ? '' : defExpr;
+          }
+        }
+      }
+    } catch (e) { /* 保留缓存渲染结果 */ }
+  }
+}
+
+// 保存当前编辑的节点：名称覆盖 + switch_condition 覆盖（均仅本链实例生效，不修改节点定义）
+function saveOrchSwitchOverride() {
+  const id = _orchSwitchEditId;
+  if (!id) { showToast('未指定编辑节点', 'error'); return; }
+  const inst = (window._orchNodeInstances || []).find(x => x.instanceId === id);
+  const isSwitchable = inst && (inst.type === 'custom/Activity' || inst.type === 'custom/CondSwitch');
+  const ta = document.getElementById('orch-switch-text');
+  const val = (ta.value || '').trim();
+  // 路由条件仅在 Activity / CondSwitch 节点写入；其它节点忽略，并清除可能残留的覆盖
+  if (isSwitchable) {
+    if (val === '') { delete _orchSwitchOverrides[id]; } else { _orchSwitchOverrides[id] = val; }
+  } else {
+    delete _orchSwitchOverrides[id];
+  }
+  // 名称覆盖：与节点定义默认名不同才写入，否则视为无覆盖（回退默认名）
+  const nameInput = document.getElementById('orch-switch-name');
+  const nameVal = nameInput ? (nameInput.value || '').trim() : '';
+  if (nameVal === '' || nameVal === _orchSwitchDefaultName) {
+    delete _orchNameOverrides[id];
+  } else {
+    _orchNameOverrides[id] = nameVal;
+  }
+  // 立即更新内存中该实例的显示名称，使 Live Preview 同步
+  if (inst) inst.name = nameVal !== '' ? nameVal : _orchSwitchDefaultName;
+  const modal = document.getElementById('orch-switch-modal');
+  if (modal) modal.style.display = 'none';
+  _orchSwitchEditId = '';
+  renderOrchPreview();
+  // 图上编辑后立即刷新下方 DSL Preview，保持联动
+  renderOrchDslPreview();
+  showToast(isSwitchable ? '已更新该节点名称与路由条件（仅本链生效）' : '已更新该节点名称（仅本链实例生效）', 'success');
+}
+
 // 根据参数值推断来源（调用传入/引用节点/固定配置），用于从 DSL arguments 兜底回显
 function inferOrchParamPreset(val) {
   const s = (val == null) ? '' : String(val);
@@ -6978,6 +7205,9 @@ async function renderOrchPreview() {
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
   const conns = collectOrchConnections();
+  // 重绘前移除旧的悬停泡泡层，避免残留
+  const oldPop = document.getElementById('orch-switch-popover');
+  if (oldPop) oldPop.remove();
 
   if (nodeIds.length === 0 && subIds.length === 0) {
     scaleBox.innerHTML = '<div class="orch-preview-empty">选择节点并添加连接后，这里将显示实时流程图</div>';
@@ -7051,7 +7281,57 @@ function enhanceOrchPreviewNodes(container) {
       removeOrchNodeInstanceConfirm(instId);
     });
     g.appendChild(del);
+
+    // Live Preview 任意节点点击均可打开编辑器（改本链实例名称；Activity/CondSwitch 还可改路由条件）
+    g.style.cursor = 'pointer';
+    g.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      orchOpenNodeSwitchEditor(instId);
+    });
+    // 具备 switch_condition 的节点（Activity / CondSwitch）：悬停弹泡泡层展示路由条件
+    const swExpr = (window._orchSwitchExprByInstance || {})[instId];
+    if (swExpr) {
+      g.addEventListener('mouseenter', () => showOrchSwitchPopover(swExpr, g));
+      g.addEventListener('mouseleave', hideOrchSwitchPopover);
+    }
   });
+}
+
+// 在 Live Preview 节点上悬停时，弹出泡泡层展示该节点生效的 switch_condition 表达式
+function showOrchSwitchPopover(expr, gNode) {
+  const host = document.getElementById('orch-preview');
+  if (!host) return;
+  let pop = document.getElementById('orch-switch-popover');
+  if (!pop) {
+    pop = document.createElement('div');
+    pop.id = 'orch-switch-popover';
+    pop.className = 'orch-switch-popover';
+    host.appendChild(pop);
+    // 离开整个预览区时隐藏泡泡层（仅绑定一次）
+    if (!host._orchPopBound) {
+      host.addEventListener('mouseleave', hideOrchSwitchPopover);
+      host._orchPopBound = true;
+    }
+  }
+  _orchSwitchPopover = pop;
+  pop.innerHTML = '<div class="osp-title">switch_condition</div>'
+    + '<textarea readonly class="osp-text">' + orchSafeText(expr) + '</textarea>';
+  // 相对预览区定位到该节点下方
+  const cRect = host.getBoundingClientRect();
+  const nRect = gNode.getBoundingClientRect();
+  pop.style.left = (nRect.left - cRect.left + host.scrollLeft) + 'px';
+  pop.style.top = (nRect.bottom - cRect.top + host.scrollTop + 4) + 'px';
+  pop.style.display = 'block';
+}
+
+function hideOrchSwitchPopover() {
+  if (_orchSwitchPopover) _orchSwitchPopover.style.display = 'none';
+}
+
+// 仅转义 < 与 &（textarea 内容安全），保留单引号等原样，避免表达式被改形
+function orchSafeText(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
 }
 
 function renderOrchDslPreview() {
@@ -7074,6 +7354,22 @@ function toggleOrchDsl() {
   container.classList.toggle('show');
   if (btn) btn.textContent = container.classList.contains('show') ? '收起' : '展开';
   if (container.classList.contains('show')) renderOrchDslPreview();
+}
+
+// 复制整个 DSL 的 JSON 内容到剪贴板
+function copyOrchDsl() {
+  const container = document.getElementById('orch-dsl-preview');
+  if (!container) return; // 当前页面无 DSL Preview 区域，直接跳过
+  const nodeIds = getSelectedOrchNodeIds();
+  const subIds = getSelectedOrchSubIds();
+  if (nodeIds.length === 0 && subIds.length === 0) {
+    if (window.showToast) showToast('请先选择节点/子链', 'error');
+    return;
+  }
+  const text = orchBuildDslPreview();
+  copyToClipboard(text, true);
+  const btn = document.getElementById('orch-dsl-copy');
+  if (btn) { btn.textContent = '已复制'; setTimeout(() => btn.textContent = '复制', 1200); }
 }
 
 // Generate & save root chain
@@ -7191,6 +7487,10 @@ function orchSubChainByIndex(i) {
   loadOrchData().then(() => {
     // 恢复已保存的节点参数配置（在勾选节点前 apply，renderOrchParamOverrides 会回显）
     applyOrchParamOverrides(c.node_param_overrides);
+    // 恢复已保存的每节点 switch_condition 覆盖（仅本链生效）
+    applyOrchSwitchOverrides(c.node_switch_overrides);
+    // 恢复已保存的每节点名称覆盖（仅本链生效）
+    applyOrchNameOverrides(c.node_name_overrides);
 
     const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
     restoreOrchNodeInstances(nodeIds);
@@ -7245,6 +7545,8 @@ async function generateOrchRootChain() {
     connections: conns,
     debug_mode: document.getElementById('orch-debug-mode').checked,
     node_param_overrides: collectOrchParamOverrides(),
+    node_switch_overrides: collectOrchSwitchOverrides(),
+    node_name_overrides: collectOrchNameOverrides(),
   };
 
   const btn = document.getElementById('orch-generate-btn');
@@ -7308,6 +7610,10 @@ function loadRootChainToOrch(c) {
   loadOrchData().then(() => {
     // 恢复已保存的节点参数配置（在勾选节点前 apply，renderOrchParamOverrides 会回显）
     applyOrchParamOverrides(c.node_param_overrides);
+    // 恢复已保存的每节点 switch_condition 覆盖（仅本链生效）
+    applyOrchSwitchOverrides(c.node_switch_overrides);
+    // 恢复已保存的每节点名称覆盖（仅本链生效）
+    applyOrchNameOverrides(c.node_name_overrides);
 
     // Check nodes
     const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
@@ -7999,6 +8305,8 @@ async function orchLoadRootChainById(chainId) {
     setOrchTarget('root');
     loadOrchData().then(() => {
       applyOrchParamOverrides(c.node_param_overrides);
+      applyOrchSwitchOverrides(c.node_switch_overrides);
+      applyOrchNameOverrides(c.node_name_overrides);
       const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
       restoreOrchNodeInstances(nodeIds, c.dsl_json);
       const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
