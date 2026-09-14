@@ -1,7 +1,6 @@
 package models
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/magic-lib/go-plat-workflow/workflow"
@@ -48,8 +47,8 @@ func (m *NodeLogModel) ToDef() *workflow.NodeLogDef {
 		Level:        m.Level,
 		Timestamp:    m.Timestamp,
 		DurationMs:   m.DurationMs,
-		Payload:      json.RawMessage(m.Payload),
-		Arguments:    json.RawMessage(m.Arguments),
+		Payload:      safeRawMessage(m.Payload),
+		Arguments:    safeRawMessage(m.Arguments),
 		Result:       m.Result,
 		ErrorMsg:     m.ErrorMsg,
 		TraceID:      m.TraceID,

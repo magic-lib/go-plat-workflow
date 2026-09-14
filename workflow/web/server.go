@@ -2283,10 +2283,16 @@ func (ws *WebServer) handleNodeLogStats(w http.ResponseWriter, r *http.Request) 
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Error().Err(err).Msg("failed to encode json response")
+	// 先编码到缓冲区：避免 Encode 中途失败导致响应体残缺（空 body → 客户端解析 "Unexpected end of JSON input"）
+	buf, err := json.Marshal(data)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to marshal json response")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"internal error: failed to marshal response"}`))
+		return
 	}
+	w.WriteHeader(status)
+	_, _ = w.Write(buf)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
