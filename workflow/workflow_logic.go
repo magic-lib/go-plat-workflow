@@ -117,16 +117,22 @@ func (l *WfLogic) RegisterActivities(ctx context.Context, allActivities []*RegAc
 		return fmt.Errorf("w is nil")
 	}
 
-	lo.ForEachWhile(allActivities, func(method *RegActivityInfo, _ int) bool {
-		err = w.SubscribeActivity(method.Namespace, method.ActivityName, method.ActivityHandler)
-		if err != nil {
-			log.Println("RegisterActivities namespace:", method.Namespace, " name:", method.ActivityName, " error:", err)
-			return false
+	var regErrs []error
+	lo.ForEach(allActivities, func(method *RegActivityInfo, _ int) {
+		if e := w.SubscribeActivity(method.Namespace, method.ActivityName, method.ActivityHandler); e != nil {
+			log.Println("RegisterActivities failed namespace:", method.Namespace, " name:", method.ActivityName, " error:", e)
+			regErrs = append(regErrs, e)
 		}
-		return true
 	})
-	if err != nil {
-		return err
+	// 所有 activity 注册完成后，再启动消费端 server。
+	// 现在每个 activity 使用独立的 asynq 队列（namespace:activity/...），
+	// 必须等全部注册完、队列集合确定后才能启动，否则会漏消费某些队列。
+	if startErr := w.Start(); startErr != nil {
+		log.Println("RegisterActivities start server error:", startErr)
+		regErrs = append(regErrs, startErr)
+	}
+	if len(regErrs) > 0 {
+		return fmt.Errorf("some activities failed to register (%d/%d): %v", len(regErrs), len(allActivities), regErrs)
 	}
 	return nil
 }

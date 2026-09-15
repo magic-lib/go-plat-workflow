@@ -247,8 +247,8 @@ github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260910062425-3e6f7a0cce52 h
 github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260910062425-3e6f7a0cce52/go.mod h1:ccGzmWlLWTs3ZYJdkqnPf2TqzNohsaOLEf20lHlKtl8=
 github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf h1:3PQ/Vqjh9VIo2GZhbQy0fvH4VG0n658G+wCvFM0wVcg=
 github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf/go.mod h1:y70xri7t2tgEVyxicN0RQCLJ9br4gMLyFmWntlyxH7M=
-github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915033420-944a01c2711c h1:H2Zy7aaoIfR6bQLQe0ds+A34VC2GI0XCPGgI3ZhdOIo=
-github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915033420-944a01c2711c/go.mod h1:iYdbSbameJCGB+uScnCgN4hYF1CgNeC+cT4j97Sflww=
+github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915073806-8eaab07bf01d h1:fgCOcXtmPrc3EpPi8L3KdKgiqRb5jhEIiGUnZq3rvOg=
+github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915073806-8eaab07bf01d/go.mod h1:iYdbSbameJCGB+uScnCgN4hYF1CgNeC+cT4j97Sflww=
 github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260908085532-bcf290ddeea0 h1:Xl1lfYNN+zIRrj5h7z/JaoH0uIRTQemm7owRWALTIEc=
 github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260908085532-bcf290ddeea0/go.mod h1:qdbmrxmQN8N0llmryFZxZxYLM8O56UZO7PveIWdKkHk=
 github.com/magic-lib/go-plat-utils v1.20260902.2-0.20260911010325-865d53fc88f5 h1:dvlnuH9ZI4ZblF7r8p+BaiwYB5KraOpf01ubT6sz5i8=

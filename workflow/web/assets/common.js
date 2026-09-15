@@ -18,6 +18,9 @@ function copyDslContent() {
 // Project management
 // ============================================================
 function getProject() {
+  // 优先从地址栏 URL 的 ?project= 取值（权威来源），回退到下拉框
+  const fromUrl = new URLSearchParams(window.location.search).get('project');
+  if (fromUrl) return fromUrl;
   return document.getElementById('project-select').value;
 }
 
@@ -39,6 +42,13 @@ function updateProjectPermission() {
 function onProjectChange() {
   const p = getProject();
   document.getElementById('project-badge').textContent = p || '-';
+  // 将当前项目同步到地址栏 URL（?project=），刷新/分享后保持一致
+  try {
+    const url = new URL(location.href);
+    if (p) url.searchParams.set('project', p);
+    else url.searchParams.delete('project');
+    history.replaceState(null, '', url.toString());
+  } catch (_) {}
   // 持久化当前选择到 localStorage，刷新页面后自动恢复
   try { localStorage.setItem('wf_selected_project', p || ''); } catch (_) {}
   updateProjectPermission();
@@ -73,10 +83,14 @@ async function loadProjects() {
       opt.textContent = p.name ? p.project + ' (' + p.name + ')' : p.project;
       sel.appendChild(opt);
     });
-    // 恢复之前选中值：优先 localStorage 中保存的项目，其次当前下拉值，最后回退到第一项
+    // 恢复之前选中值：优先地址栏 URL 的 ?project=，其次 localStorage，其次当前下拉值，最后回退到第一项
+    const urlProject = new URLSearchParams(window.location.search).get('project') || '';
     let saved = '';
     try { saved = localStorage.getItem('wf_selected_project') || ''; } catch (_) {}
-    if (saved && list.some(p => p.project === saved)) {
+    if (urlProject && list.some(p => p.project === urlProject)) {
+      sel.value = urlProject;
+      onProjectChange();
+    } else if (saved && list.some(p => p.project === saved)) {
       sel.value = saved;
       onProjectChange();
     } else if (cur && list.some(p => p.project === cur)) {
@@ -3387,12 +3401,14 @@ function renderNodeLogItem(r) {
     (r.trace_id ? '<span class="log-meta">trace_id=' + esc(r.trace_id) + '</span>' : ''),
     (r.relation_type ? '<span class="log-meta log-relation">relation=' + esc(r.relation_type) + '</span>' : ''),
   ].join(' ');
-  // request/fail/start 展示入参（取 payload 内的 arguments 字段），response 展示返回值（result）
+  // 始终展示「参数 (arguments)」与「返回值 (result)」：优先取表里的 arguments 字段，
+  // 回退到 payload.arguments（兼容旧数据未填 arguments 列的情况）。
   let body = '';
-  const showPayload = (r.event_id === 'request' || r.event_id === 'fail' || r.event_id === 'start');
-  if (showPayload) {
-    // 入参：从 payload.arguments 中取（payload 可能是字符串或对象）
-    let args = null;
+  let args = null;
+  if (r.arguments !== undefined && r.arguments !== null && r.arguments !== '') {
+    args = r.arguments;
+  } else {
+    // 回退：从 payload.arguments 取（payload 可能是字符串或对象）
     try {
       const p = (typeof r.payload === 'string') ? JSON.parse(r.payload) : r.payload;
       if (p && typeof p === 'object' && p.arguments !== undefined) {
@@ -3401,18 +3417,20 @@ function renderNodeLogItem(r) {
         args = p; // 兼容没有 arguments 包裹的情况
       }
     } catch (e) { args = r.payload; }
-    if (args !== null && args !== undefined && !(typeof args === 'object' && Object.keys(args).length === 0)) {
-      let pretty = args;
-      try { pretty = JSON.stringify(typeof args === 'string' ? JSON.parse(args) : args, null, 2); } catch (e) {}
-      body = '<div class="log-json"><div class="log-json-label">参数 (arguments)</div><pre>' + esc(pretty) + '</pre></div>';
+  }
+  if (args !== null && args !== undefined && args !== '') {
+    let pretty = args;
+    try { pretty = JSON.stringify(typeof args === 'string' ? JSON.parse(args) : args, null, 2); } catch (e) {}
+    if (pretty && pretty !== '{}') {
+      body += '<div class="log-json"><div class="log-json-label">参数 (arguments)</div><pre>' + esc(pretty) + '</pre></div>';
     }
-  } else {
-    const raw = r.result;
-    if (raw) {
-      let pretty = raw;
-      try { pretty = JSON.stringify(JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)), null, 2); } catch (e) {}
-      body = '<div class="log-json"><div class="log-json-label">返回值 (result)</div><pre>' + esc(pretty) + '</pre></div>';
-    }
+  }
+  // 返回值（result）：任意事件类型都展示，便于对照入参与返回值
+  const raw = r.result;
+  if (raw) {
+    let pretty = raw;
+    try { pretty = JSON.stringify(JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)), null, 2); } catch (e) {}
+    body += '<div class="log-json"><div class="log-json-label">返回值 (result)</div><pre>' + esc(pretty) + '</pre></div>';
   }
   if (r.error_msg) {
     body += '<div class="log-error-msg">错误: ' + esc(r.error_msg) + '</div>';

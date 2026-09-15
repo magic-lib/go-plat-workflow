@@ -262,7 +262,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	nodeStep := &paramx.Step{
 		Arguments:   stepFlowCtx.Arguments,
-		Responses:   nil,
+		Responses:   stepFlowCtx.Responses,
 		Status:      paramx.StepStatusPending,
 		Error:       nil,
 		StartTimeMs: stepFlowCtx.Meta.StartTimeMs,
@@ -320,7 +320,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			nodeStepMap, _ := allParam.StepMaps(currNodeId)
 			// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
 			relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam,
-				stepFlowCtx.Arguments, stepFlowCtx.Responses, nodeStepMap)
+				stepFlowCtx.Arguments, nodeStep.Responses, nodeStepMap)
 			if err != nil {
 				ctx.TellFailure(msg, err)
 				return
@@ -329,7 +329,8 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			return
 		}
 		// 上报 node 返回值日志（落库 wf_node_logs）
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success, allParam, stepFlowCtx.Arguments, nodeStep.Responses, nil)
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success,
+			allParam, stepFlowCtx.Arguments, nodeStep.Responses, nil)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}

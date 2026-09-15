@@ -18,6 +18,7 @@ COPY .git/ ./.git/
 
 ENV GOPROXY="https://goproxy.io,direct"
 ENV GOSUMDB="off"
+ENV GOFLAGS="-mod=mod"
 ENV CGO_ENABLED=0
 ENV GO111MODULE=on
 

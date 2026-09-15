@@ -214,6 +214,13 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	return nil
 }
 
+// Start 在所有 SubscribeActivity 调用完成后启动消费端 server。
+// 由于每个 activity 现在使用独立的 asynq 队列（namespace:activity/...），
+// 必须等全部注册完、队列集合确定后再启动，才能消费到各自的任务。
+func (w *MQWorker) Start() error {
+	return w.mqClient.Start()
+}
+
 // registerHeartbeat 将 activity 加入心跳注册表，首次注册时启动后台上报协程
 func (w *MQWorker) registerHeartbeat(actNamespace, actName string) {
 	w.hbMu.Lock()
