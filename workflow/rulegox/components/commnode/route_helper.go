@@ -2,6 +2,7 @@ package commnode
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/conv"
@@ -30,6 +31,9 @@ func routeByCondition(ruleObj *templates.RuleExprEngine, expr string, params map
 		if convErr != nil {
 			return "", conResult, fmt.Errorf("routeByCondition convert bool failed: %w", convErr)
 		}
+
+		log.Printf("[routeByCondition] expr=%s params=%s", expr, conv.String(params))
+
 		rt := types.True
 		if !boolResult {
 			rt = types.False

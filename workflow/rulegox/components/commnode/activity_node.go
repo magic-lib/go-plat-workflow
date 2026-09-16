@@ -349,7 +349,7 @@ func (x *ActivityNode) onMsgSuccessEndExec(ctx types.RuleContext, msg types.Rule
 		// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
 		nodeStepMap, _ := allParam.StepMaps(currNodeId)
 		relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam,
-			stepFlowCtx.Arguments, stepFlowCtx.Responses, nodeStepMap)
+			stepFlowCtx.Arguments, nodeStep.Responses, nodeStepMap)
 		if err != nil {
 			ctx.TellFailure(msg, err)
 			return
@@ -622,7 +622,8 @@ func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaD
 	allParam *paramx.FlowContext, arguments map[string]any, result any, stepDataMap map[string]any) (string, error) {
 	relationType, conResult, err := routeByCondition(x.ruleObj, x.switchCondition, stepDataMap)
 	if err != nil {
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, conv.String(conResult), "error", types.Failure,
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs,
+			nodeStr, x.nodeName, conv.String(conResult), "error", types.Failure,
 			allParam, arguments, result, err)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
@@ -630,7 +631,8 @@ func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaD
 		return "", err
 	}
 
-	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, conv.String(conResult), "info", relationType,
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs,
+		nodeStr, x.nodeName, conv.String(conResult), "info", relationType,
 		allParam, arguments, result, nil)
 	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli

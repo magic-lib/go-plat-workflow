@@ -81,14 +81,32 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	// 5. 序列化 connections 为 JSON 存入独立字段，方便后续查看和修改
 	connectionsJSON, _ := json.Marshal(req.Connections)
 
+	// 计算当前链所有有效实例 ID（节点实例 + 子链 flow 实例），用于裁剪覆盖项
+	validInstances := make(map[string]bool, len(req.NodeIDs)+len(req.SubChainIDs))
+	for _, id := range req.NodeIDs {
+		if id != "" {
+			validInstances[id] = true
+		}
+	}
+	for _, id := range req.SubChainIDs {
+		if id != "" {
+			validInstances[id] = true
+		}
+	}
+
+	// 序列化前先裁剪：删除已被删除节点残留的覆盖配置，避免数据冗余/对应错误
+	nodeParamOverrides := pruneOverrides(req.NodeParamOverrides, validInstances)
+	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
+	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
+
 	// 序列化 node_param_overrides 以便保存到根链，后续可恢复
-	nodeParamOverridesJSON, _ := json.Marshal(req.NodeParamOverrides)
+	nodeParamOverridesJSON, _ := json.Marshal(nodeParamOverrides)
 
 	// 序列化 node_switch_overrides 以便保存到根链，后续可恢复
-	nodeSwitchOverridesJSON, _ := json.Marshal(req.NodeSwitchOverrides)
+	nodeSwitchOverridesJSON, _ := json.Marshal(nodeSwitchOverrides)
 
 	// 序列化 node_name_overrides 以便保存到根链，后续可恢复
-	nodeNameOverridesJSON, _ := json.Marshal(req.NodeNameOverrides)
+	nodeNameOverridesJSON, _ := json.Marshal(nodeNameOverrides)
 
 	// 6. 存储到数据库
 	def := &workflow.RootChainDef{
@@ -199,11 +217,29 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		return nil, fmt.Errorf("%w: marshal dsl: %v", workflow.ErrDSLBuildFailed, err)
 	}
 
+	// 计算当前链所有有效实例 ID（节点实例 + 子链 flow 实例），用于裁剪覆盖项
+	validInstances := make(map[string]bool, len(req.NodeIDs)+len(req.SubChainIDs))
+	for _, id := range req.NodeIDs {
+		if id != "" {
+			validInstances[id] = true
+		}
+	}
+	for _, id := range req.SubChainIDs {
+		if id != "" {
+			validInstances[id] = true
+		}
+	}
+
+	// 序列化前先裁剪：删除已被删除节点残留的覆盖配置，避免数据冗余/对应错误
+	nodeParamOverrides := pruneOverrides(req.NodeParamOverrides, validInstances)
+	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
+	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
+
 	// 序列化溯源字段
 	connectionsJSON, _ := json.Marshal(req.Connections)
-	nodeParamOverridesJSON, _ := json.Marshal(req.NodeParamOverrides)
-	nodeSwitchOverridesJSON, _ := json.Marshal(req.NodeSwitchOverrides)
-	nodeNameOverridesJSON, _ := json.Marshal(req.NodeNameOverrides)
+	nodeParamOverridesJSON, _ := json.Marshal(nodeParamOverrides)
+	nodeSwitchOverridesJSON, _ := json.Marshal(nodeSwitchOverrides)
+	nodeNameOverridesJSON, _ := json.Marshal(nodeNameOverrides)
 
 	return &workflow.SubChainDef{
 		Project:            req.Project,
@@ -258,6 +294,22 @@ func parseInstanceRefs(ids []string) []instanceRef {
 			base = raw[:i]
 		}
 		out = append(out, instanceRef{baseId: base, instanceId: raw})
+	}
+	return out
+}
+
+// pruneOverrides 仅保留 key 存在于 valid 集合中的覆盖项，删除已不存在节点（如被删除的节点）
+// 对应的覆盖配置，避免 node_param_overrides / node_switch_overrides / node_name_overrides 残留
+// 过期数据造成冗余或对应错误。
+func pruneOverrides[V any](m map[string]V, valid map[string]bool) map[string]V {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]V, len(m))
+	for k, v := range m {
+		if valid[k] {
+			out[k] = v
+		}
 	}
 	return out
 }

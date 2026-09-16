@@ -1205,7 +1205,11 @@ function addActivityStage(stageActs) {
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
       '<span class="stage-index" style="display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;border-radius:6px;background:#ecfeff;color:#0e7490;font-size:.78rem;font-weight:700">S' + (stageIdx + 1) + '</span>' +
       '<span style="font-size:.8rem;color:var(--text-muted)">串行阶段（与上一阶段顺序执行，本阶段内 Activity 并行）</span>' +
-      '<button type="button" class="btn btn-sm btn-outline" style="margin-left:auto" onclick="removeActivityStage(this)" title="删除此阶段">删除阶段</button>' +
+      '<span style="margin-left:auto;display:inline-flex;gap:6px">' +
+        '<button type="button" class="btn btn-sm btn-outline stage-move-up" onclick="moveActivityStage(this,-1)" title="上移阶段">↑</button>' +
+        '<button type="button" class="btn btn-sm btn-outline stage-move-down" onclick="moveActivityStage(this,1)" title="下移阶段">↓</button>' +
+        '<button type="button" class="btn btn-sm btn-outline" onclick="removeActivityStage(this)" title="删除此阶段">删除阶段</button>' +
+      '</span>' +
     '</div>' +
     '<div class="stage-acts" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>' +
     '<div style="display:flex;align-items:center;gap:6px">' +
@@ -1226,6 +1230,7 @@ function addActivityStage(stageActs) {
   // 隐藏空提示与单 activity 旧入口
   document.getElementById('node-activity-empty').style.display = 'none';
   document.getElementById('node-activity-custom').style.display = 'none';
+  refreshStageMoveButtons();
   syncActivityConfig();
 }
 
@@ -1242,6 +1247,7 @@ function removeActivityStage(btn) {
     document.querySelectorAll('#node-activity-stages .act-item').forEach(r => renderActivityItemParams(r));
   }
   document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
+  refreshStageMoveButtons();
   syncActivityConfig();
 }
 
@@ -1251,6 +1257,43 @@ function refreshStageIndex() {
     const idx = stage.querySelector('.stage-index');
     if (idx) idx.textContent = 'S' + (i + 1);
   });
+}
+
+// 刷新各阶段上移/下移按钮的可用状态：首阶段不能上移，末阶段不能下移
+function refreshStageMoveButtons() {
+  const stages = document.querySelectorAll('#node-activity-stages .stage');
+  stages.forEach((s, i) => {
+    const up = s.querySelector('.stage-move-up');
+    const down = s.querySelector('.stage-move-down');
+    if (up) up.disabled = (i === 0);
+    if (down) down.disabled = (i === stages.length - 1);
+  });
+}
+
+// 整体移动一个串行阶段的顺序（dir<0 上移，dir>0 下移）。
+// 仅移动阶段本身，不影响阶段内并行 Activity 的排列。
+function moveActivityStage(btn, dir) {
+  const stage = btn.closest('.stage');
+  const root = document.getElementById('node-activity-stages');
+  if (!stage || !root) return;
+  const stages = Array.from(root.querySelectorAll('.stage'));
+  const idx = stages.indexOf(stage);
+  const target = idx + dir;
+  // 边界：第一个阶段不能上移（target<0），最后一个阶段不能下移（target>=length）
+  if (target < 0 || target >= stages.length) return;
+  if (dir < 0) {
+    // 上移：插入到目标阶段之前
+    root.insertBefore(stage, stages[target]);
+  } else {
+    // 下移：插入到目标阶段之后（即目标阶段的下一个兄弟节点之前）
+    root.insertBefore(stage, stages[target].nextElementSibling);
+  }
+  refreshStageIndex();
+  refreshStageMoveButtons();
+  // 阶段顺序变化会影响「前序阶段 Activity」引用集合，重渲染参数下拉与可选项
+  document.querySelectorAll('#node-activity-stages .act-item').forEach(r => renderActivityItemParams(r));
+  document.querySelectorAll('#node-activity-stages .stage').forEach(s => populateStageSelect(s));
+  syncActivityConfig();
 }
 
 // 填充某个阶段内的"添加 Activity"可过滤下拉（允许同一 activity 重复添加，不做去重禁用）
@@ -3992,6 +4035,10 @@ async function deleteActivityTestRecord(recordId, activityId) {
 // ============================================================
 let paramSeq = 0;
 
+// 参数「值类型」统一候选列表（7 种），参数定义（addParamRow）与 Activity 参数值绑定（argRenderArgInput）
+// 共用同一份，保证两处可选择的转换类型完全一致。顺序：string / int64 / float64 / bool / slice / map / formula。
+const ARG_TYPE_OPTIONS = ['string', 'int64', 'float64', 'bool', 'slice', 'map', 'formula'];
+
 function addParamRow(key, label, type, required, defaultValue, description, policy) {
   paramSeq++;
   const container = document.getElementById('node-params-container');
@@ -4016,13 +4063,7 @@ function addParamRow(key, label, type, required, defaultValue, description, poli
     <input class="param-key" placeholder="参数键" value="${esc(key||'')}">
     <input class="param-label" placeholder="显示名" value="${esc(label||'')}">
     <select class="param-type">
-      <option value="string" ${type==='string'?'selected':''}>string</option>
-      <option value="int64" ${type==='int64'?'selected':''}>int64</option>
-      <option value="float64" ${type==='float64'?'selected':''}>float64</option>
-      <option value="bool" ${type==='bool'?'selected':''}>bool</option>
-      <option value="slice" ${type==='slice'?'selected':''}>slice</option>
-      <option value="map" ${type==='map'?'selected':''}>map</option>
-      <option value="formula" ${type==='formula'?'selected':''}>formula</option>
+      ${ARG_TYPE_OPTIONS.map(t => `<option value="${t}" ${t===type?'selected':''}>${t}</option>`).join('')}
     </select>
     <label class="param-required"><input type="checkbox" ${reqChecked}>必填</label>
     <select class="param-policy">${policyHTML}</select>
@@ -4660,13 +4701,7 @@ function addActParamRow(key, label, type, required, value, description, policy) 
     <input class="param-key" placeholder="参数键" value="${esc(key||'')}">
     <input class="param-label" placeholder="显示名" value="${esc(label||'')}">
     <select class="param-type">
-      <option value="string" ${type==='string'?'selected':''}>string</option>
-      <option value="int64" ${type==='int64'?'selected':''}>int64</option>
-      <option value="float64" ${type==='float64'?'selected':''}>float64</option>
-      <option value="bool" ${type==='bool'?'selected':''}>bool</option>
-      <option value="slice" ${type==='slice'?'selected':''}>slice</option>
-      <option value="map" ${type==='map'?'selected':''}>map</option>
-      <option value="formula" ${type==='formula'?'selected':''}>formula</option>
+      ${ARG_TYPE_OPTIONS.map(t => `<option value="${t}" ${t===type?'selected':''}>${t}</option>`).join('')}
     </select>
     <label class="param-required"><input type="checkbox" ${reqChecked}>必填</label>
     <select class="param-policy">${policyHTML}</select>
@@ -5991,6 +6026,10 @@ function addOrchNodeInstance(nodeId) {
 function removeOrchNodeInstance(instanceId) {
   if (!window._orchNodeInstances) return;
   window._orchNodeInstances = window._orchNodeInstances.filter(i => i.instanceId !== instanceId);
+  // 同步清理该实例残留的覆盖配置，避免保存时写入已删除节点的冗余/错误数据
+  if (window._orchParamPreset) delete window._orchParamPreset[instanceId];
+  if (window._orchNameOverrides) delete window._orchNameOverrides[instanceId];
+  if (window._orchSwitchOverrides) delete window._orchSwitchOverrides[instanceId];
   renderOrchNodeSelected();
   onOrchSelectionChange();
 }
@@ -7957,8 +7996,8 @@ function argRenderArgInput(key, bind, argCtx) {
     const ph = typ === 'formula'
       ? '公式，如 {{arguments.a}} + {{arguments.b}}'
       : '固定配置（留空则用活动默认值）';
-    const typeSel = '<select class="arg-type" onchange="syncActivityConfig()" title="值类型" style="flex:0 0 70px;width:70px;padding:3px 4px;border:1px solid var(--border);border-radius:6px;font-size:.72rem">' +
-      ['string', 'int64', 'float64', 'formula'].map(t =>
+    const typeSel = '<select class="arg-type" onchange="syncActivityConfig()" title="值类型" style="flex:0 0 84px;width:84px;padding:3px 4px;border:1px solid var(--border);border-radius:6px;font-size:.72rem">' +
+      ARG_TYPE_OPTIONS.map(t =>
         '<option value="' + t + '"' + (t === typ ? ' selected' : '') + '>' + t + '</option>'
       ).join('') + '</select>';
     return '<input class="arg-val" value="' + escAttr(valVal) + '" placeholder="' + escAttr(ph) + '" oninput="syncActivityConfig()" style="flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem">' + typeSel;

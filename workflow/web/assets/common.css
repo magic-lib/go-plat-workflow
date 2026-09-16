@@ -49,6 +49,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-sm { padding: 6px 12px; font-size: .8rem; }
 .btn-outline { background: none; border: 1px solid var(--border); color: var(--text); }
 .btn-outline:hover { background: var(--bg); }
+.stage-move-up:disabled, .stage-move-down:disabled { opacity: .35; cursor: not-allowed; }
+.stage-move-up, .stage-move-down { min-width: 30px; padding: 6px 8px; }
 
 /* Table */
 .table-wrap { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); overflow-x: auto; }

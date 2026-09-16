@@ -15,7 +15,7 @@ type NodeLogModel struct {
 	Env          string    `gorm:"column:env;type:varchar(128);not null" json:"env"`
 	NodeID       string    `gorm:"column:node_id;type:varchar(255);not null;index:idx_node_proj" json:"node_id"`
 	NodeName     string    `gorm:"column:node_name;type:varchar(255);not null" json:"node_name"`
-	EventID      string    `gorm:"column:event_id;type:varchar(128);index" json:"event_id"`
+	EventID      string    `gorm:"column:event_id;type:varchar(500)" json:"event_id"`
 	Level        string    `gorm:"column:level;type:varchar(16);not null;index" json:"level"`
 	Timestamp    int64     `gorm:"column:ts;not null;index" json:"timestamp"`
 	DurationMs   int64     `gorm:"column:duration_ms" json:"duration_ms"`
@@ -26,7 +26,7 @@ type NodeLogModel struct {
 	TraceID      string    `gorm:"column:trace_id;type:varchar(128);index;default:''" json:"trace_id"`
 	RootChainID  string    `gorm:"column:root_chain_id;type:varchar(128);index;default:''" json:"root_chain_id"`
 	SpanID       string    `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
-	RelationType string    `gorm:"column:relation_type;type:varchar(64);index;default:''" json:"relation_type"`
+	RelationType string    `gorm:"column:relation_type;type:varchar(500);default:''" json:"relation_type"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
