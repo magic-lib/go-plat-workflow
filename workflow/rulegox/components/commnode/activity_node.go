@@ -9,6 +9,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/templates"
+	"github.com/magic-lib/go-plat-utils/utils"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
@@ -430,7 +431,7 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 		TraceID:      metaData.TraceId,
 		RootChainID:  metaData.RootChainID,
 		SpanID:       nodeSpanId,
-		RelationType: relationType,
+		RelationType: utils.SubStrMaxLen(relationType, 30),
 		CreatedAt:    now,
 	}
 	if runErr != nil {

@@ -1,6 +1,7 @@
 package commnode
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/magic-lib/go-plat-utils/templates"
@@ -11,11 +12,11 @@ func TestRouteByCondition(t *testing.T) {
 	ruleObj := templates.NewRuleExprEngine()
 
 	cases := []struct {
-		name     string
-		expr     string
-		params   map[string]any
-		wantRT   string
-		wantErr  bool
+		name    string
+		expr    string
+		params  map[string]any
+		wantRT  string
+		wantErr bool
 	}{
 		{
 			name:   "bool true -> True",
@@ -72,4 +73,20 @@ func TestRouteByCondition(t *testing.T) {
 			}
 		})
 	}
+}
+func TestRouteByCondition11(t *testing.T) {
+	ruleObj := templates.NewRuleExprEngine()
+	expr := "SwitchExpr((In('K1', [responses.tag_list]) || In('K2', [responses.tag_list])  || In('K3', [responses.tag_list])), 'SET_T_MOBILE_DEFAULT', In('P1', [responses.tag_list]), 'SET_T_BANK_DEFAULT', 'SKIP')"
+
+	params := map[string]any{
+		"responses": map[string]any{
+			"tag_list": []string{"M301", "M3", "N", "P1"},
+		},
+		//"responses.tag_list": []string{"M301", "M3", "N", "P1"},
+	}
+	//paramsStr := `{"arguments":{"account_user_id":2748,"mobile":"0571876472","user_id":"2748"},"end_time_ms":1789557314131,"error":null,"responses":{"tag_list":["M301","M3","N","P1"]},"start_time_ms":1789557313053,"status":"success"}`
+	//_ = conv.Unmarshal([]byte(paramsStr), &params)
+
+	aa, err := ruleObj.RunString(expr, params)
+	fmt.Print(aa, err)
 }

@@ -6290,7 +6290,7 @@ function addOrchConnRow(fromId, toId, connType) {
     <select data-role="orch-from">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
     <span class="conn-arrow">→</span>
     <select data-role="orch-to">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
-    <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'Success')}" title="连接类型：Success / Failure / True / False / Stream 或自定义">
+    <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'')}" title="连接类型：留空表示新增未指定（Success / Failure / True / False / Stream 或自定义）">
     <button class="btn-remove" onclick="removeOrchConnRow('orch-conn-row-${orchConnSeq}')" title="删除">&times;</button>
   `;
   container.appendChild(row);
