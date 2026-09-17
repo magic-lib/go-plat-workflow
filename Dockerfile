@@ -1,19 +1,16 @@
 # 构建上下文应为本目录（go-plat-workflow/）
 #   docker build -t go-plat-workflow:latest -f Dockerfile .
-ARG GOLANG_IMAGE=golang:1.24.3-alpine
+ARG GOLANG_IMAGE=golang:1.24.6
 ARG ALPINE_IMAGE=alpine:3.21.3
 
 FROM ${GOLANG_IMAGE} AS builder
 
 # git 用于：1) GOPROXY 缺失时 fallback clone 内部仓库；2) 获取当前 commit id
-RUN apk add --no-cache git
+RUN apt-get update && apt-get install -y --no-install-recommends git make && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 
-# 先把依赖描述复制进来（利用 Docker 层缓存）
-COPY go.mod go.sum ./
-
-# 复制 .git 以便读取当前 commit id（仅需 .git，不需要工作区源码）
+COPY .. .
 COPY .git/ ./.git/
 
 ENV GOPROXY="https://goproxy.io,direct"
@@ -21,6 +18,8 @@ ENV GOSUMDB="off"
 ENV GOFLAGS="-mod=mod"
 ENV CGO_ENABLED=0
 ENV GO111MODULE=on
+
+RUN make gen-update-package
 
 # 下载依赖（Go 模块缓存）
 RUN GODEBUG=http2client=0 go mod download -x
