@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
@@ -853,24 +854,35 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 	if err != nil {
 		return nil, err
 	}
+
+	// 与当前线上版本对比：若内容完全一致则拒绝发布，避免产生重复版本。
+	if current, cerr := s.releaseRepo.GetCurrent(ctx, project, chainID); cerr == nil && current != nil {
+		if rootChainContentEqual(draft, current) {
+			return nil, fmt.Errorf("当前草稿与线上生效版本(v%d)内容完全一致，无需重复发布", current.Version)
+		}
+	}
+
 	maxVer, err := s.releaseRepo.MaxVersion(ctx, project, chainID)
 	if err != nil {
 		return nil, err
 	}
 	release := &workflow.RootChainReleaseDef{
-		Project:            draft.Project,
-		ChainID:            draft.ChainID,
-		Version:            maxVer + 1,
-		Name:               draft.Name,
-		Description:        draft.Description,
-		DSLJSON:            draft.DSLJSON,
-		NodeIDs:            draft.NodeIDs,
-		SubChainIDs:        draft.SubChainIDs,
-		ConnectionsData:    draft.ConnectionsData,
-		NodeParamOverrides: draft.NodeParamOverrides,
-		IsCurrent:          true,
-		PublishedAt:        time.Now(),
+		Project:             draft.Project,
+		ChainID:             draft.ChainID,
+		Version:             maxVer + 1,
+		Name:                draft.Name,
+		Description:         draft.Description,
+		DSLJSON:             draft.DSLJSON,
+		NodeIDs:             draft.NodeIDs,
+		SubChainIDs:         draft.SubChainIDs,
+		ConnectionsData:     draft.ConnectionsData,
+		NodeParamOverrides:  draft.NodeParamOverrides,
+		NodeSwitchOverrides: draft.NodeSwitchOverrides,
+		NodeNameOverrides:   draft.NodeNameOverrides,
+		IsCurrent:           true,
+		PublishedAt:         time.Now(),
 	}
+
 	if err := s.releaseRepo.Create(ctx, release); err != nil {
 		return nil, err
 	}
@@ -884,6 +896,64 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		Int("version", release.Version).
 		Msg("root chain published")
 	return release, nil
+}
+
+// canonicalJSON 将 JSON 字符串规范化为可比较的形式（忽略空白/键序差异）。
+// 空字符串与无法解析的字符串均按原样返回，保证比较结果稳定。
+func canonicalJSON(s string) string {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return ""
+	}
+	var v interface{}
+	if err := json.Unmarshal([]byte(t), &v); err != nil {
+		return t
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return t
+	}
+	return string(b)
+}
+
+// rootChainContentEqual 比较两个根链的内容是否完全一致（用于发布去重）。
+// draft 为即将发布的草稿（RootChainDef），current 为当前线上版本（RootChainReleaseDef）。
+// 仅比较业务内容字段，忽略版本号、发布时间等元数据。
+func rootChainContentEqual(draft *workflow.RootChainDef, current *workflow.RootChainReleaseDef) bool {
+	if draft.Name != current.Name || draft.Description != current.Description {
+		return false
+	}
+	newFieldsJson := []string{
+		draft.DSLJSON,
+		draft.ConnectionsData,
+		draft.NodeParamOverrides,
+	}
+	oldFieldsJson := []string{
+		current.DSLJSON,
+		current.ConnectionsData,
+		current.NodeParamOverrides,
+	}
+
+	for i := 0; i < len(newFieldsJson); i++ {
+		if !cond.IsSameJson(newFieldsJson[i], oldFieldsJson[i]) {
+			return false
+		}
+	}
+
+	newFieldsString := []string{
+		draft.NodeIDs,
+		draft.SubChainIDs,
+	}
+	oldFieldsString := []string{
+		current.NodeIDs,
+		current.SubChainIDs,
+	}
+	for i := 0; i < len(newFieldsString); i++ {
+		if newFieldsString[i] != oldFieldsString[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // ListRootChainReleases 列出根链的发布历史（版本号倒序）。

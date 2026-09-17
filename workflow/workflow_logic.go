@@ -119,6 +119,10 @@ func (l *WfLogic) RegisterActivities(ctx context.Context, allActivities []*RegAc
 
 	var regErrs []error
 	lo.ForEach(allActivities, func(method *RegActivityInfo, _ int) {
+		if method.ActivityHandler == nil {
+			regErrs = append(regErrs, fmt.Errorf("ActivityHandler is nil: %s/%s", method.Namespace, method.ActivityName))
+			return
+		}
 		if e := w.SubscribeActivity(method.Namespace, method.ActivityName, method.ActivityHandler); e != nil {
 			log.Println("RegisterActivities failed namespace:", method.Namespace, " name:", method.ActivityName, " error:", e)
 			regErrs = append(regErrs, e)

@@ -40,7 +40,9 @@ function updateProjectPermission() {
 }
 
 function onProjectChange() {
-  const p = getProject();
+  // 直接从下拉框取当前选中的「新项目」。注意：不要调 getProject()，因为它优先读地址栏 URL，
+  // 而下拉框刚改变时 URL 仍是旧项目（见下方 replaceState），会导致 p 取到旧值、切换失效。
+  const p = document.getElementById('project-select').value;
   document.getElementById('project-badge').textContent = p || '-';
   // 将当前项目同步到地址栏 URL（?project=），刷新/分享后保持一致
   try {
@@ -53,16 +55,19 @@ function onProjectChange() {
   try { localStorage.setItem('wf_selected_project', p || ''); } catch (_) {}
   updateProjectPermission();
   if (!p) return;
-  // 刷新当前 tab 数据
+  // 切换项目后，重新加载当前激活 tab 的数据（与 switchTab 的加载逻辑一致），
+  // 保证所有查询都基于新项目；其余 tab 在点击时也会用 getProject()（已=新项目）重新加载。
   const activeTab = document.querySelector('.tab-btn.active');
-  if (activeTab) {
-    const tab = activeTab.dataset.tab;
-    if (tab === 'nodes') loadNodeEnvOptions();
-    else if (tab === 'activities') { loadActivityEnvOptions(); }
-    else if (tab === 'sub-chains') loadSubChains();
-    else if (tab === 'root-chains') loadRootChains();
-    refreshExecEnvs();
-  }
+  const tab = activeTab ? activeTab.dataset.tab : '';
+  if (tab === 'nodes') loadNodeEnvOptions();
+  else if (tab === 'activities') loadActivityEnvOptions();
+  else if (tab === 'sub-chains') loadSubChains();
+  else if (tab === 'root-chains') loadRootChains();
+  else if (tab === 'logs') openAllLogsTab();
+  else if (tab === 'statistics') loadStatistics();
+  else if (tab === 'orchestrate') loadOrchData();
+  else if (tab === 'execute') refreshConnSuggestions();
+  refreshExecEnvs();
 }
 
 async function loadProjects() {
@@ -1188,7 +1193,10 @@ function convertArgumentsToArgs(argumentsArr) {
     const src = a.source || 'value';
     const val = a.value !== undefined ? String(a.value) : '';
     const ref = a.ref !== undefined && a.ref !== null && a.ref !== '' ? a.ref : val;
-    args[k] = { source: src, value: val, ref: ref };
+    // 保留 type：固定配置的类型（string/int64/slice/...）在 arguments 数组形态下也必须带回，
+    // 否则重新打开节点时 arg-type 下拉会回退到默认 string。
+    const typ = a.type || 'string';
+    args[k] = { source: src, value: val, ref: ref, type: typ };
   });
   return args;
 }
@@ -1840,6 +1848,22 @@ function onArgSourceChange(sel) {
     }
   }
   syncActivityConfig();
+}
+
+// 固定配置类型变化：即时同步进当前 activity 的 data-args 权威快照，避免后续整卡重渲染/保存时丢失
+function onArgTypeChange(sel) {
+  const rowBind = sel.closest('.arg-bind-row');
+  if (!rowBind) return;
+  const actItem = sel.closest('.act-item');
+  if (!actItem) return;
+  const key = rowBind.getAttribute('data-arg-key') || '';
+  const liveBinds = collectActivityArgBinds(actItem);
+  if (key) {
+    const b = liveBinds[key] || {};
+    b.type = sel.value;
+    liveBinds[key] = b;
+  }
+  actItem.setAttribute('data-args', JSON.stringify(liveBinds));
 }
 
 // 引用下拉/输入变化：拼装最终引用路径写入同行的 .arg-ref-final，供 collect 读取
