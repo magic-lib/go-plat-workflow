@@ -748,7 +748,17 @@ func (s *WorkflowService) ListRootChains(ctx context.Context, project string) ([
 			return nil, err
 		}
 		c.HasReleases = has
+
+		// 解析 dsl_json，提取每个节点 arguments/responses 中引用的 {{arguments.xxx}} 入参，
+		// 赋值给 MustInputParams，供前端列表展示该根链调用所需入参。
+		var rc types.RuleChain
+		if c.DSLJSON != "" {
+			if err := json.Unmarshal([]byte(c.DSLJSON), &rc); err == nil {
+				c.MustInputParams = builder.CollectAllInputArguments(rc.Metadata.Nodes)
+			}
+		}
 	}
+
 	return chains, nil
 }
 

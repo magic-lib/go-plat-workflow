@@ -5003,7 +5003,7 @@ async function loadRootChains() {
     (currents || []).forEach(r => { curVerMap[r.chain_id] = r.version; });
     const tbody = document.querySelector('#root-table tbody');
     if (!chains.length) {
-      tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><div class="icon">🌳</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无根链数据，通过 Execute 页面执行工作流后会自动生成</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><div class="icon">🌳</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无根链数据，通过 Execute 页面执行工作流后会自动生成</p></div></td></tr>';
       return;
     }
     window._rootChainsForEdit = chains; // 缓存供按钮索引使用
@@ -5011,6 +5011,27 @@ async function loadRootChains() {
       let connCount = 0;
       try { connCount = JSON.parse(c.connections_data || '[]').length; } catch(e){}
       const curVer = curVerMap[c.chain_id];
+      // 必需入参：与 Activity 列表展示参数方式一致，用芯片展示每个 {{arguments.xxx}} 的参数名
+      // 最多显示 2 个，多余数量用 "+N" 触发泡泡窗（复用 showHbPop/moveHbPop/hideHbPop 浮层）列出全部
+      const params = c.must_input_params || [];
+      let paramsHtml;
+      if (!params.length) {
+        paramsHtml = '<span style="color:var(--text-muted);font-size:.78rem">无</span>';
+      } else {
+        const shown = params.slice(0, 2);
+        const chip = k => '<span style="font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
+        const shownHtml = shown.map(chip).join('');
+        const moreHtml = params.length > 2
+          ? '<span class="param-more" style="font-family:monospace;font-size:.74rem;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;white-space:nowrap;cursor:pointer" ' +
+            'onmouseenter="showHbPop(event,this)" onmousemove="moveHbPop(event)" onmouseleave="hideHbPop()">+' + (params.length - 2) + '</span>'
+          : '';
+        const popItems = params.map(k => '<div class="hb-pop-item">' + chip(k) + '</div>').join('');
+        const popHtml = '<div class="hb-pop-title">必需入参（共 ' + params.length + ' 个）</div>' + popItems;
+        paramsHtml = '<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:4px 8px;display:flex;flex-wrap:wrap;gap:4px;max-width:260px">' +
+          shownHtml + moreHtml +
+          (moreHtml ? '<span style="display:none" data-pop="' + encodeURIComponent(popHtml) + '"></span>' : '') +
+          '</div>';
+      }
       return `
       <tr>
         <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
@@ -5022,6 +5043,7 @@ async function loadRootChains() {
         <td class="code-cell" title="${esc(c.sub_chain_ids||'')}">${esc(trunc(c.sub_chain_ids, 20))}</td>
         <td>${connCount} 条</td>
         <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
+        <td>${paramsHtml}</td>
         <td class="actions">
           <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
           <button class="btn btn-sm btn-primary edit-only" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>

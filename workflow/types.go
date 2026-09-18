@@ -277,6 +277,8 @@ type RootChainDef struct {
 	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
 	// HasReleases 是否存在发布记录（存在时不允许删除该根链）
 	HasReleases bool `json:"has_releases"`
+	// MustInputParams 必须输入的参数列表
+	MustInputParams []string `json:"must_input_params"`
 }
 
 // RootChainReleaseDef 根链发布版本定义。
