@@ -12,6 +12,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 	"io"
 	"net/http"
 	"os"
@@ -1047,11 +1048,6 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		return nil, err
 	}
 
-	// 过滤多余入参：仅保留链实际需要的入参，避免恶意传入无关参数造成变量名污染。
-	// originalPayload 保留原始入参，子链加载后再按根链+子链所需参数重新过滤一次。
-	originalPayload := jsonPayload
-	jsonPayload = s.filterPayloadArguments(jsonPayload, ruleChain.Metadata.Nodes)
-
 	// 1. 从根链 flow 节点提取子链 ID（configuration.ruleChainId = "project:subChainID"）
 	subChainIDs := make(map[string]bool)
 	for _, node := range ruleChain.Metadata.Nodes {
@@ -1085,6 +1081,9 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	}
 
 	// 子链节点也可能引用 {{arguments.xxx}} / 顶层 {{name}}，按根链+子链所需参数对原始入参重新过滤，避免误删
+	// 过滤多余入参：仅保留链实际需要的入参，避免恶意传入无关参数造成变量名污染。
+	// originalPayload 保留原始入参，子链加载后再按根链+子链所需参数重新过滤一次。
+	originalPayload := jsonPayload
 	jsonPayload = s.filterPayloadArguments(originalPayload, ruleChain.Metadata.Nodes, subChainNodes)
 
 	// 2.1 根据项目+环境解析 Redis 配置（按环境将运行数据打入对应 Redis）
@@ -1162,128 +1161,87 @@ func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayloa
 	return flowCtx
 }
 
-// checkAllNodesArguments 校验 CondSwitch / Activity 节点 configuration.arguments 中
-// 形如 {{arguments.xxx}} 的前端入参占位符，是否都在 jsonPayload 中存在；缺失则报错，
-// 避免后续执行时因缺少入参而失败。
+// checkAllNodesArguments 校验节点 configuration.arguments / responses 中形如 {{arguments.xxx}}
+// 的前端入参占位符（xxx 可能含层级分隔 "."，如 N000036__70lic.mobile），是否都在 jsonPayload 中传入；
+// 缺失则报错，避免后续执行时因缺少入参而失败。
+//
+// 判定顺序：
+//  1. 按层级路径在 jsonPayload 中查找（中间 "." 视为层级分隔，等价于 json.Get(jsonPayload, item)）；
+//  2. 未找到则视为 "." 被当作整体字符串键传入，从 jsonPayloadMap（conv.KeyListFromMap 扁平化结果）中再查；
+//  3. 都未找到 → 该入参未传，报错。
 func (s *WorkflowService) checkAllNodesArguments(nodes []*types.RuleNode, jsonPayload map[string]any) error {
-	// 仅校验需要前端入参的节点类型
-	const (
-		typeActivity   = "custom/Activity"
-		typeCondSwitch = "custom/CondSwitch"
-	)
-	// 匹配 {{arguments.xxx}}（xxx 为前端入参名，仅允许字母数字下划线，不含点号）
-	argTplRe := regexp.MustCompile(`\{\{arguments\.([A-Za-z0-9_]+)}}`)
+	allInputArguments := builder.CollectAllInputArguments(nodes)
+	jsonPayloadMap := conv.KeyListFromMap(jsonPayload)
+	jsonPayloadStr := conv.String(jsonPayload)
+	var firstErr []string
+	for _, item := range allInputArguments {
+		if item == "" {
+			continue
+		}
 
-	for _, node := range nodes {
-		if node == nil {
+		// 1) 按层级路径在嵌套结构 jsonPayload 中查找
+		if _, ok := jsonPayload[item]; ok {
 			continue
 		}
-		if node.Type != typeActivity && node.Type != typeCondSwitch {
+		// 2) 未找到：中间 "." 被当作整体字符串键传入，从扁平化结果中查找
+		if _, ok := jsonPayloadMap[item]; ok {
 			continue
 		}
-		rawArgs, ok := node.Configuration["arguments"]
-		if !ok || rawArgs == nil {
+		// 说明是深层的json串了
+		if getByDotPath(jsonPayloadStr, item) {
 			continue
 		}
-		argsList, ok := rawArgs.([]any)
-		if !ok {
-			continue
-		}
-		for _, item := range argsList {
-			m, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			val, ok := m["value"]
-			if !ok {
-				continue
-			}
-			valStr, ok := val.(string)
-			if !ok {
-				continue
-			}
-			for _, matched := range argTplRe.FindAllStringSubmatch(valStr, -1) {
-				name := matched[1]
-				if _, exist := jsonPayload[name]; !exist {
-					return fmt.Errorf("node %q requires argument %q but it is not provided in payload", node.Id, name)
-				}
-			}
-		}
+		// 3) 都没找到 → 未传该参数
+		firstErr = append(firstErr, item)
 	}
+	if len(firstErr) > 0 {
+		return fmt.Errorf("argument list: %s not input", strings.Join(firstErr, ","))
+	}
+
 	return nil
 }
 
-// collectRequiredArguments 扫描节点集合的 configuration，提取链实际需要的入参名（去重）。
-// 口径与 checkAllNodesArguments 一致，并补充识别：
-//   - {{arguments.xxx}} 形式（xxx 为字母数字下划线）
-//   - 顶层入口参数 {{name}}（name 不含点，且非 arguments/steps 等内置前缀）
-//
-// 用于过滤 payload，仅保留链真正需要的入参，避免变量名污染。
-
-// TODO 这里判断会不准确
-// {"metadata":{"connections":[{"fromId":"N000004__cuae4","toId":"N000035__sxp73","type":"M3"},{"fromId":"N000036__70lic","toId":"N000004__cuae4","type":"Success"},{"fromId":"N000035__sxp73","toId":"N000038__tepn8","type":"False"},{"fromId":"N000035__sxp73","toId":"N000025__rmlbn","type":"True"},{"fromId":"N000025__rmlbn","toId":"N000034__xbiay","type":"SET_T_BANK_DEFAULT"},{"fromId":"N000009__qw5ij","toId":"N000036__70lic","type":"Success"}],"firstNodeIndex":0,"nodes":[{"additionalInfo":{"node_param_labels":"{\"account_user_id\":\"用户UserID\"}"},"configuration":{"arg_mapping":{},"arguments":[{"key":"account_user_id","policy":"backend","type":"int64","value":"{{steps.N000036__70lic.responses.user_id}}"}],"node_config":{"activities":[[{"act_name":"MEMBER_TAGS","act_namespace":"credit-server","arguments":[{"key":"account_user_id","ref":"{{arguments.account_user_id}}","source":"ref_node","type":"int64","value":"{{arguments.account_user_id}}"}],"id":"A000015__40vid"}]],"enable_condition":"","switch_condition":"SwitchExpr((In('K1', [responses.tag_list]) || In('K2', [responses.tag_list])  || In('K3', [responses.tag_list])), 'SET_T_BANK_DEFAULT', In('P1', [responses.tag_list]), 'SET_T_BANK_DEFAULT', 'SKIP')"},"responses":[{"key":"tag_list","label":"标签列表","ref":"{{steps.A000015__40vid.responses}}","source":"ref_act","type":"slice","value":"{{steps.A000015__40vid.responses}}"}],"ret_mapping":{}},"debugMode":false,"id":"N000025__rmlbn","name":"M3设置自动收款方式-获取用户的标签列表","type":"custom/Activity"},{"additionalInfo":{"node_param_labels":"{\"account_user_id\":\"用户UserID\"}"},"configuration":{"arg_mapping":{},"arguments":[{"key":"account_user_id","policy":"backend","type":"int64","value":"{{steps.N000036__70lic.responses.user_id}}"}],"node_config":{"activities":[[{"act_name":"ORDER_MEMBER_SUCCESS_TIMES","act_namespace":"credit-server","arguments":[{"key":"account_user_id","ref":"{{arguments.account_user_id}}","source":"ref_node","type":"int64","value":"{{arguments.account_user_id}}"}],"id":"A000039__mlw6c","ret_template":[{"key":"","label":"完成订单数","name":"order_count","type":"int64"}]}]],"enable_condition":"","switch_condition":"[responses.order_count] == 0"},"responses":[{"key":"order_count","label":"完成订单数量","ref":"{{steps.A000039__mlw6c.responses.order_count}}","source":"ref_act","type":"int64","value":"{{steps.A000039__mlw6c.responses.order_count}}"}],"ret_mapping":{}},"debugMode":false,"id":"N000035__sxp73","name":"判断用户是否是新客","type":"custom/Activity"},{"additionalInfo":{"node_param_labels":"{\"mobile\":\"Mobile\"}"},"configuration":{"arg_mapping":{},"arguments":[{"key":"mobile","policy":"backend","type":"string","value":"{{steps.N000009__qw5ij.responses.mobile}}"}],"node_config":{"activities":[[{"act_name":"USER_INFO_BY_ACCOUNT_NO","act_namespace":"account-server","arg_template":"{{account_no}}","arguments":[{"key":"account_no","ref":"{{arguments.mobile}}","source":"ref_node","type":"string","value":"{{arguments.mobile}}"}],"id":"A000045__58138","ret_template":[{"key":"member_id","label":"MemberId","name":"member_id","type":"int64"},{"key":"user_id","label":"UserID","name":"user_id","type":"int64"},{"key":"nid","label":"Nid","name":"nid","type":"string"}]}]],"enable_condition":"","switch_condition":""},"responses":[{"key":"member_id","label":"MemberId","ref":"{{steps.A000045__58138.responses.member_id}}","source":"ref_act","type":"int64","value":"{{steps.A000045__58138.responses.member_id}}"},{"key":"user_id","label":"UserID","ref":"{{steps.A000045__58138.responses.user_id}}","source":"ref_act","type":"int64","value":"{{steps.A000045__58138.responses.user_id}}"},{"key":"nid","label":"Nid","ref":"{{steps.A000045__58138.responses.nid}}","source":"ref_act","type":"string","value":"{{steps.A000045__58138.responses.nid}}"}],"ret_mapping":{}},"debugMode":false,"id":"N000036__70lic","name":"根据Mobile获取用户所有信息","type":"custom/Activity"},{"additionalInfo":{"node_param_labels":"{\"mobile\":\"Mobile\"}"},"configuration":{"arg_mapping":{},"arguments":[{"key":"mobile","policy":"backend","type":"string","value":"{{steps.N000009__qw5ij.responses.mobile}}"}],"node_config":{"activities":[[{"act_name":"ORDER_LATEST_SUCCESS_INFO","act_namespace":"credit-server","arguments":[{"key":"mobile","ref":"{{arguments.mobile}}","source":"ref_node","type":"string","value":"{{arguments.mobile}}"},{"key":"nid","ref":"","source":"value","type":"string","value":""},{"key":"account_user_id","ref":"","source":"value","type":"string","value":"0"}],"id":"A000046__wv1o7","ret_template":[{"key":"pay_account_id","label":"支付账号AccountID","name":"pay_account_id","type":"int64"},{"key":"pay_account","label":"支付账号AccountNO","name":"pay_account_no","type":"string"},{"key":"user_id","label":"用户UserID","name":"user_id","type":"int64"}]}],[{"act_name":"ACCOUNT_INFO_BY_ACCOUNT_ID","act_namespace":"account-server","arg_template":"{{account_id}}","arguments":[{"key":"account_id","ref":"{{steps.A000046__wv1o7.responses.pay_account_id}}","source":"ref_act","type":"int64","value":"{{steps.A000046__wv1o7.responses.pay_account_id}}"}],"id":"A000047__2gzwx","ret_template":[{"key":"provider_id","label":"关联提供商provide表id","name":"provider_id","type":"int64"},{"key":"account_no","label":"账号具体的值","name":"account_no","type":"string"},{"key":"account_type","label":"0-mobile, 1-bank, 2-email（同provider的不同卡类型","name":"account_type","type":"int64"}]}],[{"act_name":"SET_DEFAULT_ACCOUNT_BY_NO","act_namespace":"account-server","arguments":[{"key":"account_no","ref":"{{steps.A000046__wv1o7.responses.pay_account_no}}","source":"ref_act","type":"string","value":"{{steps.A000046__wv1o7.responses.pay_account_no}}"},{"key":"account_type","ref":"{{steps.A000047__2gzwx.responses.account_type}}","source":"ref_act","type":"int64","value":"{{steps.A000047__2gzwx.responses.account_type}}"},{"key":"user_id","ref":"{{steps.A000046__wv1o7.responses.user_id}}","source":"ref_act","type":"int64","value":"{{steps.A000046__wv1o7.responses.user_id}}"},{"key":"force_bind","ref":"","source":"value","type":"string","value":"false"}],"id":"A000044__yggo8","ret_template":[{"key":"","label":"是否设置成功","name":"result","type":"bool"}]}]],"enable_condition":"","switch_condition":""},"responses":[{"key":"result","label":"是否设置成功","ref":"{{steps.A000044__ojsca.responses.result}}","source":"ref_act","type":"bool","value":"{{steps.A000044__ojsca.responses.result}}"}],"ret_mapping":{}},"debugMode":false,"id":"N000038__tepn8","name":"设置上一次完成的收款方式为默认收款账号","type":"custom/Activity"},{"additionalInfo":{"node_param_labels":"{\"member_group\":\"member_group\",\"mobile\":\"mobile\",\"nid\":\"nid\"}"},"configuration":{"arg_mapping":{},"arguments":[{"key":"member_group","policy":"frontend+","type":"string","value":""},{"key":"nid","policy":"backend","type":"string","value":"{{steps.N000036__70lic.responses.nid}}"},{"key":"mobile","policy":"backend","type":"string","value":"{{steps.N000009__qw5ij.responses.mobile}}"}],"node_config":{"activities":[[{"act_name":"MEMBER_GROUP_NAME","act_namespace":"credit-server","arguments":[{"key":"member_group","ref":"{{arguments.member_group}}","source":"ref_node","type":"string","value":"{{arguments.member_group}}"},{"key":"nid","ref":"{{arguments.nid}}","source":"ref_node","type":"string","value":"{{arguments.nid}}"},{"key":"mobile","ref":"{{arguments.mobile}}","source":"ref_node","type":"string","value":"{{arguments.mobile}}"}],"id":"A000008__a6zge","ret_template":[{"key":"","label":"返回用户哪个客群","name":"result","type":"string"}]}]],"enable_condition":"","switch_condition":"[responses.group_code]"},"responses":[{"key":"group_code","label":"客群名","ref":"{{steps.A000008__a6zge.responses.result}}","source":"ref_act","type":"string","value":"{{steps.A000008__a6zge.responses.result}}"}],"ret_mapping":{}},"debugMode":false,"id":"N000004__cuae4","name":"用户位于白名单哪个客群GroupCode(M7/M8)","type":"custom/Activity"},{"additionalInfo":{"node_param_labels":"{\"audit_order_id\":\"信审订单ID\"}"},"configuration":{"arg_mapping":{},"arguments":[{"key":"audit_order_id","policy":"backend","type":"int64","value":"{{arguments.audit_order_id}}"}],"node_config":{"activities":[[{"act_name":"AUDIT_ORDER_INFO","act_namespace":"credit-server","arguments":[{"key":"audit_order_id","ref":"{{arguments.audit_order_id}}","source":"ref_node","type":"int64","value":"{{arguments.audit_order_id}}"},{"key":"order_no","ref":"","source":"value","type":"string","value":""}],"id":"A000023__4cosg"}]],"enable_condition":"","switch_condition":""},"responses":[{"key":"account_user_id","label":"用户UserID","ref":"{{steps.A000023__4cosg.responses.account_user_id}}","source":"ref_act","type":"int64","value":"{{steps.A000023__4cosg.responses.account_user_id}}"},{"key":"nid","label":"Nid","ref":"{{steps.A000023__4cosg.responses.nid}}","source":"ref_act","type":"string","value":"{{steps.A000023__4cosg.responses.nid}}"},{"key":"account_id","label":"AccountId","ref":"{{steps.A000023__4cosg.responses.account_id}}","source":"ref_act","type":"int64","value":"{{steps.A000023__4cosg.responses.account_id}}"},{"key":"mobile","label":"Mobile","ref":"{{steps.A000023__4cosg.responses.mobile}}","source":"ref_act","type":"string","value":"{{steps.A000023__4cosg.responses.mobile}}"},{"key":"member_id","label":"MemberId","ref":"{{steps.A000023__4cosg.responses.member_id}}","source":"ref_act","type":"int64","value":"{{steps.A000023__4cosg.responses.member_id}}"},{"key":"review_status","label":"信审订单状态码","ref":"{{steps.A000023__4cosg.responses.review_status}}","source":"ref_act","type":"int64","value":"{{steps.A000023__4cosg.responses.review_status}}"},{"key":"order_no","label":"订单编号OrderNo","ref":"{{steps.A000023__4cosg.responses.order_no}}","source":"ref_act","type":"string","value":"{{steps.A000023__4cosg.responses.order_no}}"},{"key":"subject_code","label":"主体编号（公司ID，如M301）","ref":"{{steps.A000023__4cosg.responses.subject_code}}","source":"ref_act","type":"string","value":"{{steps.A000023__4cosg.responses.subject_code}}"},{"key":"group_code","label":"用户所在客群（M7）","ref":"{{steps.A000023__4cosg.responses.group_code}}","source":"ref_act","type":"string","value":"{{steps.A000023__4cosg.responses.group_code}}"}],"ret_mapping":{}},"debugMode":false,"id":"N000009__qw5ij","name":"获取用户的信审订单表信息","type":"custom/Activity"},{"additionalInfo":{"node_param_labels":"{\"nid\":\"Nid\",\"user_id\":\"UserID\"}"},"configuration":{"arg_mapping":{},"arguments":[{"key":"nid","policy":"backend","type":"string","value":"{{steps.N000036__70lic.responses.nid}}"},{"key":"user_id","policy":"backend","type":"int64","value":"{{steps.N000036__70lic.responses.user_id}}"}],"node_config":{"activities":[[{"act_name":"M3_DEFAULT_BANK_INFO","act_namespace":"account-server","arg_template":"{{nid}}","arguments":[{"key":"nid","ref":"{{arguments.nid}}","source":"ref_node","type":"string","value":"{{arguments.nid}}"}],"id":"A000043__85dsc","ret_template":[{"key":"bank_account","label":"银行账号","name":"account_no","type":"string"},{"key":"cash_in","label":"收入","name":"cash_in","type":"float64"}]}],[{"act_name":"SET_DEFAULT_ACCOUNT_BY_NO","act_namespace":"account-server","arguments":[{"key":"account_no","ref":"{{steps.A000043__85dsc.responses.account_no}}","source":"ref_act","type":"string","value":"{{steps.A000043__85dsc.responses.account_no}}"},{"key":"account_type","ref":"","source":"value","type":"int64","value":"2"},{"key":"user_id","ref":"{{arguments.user_id}}","source":"ref_node","type":"int64","value":"{{arguments.user_id}}"},{"key":"force_bind","ref":"","source":"value","type":"bool","value":"true"}],"id":"A000044__b0pd1","ret_template":[{"key":"","label":"是否设置成功","name":"result","type":"bool"}]}]],"enable_condition":"","switch_condition":""},"responses":[{"key":"result","label":"是否设置成功","ref":"{{steps.A000044__b0pd1.responses.result}}","source":"ref_act","type":"bool","value":"{{steps.A000044__b0pd1.responses.result}}"}],"ret_mapping":{}},"debugMode":false,"id":"N000034__xbiay","name":"M3用户通过KYC获取到银行卡信息，并设置为默认收款方式","type":"custom/Activity"}]},"ruleChain":{"debugMode":false,"disabled":false,"id":"847b5ae3-c8f7-74d8-7ab0-6aa8b1ea5555","name":"自动设置默认收款方式","root":true}}
-func (s *WorkflowService) collectRequiredArguments(nodes []*types.RuleNode) map[string]bool {
-	required := make(map[string]bool)
-	if len(nodes) == 0 {
-		return required
+// getByDotPath 利用 gjson 按 "." 分隔的层级路径在 JSON 字符串中查找节点是否存在。
+// 例如 path="N000036__70lic.mobile" 会依次进入 .N000036__70lic.mobile，
+// 仅当路径真实存在时返回 true（gjson 的 Exists 判断）。
+func getByDotPath(jsonStr string, path string) bool {
+	if path == "" {
+		return false
 	}
-	argTplRe := regexp.MustCompile(`\{\{arguments\.([A-Za-z0-9_]+)}}`)
-	entryTplRe := regexp.MustCompile(`\{\{([A-Za-z0-9_]+)}}`)
-
-	var scan func(v any)
-	scan = func(v any) {
-		switch t := v.(type) {
-		case map[string]any:
-			for _, val := range t {
-				scan(val)
-			}
-		case []any:
-			for _, val := range t {
-				scan(val)
-			}
-		case string:
-			for _, m := range argTplRe.FindAllStringSubmatch(t, -1) {
-				if m[1] != "" {
-					required[m[1]] = true
-				}
-			}
-			for _, m := range entryTplRe.FindAllStringSubmatch(t, -1) {
-				name := m[1]
-				if name == "" || name == "arguments" || name == "steps" {
-					continue
-				}
-				required[name] = true
-			}
-		}
-	}
-	for _, node := range nodes {
-		if node == nil {
-			continue
-		}
-		scan(node.Configuration)
-	}
-	return required
+	return gjson.Parse(jsonStr).Get(path).Exists()
 }
 
 // filterPayloadArguments 仅保留 nodeGroups 中各节点实际引用的入参（{{arguments.xxx}} 及顶层 {{name}}），
 // 过滤掉其余无关参数，避免变量名污染。nodeGroups 可传多个节点集合（如根链节点、子链节点），
-// 全部按需保留。返回一个新的 map，不修改入参 payload。
+// 全部按需保留。返回一个新的 map，不修改入参 payload
+// 只处理第一层key
 func (s *WorkflowService) filterPayloadArguments(payload map[string]any, nodeGroups ...[]*types.RuleNode) map[string]any {
-	return payload
-
-	//required := make(map[string]bool)
-	//for _, nodes := range nodeGroups {
-	//	for k := range s.collectRequiredArguments(nodes) {
-	//		required[k] = true
-	//	}
-	//}
-	//filtered := make(map[string]any, len(required))
-	//for k, v := range payload {
-	//	if required[k] {
-	//		filtered[k] = v
-	//	}
-	//}
-	//return filtered
+	nodeList := make([]*types.RuleNode, 0)
+	lo.ForEach(nodeGroups, func(nodes []*types.RuleNode, _ int) {
+		nodeList = append(nodeList, nodes...)
+	})
+	allInputArguments := builder.CollectAllInputArguments(nodeList)
+	jsonPayloadMap := conv.KeyListFromMap(payload)
+	newPayload := make(map[string]any, len(allInputArguments))
+	for _, item := range allInputArguments {
+		if item == "" {
+			continue
+		}
+		if v, ok := payload[item]; ok {
+			newPayload[item] = v
+			continue
+		}
+		oneItem := strings.Split(item, ".")
+		if v, ok := payload[oneItem[0]]; ok {
+			newPayload[oneItem[0]] = v
+			continue
+		}
+		if v, ok := jsonPayloadMap[item]; ok {
+			newPayload[item] = v
+			continue
+		}
+	}
+	return newPayload
 }
 func (s *WorkflowService) ClearChainRootByKey(project, chainKey string) {
 	cacheKey := id.GetUUID(project + "-" + chainKey)
