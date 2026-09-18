@@ -592,6 +592,7 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 				_ = conv.Unmarshal(string(actDef.ReturnValues), &returnValues)
 			}
 		}
+		engine.MysqlLogger.Info("execOneActivity traceId:", metaData.TraceId, " NodeSpanID:", nodeSpanId, " param:", conv.String(dataMap))
 		// 执行Activity方法
 		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil), returnValues)
 		if err != nil {
