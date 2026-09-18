@@ -19,7 +19,11 @@ package commnode
 import (
 	"context"
 	"encoding/json"
+	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/goroutines"
+	"github.com/magic-lib/go-plat-utils/templates"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
+	"log"
 
 	"github.com/magic-lib/go-plat-utils/plugins/activity"
 )
@@ -149,4 +153,25 @@ func sendAlert(ctx context.Context, title, content string) {
 	goroutines.GoAsync(func(params ...any) {
 		defaultAlertSender.SendAlert(ctx, title, content)
 	})
+}
+
+func GetActivityParam(ruleEngine *templates.RuleExprEngine, inputParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
+	newBindConfig := make([]*param.BindConfig, 0)
+	copy(newBindConfig, bindConfig)
+	for i, item := range newBindConfig {
+		exp := conv.String(item.Value)
+		if item.Type == "formula" {
+			expAny, err := ruleEngine.RunString(exp, inputParam)
+			if err != nil {
+				log.Printf("activityNode getActivityParam: RunString err: %v", err)
+				continue
+			}
+			newBindConfig[i].Value = expAny
+			continue
+		}
+		ruleObj := templates.NewTemplate(exp, templates.DefaultPrefix, templates.DefaultSuffix)
+		tempVal := ruleObj.Replace(inputParam)
+		newBindConfig[i].Value, _ = conv.ConvertForTypeString(item.Type, tempVal)
+	}
+	return param.MergeArgumentsByBinding(inputParam, newBindConfig)
 }

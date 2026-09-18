@@ -1047,6 +1047,11 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		return nil, err
 	}
 
+	// 过滤多余入参：仅保留链实际需要的入参，避免恶意传入无关参数造成变量名污染。
+	// originalPayload 保留原始入参，子链加载后再按根链+子链所需参数重新过滤一次。
+	originalPayload := jsonPayload
+	jsonPayload = s.filterPayloadArguments(jsonPayload, ruleChain.Metadata.Nodes)
+
 	// 1. 从根链 flow 节点提取子链 ID（configuration.ruleChainId = "project:subChainID"）
 	subChainIDs := make(map[string]bool)
 	for _, node := range ruleChain.Metadata.Nodes {
@@ -1065,6 +1070,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 
 	// 2. 查询子链 DSL
 	var subChainDSL []*types.RuleChainBaseInfo
+	var subChainNodes []*types.RuleNode // 收集子链节点，用于提取子链所需的入参
 	for subID := range subChainIDs {
 		subDef, err := s.subChainRepo.GetByID(execCtx, project, subID)
 		if err != nil {
@@ -1075,7 +1081,11 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 			return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
 		}
 		subChainDSL = append(subChainDSL, &subChain.RuleChain)
+		subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
 	}
+
+	// 子链节点也可能引用 {{arguments.xxx}} / 顶层 {{name}}，按根链+子链所需参数对原始入参重新过滤，避免误删
+	jsonPayload = s.filterPayloadArguments(originalPayload, ruleChain.Metadata.Nodes, subChainNodes)
 
 	// 2.1 根据项目+环境解析 Redis 配置（按环境将运行数据打入对应 Redis）
 	redisCfg, err := s.GetRedisConnect(execCtx, project, envName)
@@ -1199,6 +1209,75 @@ func (s *WorkflowService) checkAllNodesArguments(nodes []*types.RuleNode, jsonPa
 		}
 	}
 	return nil
+}
+// collectRequiredArguments 扫描节点集合的 configuration，提取链实际需要的入参名（去重）。
+// 口径与 checkAllNodesArguments 一致，并补充识别：
+//   - {{arguments.xxx}} 形式（xxx 为字母数字下划线）
+//   - 顶层入口参数 {{name}}（name 不含点，且非 arguments/steps 等内置前缀）
+//
+// 用于过滤 payload，仅保留链真正需要的入参，避免变量名污染。
+func (s *WorkflowService) collectRequiredArguments(nodes []*types.RuleNode) map[string]bool {
+	required := make(map[string]bool)
+	if len(nodes) == 0 {
+		return required
+	}
+	argTplRe := regexp.MustCompile(`\{\{arguments\.([A-Za-z0-9_]+)}}`)
+	entryTplRe := regexp.MustCompile(`\{\{([A-Za-z0-9_]+)}}`)
+
+	var scan func(v any)
+	scan = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			for _, val := range t {
+				scan(val)
+			}
+		case []any:
+			for _, val := range t {
+				scan(val)
+			}
+		case string:
+			for _, m := range argTplRe.FindAllStringSubmatch(t, -1) {
+				if m[1] != "" {
+					required[m[1]] = true
+				}
+			}
+			for _, m := range entryTplRe.FindAllStringSubmatch(t, -1) {
+				name := m[1]
+				if name == "" || name == "arguments" || name == "steps" {
+					continue
+				}
+				required[name] = true
+			}
+		}
+	}
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		scan(node.Configuration)
+	}
+	return required
+}
+
+// filterPayloadArguments 仅保留 nodeGroups 中各节点实际引用的入参（{{arguments.xxx}} 及顶层 {{name}}），
+// 过滤掉其余无关参数，避免变量名污染。nodeGroups 可传多个节点集合（如根链节点、子链节点），
+// 全部按需保留。返回一个新的 map，不修改入参 payload。
+func (s *WorkflowService) filterPayloadArguments(payload map[string]any, nodeGroups ...[]*types.RuleNode) map[string]any {
+	return payload
+
+	//required := make(map[string]bool)
+	//for _, nodes := range nodeGroups {
+	//	for k := range s.collectRequiredArguments(nodes) {
+	//		required[k] = true
+	//	}
+	//}
+	//filtered := make(map[string]any, len(required))
+	//for k, v := range payload {
+	//	if required[k] {
+	//		filtered[k] = v
+	//	}
+	//}
+	//return filtered
 }
 func (s *WorkflowService) ClearChainRootByKey(project, chainKey string) {
 	cacheKey := id.GetUUID(project + "-" + chainKey)

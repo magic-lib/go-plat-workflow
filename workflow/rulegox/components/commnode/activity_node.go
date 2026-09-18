@@ -612,7 +612,7 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 }
 
 func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
-	return GetActivityParam(x.ruleObj, allParam, bindConfig)
+	return replaceBindConfig(x.ruleObj, allParam, bindConfig)
 }
 
 // routeBySwitchCondition 当该节点配置了 switch_condition 时，在活动成功执行后
@@ -642,7 +642,7 @@ func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaD
 	return relationType, nil
 }
 
-func GetActivityParam(ruleEngine *templates.RuleExprEngine, allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
+func replaceBindConfig(ruleEngine *templates.RuleExprEngine, allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
 	actParam := make(map[string]any)
 	for _, item := range bindConfig {
 		exp := conv.String(item.Value)
