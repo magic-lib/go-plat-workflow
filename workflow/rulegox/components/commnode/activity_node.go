@@ -486,6 +486,7 @@ func (x *ActivityNode) getNodeFlowContext(ctx types.RuleContext, allParam *param
 	if err != nil {
 		return nil, err
 	}
+	engine.MysqlLogger.Info("NodeArguments end:", currNodeId, "arg:", conv.String(nodeParams))
 	allParam.SetStepArguments(currNodeId, nodeParams) // 设置当前节点参数
 
 	stepFlowCtx := paramx.NewFlowContext(string(currNodeId), id.NewUUID(), nodeParams)

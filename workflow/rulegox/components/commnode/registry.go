@@ -21,6 +21,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/rulego/rulego/api/types"
 	"github.com/samber/lo"
 	"strings"
@@ -37,6 +38,8 @@ type CommConfiguration struct {
 // NodeArguments 根据传入的参数和节点配置，生成节点执行所需的参数映射
 func NodeArguments(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTemplate map[string]any, arguments []*param.BindConfig) (map[string]any, error) {
 	// 这里需要复制一下 arguments，因为 arguments 是引用传递，会导致后续的修改影响到原始的 arguments
+	engine.MysqlLogger.Info("NodeArguments start:", nodeId, ": arguments :", conv.String(arguments), "argTemplate:", conv.String(argTemplate), " allParamCtx:", conv.String(allParamCtx))
+
 	if len(arguments) > 0 {
 		cloned := make([]*param.BindConfig, len(arguments))
 		for i, arg := range arguments {

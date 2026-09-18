@@ -17,11 +17,11 @@ func TestInvokeWorkerFlowAPI_Success(t *testing.T) {
 	)
 
 	req := &workflow.InvokeRequest{
-		ChainKey: "R000048-3wbb6",
+		ChainKey: "R000003-9q0pq",
 		Payload: map[string]any{
-			"group_code":     "M3",
-			"audit_order_id": 555,
-			"mobile":         "12345",
+			"group_code": "M3",
+			"user_id":    10013,
+			"mobile":     "0972921661",
 		},
 	}
 

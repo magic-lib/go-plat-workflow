@@ -110,19 +110,19 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 
 	// 6. 存储到数据库
 	def := &workflow.RootChainDef{
-		Project:            req.Project,
-		ChainID:            req.ChainID,
-		ChainKey:           req.ChainKey,
-		Name:               req.ChainName,
-		Description:        req.Description,
-		DSLJSON:            string(dslJSON),
-		Status:             1,
-		NodeIDs:            strings.Join(req.NodeIDs, ","),
-		SubChainIDs:        strings.Join(req.SubChainIDs, ","),
-		ConnectionsData:    string(connectionsJSON),
-		NodeParamOverrides: string(nodeParamOverridesJSON),
+		Project:             req.Project,
+		ChainID:             req.ChainID,
+		ChainKey:            req.ChainKey,
+		Name:                req.ChainName,
+		Description:         req.Description,
+		DSLJSON:             string(dslJSON),
+		Status:              1,
+		NodeIDs:             strings.Join(req.NodeIDs, ","),
+		SubChainIDs:         strings.Join(req.SubChainIDs, ","),
+		ConnectionsData:     string(connectionsJSON),
+		NodeParamOverrides:  string(nodeParamOverridesJSON),
 		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
-		NodeNameOverrides:  string(nodeNameOverridesJSON),
+		NodeNameOverrides:   string(nodeNameOverridesJSON),
 	}
 	// 先尝试更新（按 project+chain_id），不存在再创建。
 	// 避免每次保存都物理删除重建导致自增主键 id 持续增长。
@@ -194,19 +194,19 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 
 	// 复用根链节点构建逻辑（含 flow 节点生成 + 连接转换 + FirstNodeIndex/Configuration）
 	fullReq := &workflow.BuildRequest{
-		Project:            req.Project,
-		ChainID:            req.ChainID,
-		ChainName:          req.ChainName,
-		Description:        req.Description,
-		NodeIDs:            req.NodeIDs,
-		SubChainIDs:        req.SubChainIDs,
-		Connections:        req.Connections,
-		DebugMode:          req.DebugMode,
-		Configuration:      req.Configuration,
-		FirstNodeIndex:     req.FirstNodeIndex,
-		NodeParamOverrides: req.NodeParamOverrides,
+		Project:             req.Project,
+		ChainID:             req.ChainID,
+		ChainName:           req.ChainName,
+		Description:         req.Description,
+		NodeIDs:             req.NodeIDs,
+		SubChainIDs:         req.SubChainIDs,
+		Connections:         req.Connections,
+		DebugMode:           req.DebugMode,
+		Configuration:       req.Configuration,
+		FirstNodeIndex:      req.FirstNodeIndex,
+		NodeParamOverrides:  req.NodeParamOverrides,
 		NodeSwitchOverrides: req.NodeSwitchOverrides,
-		NodeNameOverrides:  req.NodeNameOverrides,
+		NodeNameOverrides:   req.NodeNameOverrides,
 	}
 	ruleChain := b.buildRuleChain(fullReq, nodes, subChains)
 	// 子链标记为非 Root
@@ -242,18 +242,18 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 	nodeNameOverridesJSON, _ := json.Marshal(nodeNameOverrides)
 
 	return &workflow.SubChainDef{
-		Project:            req.Project,
-		ChainID:           req.ChainID,
-		Name:               req.ChainName,
-		Description:        req.Description,
-		DSLJSON:            string(dslJSON),
-		Status:             1,
-		SubChainIDs:        strings.Join(req.SubChainIDs, ","),
-		NodeIDs:            strings.Join(req.NodeIDs, ","),
-		ConnectionsData:    string(connectionsJSON),
-		NodeParamOverrides: string(nodeParamOverridesJSON),
+		Project:             req.Project,
+		ChainID:             req.ChainID,
+		Name:                req.ChainName,
+		Description:         req.Description,
+		DSLJSON:             string(dslJSON),
+		Status:              1,
+		SubChainIDs:         strings.Join(req.SubChainIDs, ","),
+		NodeIDs:             strings.Join(req.NodeIDs, ","),
+		ConnectionsData:     string(connectionsJSON),
+		NodeParamOverrides:  string(nodeParamOverridesJSON),
 		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
-		NodeNameOverrides:  string(nodeNameOverridesJSON),
+		NodeNameOverrides:   string(nodeNameOverridesJSON),
 	}, nil
 }
 
@@ -338,7 +338,8 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 
 		// 构建用户传入参数（frontend），override key 使用实例 ID 以区分同一节点的多次添加
 		frontendMap := make(map[string]any)
-		privateKeys := make([]string, 0) // 私有参数 key 列表（需从入参二级结构取值）
+		frontendSrc := make(map[string]string) // 记录每个覆盖参数的来源 src，用于设置 DSL 的 policy
+		privateKeys := make([]string, 0)       // 私有参数 key 列表（需从入参二级结构取值）
 		if nodeOverrides, ok := overrides[inst.instanceId]; ok {
 			for k, v := range nodeOverrides {
 				// 兼容两种格式：
@@ -348,6 +349,9 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 				if m, ok := v.(map[string]any); ok {
 					if val, exists := m["value"]; exists {
 						frontendMap[k] = val
+						if src, ok := m["src"].(string); ok {
+							frontendSrc[k] = src
+						}
 						// 记录私有参数 key，供 DSL 持久化
 						if pv, ok := m["private"].(bool); ok && pv {
 							privateKeys = append(privateKeys, k)
@@ -359,6 +363,32 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			}
 		}
 
+		// 编排参数来源对应的 DSL policy（不改节点参数定义本身，仅在此处改写 DSL）：
+		//  - ref_node（调用传入）：调用方本身就是来源，保留节点定义默认 policy（调用方优先）
+		//  - ref_act（引用前序）：已配置来源 → 强制后台 PolicyBackendOnly，调用方同名不可覆盖
+		//  - value（固定配置）且值为空：回退到节点参数定义里的默认 policy
+		//  - value（固定配置）且值非空：已配置来源 → 强制后台 PolicyBackendOnly
+		isEmptyValue := func(v any) bool {
+			if v == nil {
+				return true
+			}
+			s, ok := v.(string)
+			return ok && s == ""
+		}
+		resolvePolicy := func(src string, v any, defaultPolicy param.KeySourcePolicy) param.KeySourcePolicy {
+			switch src {
+			case "ref_node":
+				return defaultPolicy // 调用传入：保持调用方优先
+			case "ref_act":
+				return param.KeyPolicyBackendOnly // 引用前序：强制后台
+			default: // value / 无来源
+				if isEmptyValue(v) {
+					return defaultPolicy // 固定配置为空：回退到节点参数定义默认 policy
+				}
+				return param.KeyPolicyBackendOnly // 固定配置非空：强制后台
+			}
+		}
+
 		if len(bindConfigs) > 0 {
 			// 将用户覆盖值合并进 BindConfig 数组（保留 key/value/policy），
 			// 不直接展开为具体值，便于后期执行时按 policy 判断是否需要直接覆盖。
@@ -366,20 +396,22 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			usedKeys := make(map[string]bool, len(bindConfigs))
 			for _, bc := range bindConfigs {
 				if v, ok := frontendMap[bc.Key]; ok {
-					nb := *bc           // 复制，避免修改节点定义缓存
-					nb.Value = v        // 用户覆盖值
+					nb := *bc // 复制，避免修改节点定义缓存
+					nb.Value = v
+					// 编排里已配置来源：按来源改写 DSL 的 policy，避免调用方传同名参数覆盖配置的来源
+					nb.Policy = resolvePolicy(frontendSrc[bc.Key], v, bc.Policy)
 					args = append(args, &nb)
 					usedKeys[bc.Key] = true
 				} else {
 					args = append(args, bc)
 				}
 			}
-			// 用户新增了节点定义中不存在的 key，统一追加（默认直接覆盖策略）
+			// 用户新增了节点定义中不存在的 key，统一追加（按来源设置 policy）
 			for k, v := range frontendMap {
 				if usedKeys[k] {
 					continue
 				}
-				args = append(args, &param.BindConfig{Key: k, Value: v})
+				args = append(args, &param.BindConfig{Key: k, Value: v, Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
 			}
 			// arguments 为 BindConfig 数组 JSON：[{"key":..,"value":..,"policy":..}, ...]
 			config["arguments"] = args
@@ -387,7 +419,7 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			// 无参数定义时的兜底：仍以 BindConfig 数组格式保存，便于后期判断覆盖策略
 			args := make([]*param.BindConfig, 0, len(frontendMap))
 			for k, v := range frontendMap {
-				args = append(args, &param.BindConfig{Key: k, Value: v})
+				args = append(args, &param.BindConfig{Key: k, Value: v, Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
 			}
 			config["arguments"] = args
 		}
@@ -531,10 +563,9 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 			Configuration: config,
 		},
 		Metadata: types.RuleMetadata{
-			FirstNodeIndex:  firstNodeIndex,
-			Nodes:           ruleNodes,
-			Connections:     connections,
+			FirstNodeIndex: firstNodeIndex,
+			Nodes:          ruleNodes,
+			Connections:    connections,
 		},
 	}
 }
-
