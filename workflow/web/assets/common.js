@@ -6465,10 +6465,25 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
       lines.push(`    ${safe}["<b>? ${esc(id)}</b>"]`);
     }
   });
+  // 合并相同 from->to 的连线：relationType 用逗号分隔统一在一条线上展示，减少线条使图更清晰
+  const mergedEdges = [];
+  const mergedEdgeMap = {};
   conns.forEach(c => {
     const from = idMap[c.from_id];
     const to = idMap[c.to_id];
-    if (from && to) lines.push(`    ${from} -->|${c.type||'Success'}| ${to}`);
+    if (!from || !to) return;
+    const key = c.from_id + '|' + c.to_id;
+    const t = c.type || 'Success';
+    if (mergedEdgeMap[key]) {
+      if (!mergedEdgeMap[key].types.includes(t)) mergedEdgeMap[key].types.push(t);
+    } else {
+      const entry = { from: from, to: to, types: [t] };
+      mergedEdgeMap[key] = entry;
+      mergedEdges.push(entry);
+    }
+  });
+  mergedEdges.forEach(m => {
+    lines.push(`    ${m.from} -->|${m.types.join(',')}| ${m.to}`);
   });
   const subClasses = [...subSet].map(id => idMap[id]).filter(Boolean).join(',');
   // 根据节点 kind 类型动态生成不同背景色（每种 kind 一组 classDef）
