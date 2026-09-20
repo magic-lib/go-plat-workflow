@@ -6,12 +6,13 @@ require (
 	github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf
 	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915073806-8eaab07bf01d
 	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260908085532-bcf290ddeea0
-	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20260918031214-d2d7786db6de
+	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20260920022949-0d2567ce5958
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.35.1
 	github.com/rulego/rulego v0.36.0
 	github.com/samber/lo v1.52.0
+	github.com/tidwall/gjson v1.18.0
 	go.uber.org/multierr v1.11.0
 	golang.org/x/crypto v0.48.0
 	gorm.io/driver/mysql v1.6.0
@@ -133,13 +134,11 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/timandy/routine v1.1.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
-	github.com/ucarion/jcs v0.1.2 // indirect
 	github.com/vcaesar/cedar v0.20.2 // indirect
 	github.com/viant/toolbox v0.37.0 // indirect
 	github.com/viant/xreflect v0.0.0-20230303201326-f50afb0feb0d // indirect

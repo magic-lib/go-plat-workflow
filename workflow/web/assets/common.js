@@ -5437,7 +5437,14 @@ function inferOrchParamPreset(val) {
 }
 
 function loadToExecuteByIndex(i) { loadToExecute(window._rootChainsForEdit[i]); }
-function showFlowchartByIndex(i) { showFlowchart(window._rootChainsForEdit[i]); }
+// 流程图：跳转到独立编排页（orch.html）的只读预览模式（view=1），
+// 与「编排」打开同一页面，但隐藏左侧编辑面板、Live Preview 全宽展示。
+function showFlowchartByIndex(i) {
+  const c = window._rootChainsForEdit[i];
+  if (!c) return;
+  const p = encodeURIComponent(getProject() || '');
+  location.href = '/orch?target=root&chain_id=' + encodeURIComponent(c.chain_id) + '&view=1' + (p ? '&project=' + p : '');
+}
 function editRootChainByIndex(i) {
   const c = window._rootChainsForEdit[i];
   if (c) orchOpenInPageRoot(c.chain_id);
@@ -6261,27 +6268,29 @@ function onOrchSelectionChange() {
 }
 
 // Refresh connection dropdown options based on selected items
-function refreshOrchConnOptions() {
+// 生成 Connections 下拉的 option HTML：仅展示中文名（与右侧 Live Preview 名称一致），
+// 同一中文名出现多次时（同一 node 多次添加）附加实例后缀便于区分，使其与右侧 Id: 标识对应。
+function orchConnOptionsHtml() {
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
-
-  // Build options for each node (显示名称 + 类型，instanceId 全局唯一不再展示序号)
-  const nodeOpts = nodeIds.map(id => {
+  const items = [];
+  nodeIds.forEach(id => {
     const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
-    const label = inst ? inst.name : id;
-    const extra = inst ? (inst.nodeId + ' · ' + inst.type) : '';
-    return `<option value="${esc(id)}">⚙ ${esc(label)}${extra ? ' ('+esc(extra)+')' : ''}</option>`;
-  }).join('');
-
-  const subOpts = subIds.map(id => {
+    items.push({ id: id, name: inst ? (inst.name || id) : id, prefix: '⚙' });
+  });
+  subIds.forEach(id => {
     const s = _orchSubChains.find(x => x.chain_id === id);
-    const label = s && s.name ? s.name : id;
-    const extra = s && s.name ? id : '';
-    return `<option value="${esc(id)}">🔗 ${esc(label)}${extra ? ' ('+esc(extra)+')' : ''}</option>`;
+    items.push({ id: id, name: (s && s.name) ? s.name : id, prefix: '🔗' });
+  });
+  // 名称后始终附加完整实例 ID（如 N000034__hflz1），方便区分，与右侧 Live Preview 的 Id: 标识对应
+  return items.map(it => {
+    const label = it.name + ' · ' + it.id;
+    return `<option value="${esc(it.id)}">${it.prefix} ${esc(label)}</option>`;
   }).join('');
+}
 
-  const allOpts = nodeOpts + subOpts;
-  const hasSubs = subIds.length > 0;
+function refreshOrchConnOptions() {
+  const allOpts = orchConnOptionsHtml();
 
   // Update all existing connection rows' select elements
   document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(row => {
@@ -6310,24 +6319,7 @@ function addOrchConnRow(fromId, toId, connType) {
   const emptyEl = document.getElementById('orch-conn-empty');
   if (emptyEl) emptyEl.style.display = 'none';
 
-  const nodeIds = getSelectedOrchNodeIds();
-  const subIds = getSelectedOrchSubIds();
-  const nodeOpts = nodeIds.map(id => {
-    // id 是实例 ID（nodeId__随机段），需按实例的 nodeId 查定义
-    const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
-    const nodeId = inst ? inst.nodeId : id.split('__')[0];
-    const n = _orchNodes.find(x => x.node_id === nodeId);
-    const label = n && n.name ? n.name : id;
-    const extra = n && n.name ? id + ' · ' + n.type : (n ? n.type : '');
-    return `<option value="${esc(id)}">⚙ ${esc(label)}${extra ? ' ('+esc(extra)+')' : ''}</option>`;
-  }).join('');
-  const subOpts = subIds.map(id => {
-    const s = _orchSubChains.find(x => x.chain_id === id);
-    const label = s && s.name ? s.name : id;
-    const extra = s && s.name ? id : '';
-    return `<option value="${esc(id)}">🔗 ${esc(label)}${extra ? ' ('+esc(extra)+')' : ''}</option>`;
-  }).join('');
-  const allOpts = nodeOpts + subOpts;
+  const allOpts = orchConnOptionsHtml();
 
   const row = document.createElement('div');
   row.className = 'orch-conn-row';
@@ -6337,6 +6329,8 @@ function addOrchConnRow(fromId, toId, connType) {
     <span class="conn-arrow">→</span>
     <select data-role="orch-to">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
     <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'')}" title="连接类型：留空表示新增未指定（Success / Failure / True / False / Stream 或自定义）">
+    <button class="btn-move" onclick="moveOrchConnRow('orch-conn-row-${orchConnSeq}',-1)" title="上移">▲</button>
+    <button class="btn-move" onclick="moveOrchConnRow('orch-conn-row-${orchConnSeq}',1)" title="下移">▼</button>
     <button class="btn-remove" onclick="removeOrchConnRow('orch-conn-row-${orchConnSeq}')" title="删除">&times;</button>
   `;
   container.appendChild(row);
@@ -6349,6 +6343,18 @@ function addOrchConnRow(fromId, toId, connType) {
   row.querySelector('[data-role="orch-from"]').addEventListener('change', onOrchChange);
   row.querySelector('[data-role="orch-to"]').addEventListener('change', onOrchChange);
   row.querySelector('[data-role="orch-type"]').addEventListener('input', onOrchChange);
+  updateOrchConnMoveState();
+}
+
+// 更新连接行上移/下移按钮的可用状态（首行禁上移、末行禁下移）
+function updateOrchConnMoveState() {
+  const rows = Array.from(document.querySelectorAll('#orch-conn-container .orch-conn-row'));
+  rows.forEach((row, idx) => {
+    const up = row.querySelector('.btn-move[onclick*=",-1)"]');
+    const down = row.querySelector('.btn-move[onclick*=",1)"]');
+    if (up) up.disabled = idx === 0;
+    if (down) down.disabled = idx === rows.length - 1;
+  });
 }
 
 function removeOrchConnRow(rowId) {
@@ -6359,6 +6365,23 @@ function removeOrchConnRow(rowId) {
     const emptyEl = document.getElementById('orch-conn-empty');
     if (emptyEl) emptyEl.style.display = '';
   }
+  updateOrchConnMoveState();
+  onOrchChange();
+}
+
+// 连接行上移/下移：直接在容器内移动 DOM 节点，顺序即连接顺序（collectOrchConnections 按 DOM 顺序读取）
+function moveOrchConnRow(rowId, dir) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const container = document.getElementById('orch-conn-container');
+  if (dir < 0) {
+    const prev = row.previousElementSibling;
+    if (prev && prev.classList.contains('orch-conn-row')) container.insertBefore(row, prev);
+  } else {
+    const next = row.nextElementSibling;
+    if (next && next.classList.contains('orch-conn-row')) container.insertBefore(next, row);
+  }
+  updateOrchConnMoveState();
   onOrchChange();
 }
 
@@ -7258,6 +7281,8 @@ function saveOrchSwitchOverride() {
   renderOrchPreview();
   // 图上编辑后立即刷新下方 DSL Preview，保持联动
   renderOrchDslPreview();
+  // 名称变更后同步刷新 Connections 下拉，使左侧 select 展示名与右侧 Live Preview 一致
+  refreshOrchConnOptions();
   showToast(isSwitchable ? '已更新该节点名称与路由条件（仅本链生效）' : '已更新该节点名称（仅本链实例生效）', 'success');
 }
 

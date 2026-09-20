@@ -260,6 +260,12 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .orch-pager-info { font-size: .72rem; color: var(--text-muted); white-space: nowrap; }
 /* 编排页 root/sub 模式内容区分：默认隐藏，由 setOrchTarget 控制显隐 */
 .root-only, .sub-only { display: none; }
+/* 流程图只读预览模式：隐藏左侧编辑面板，Live Preview 全宽展示 */
+body.orch-viewonly .orch-layout { grid-template-columns: 1fr; }
+body.orch-viewonly .orch-left { display: none; }
+body.orch-viewonly .orch-right { position: static; max-width: none; }
+body.orch-viewonly .orch-preview-area { min-height: 70vh; }
+body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-target-hint { font-size: .76rem; color: var(--text-muted); margin: 4px 0 0; line-height: 1.5; }
 .orch-chain-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .orch-chain-info .form-group { margin-bottom: 0; }
@@ -279,6 +285,9 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .orch-conn-row input.conn-type-sel:focus { border-color: var(--primary); }
 .orch-conn-row .btn-remove { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1.1rem; padding: 0 2px; line-height: 1; flex-shrink: 0; }
 .orch-conn-row .btn-remove:hover { color: #dc2626; }
+.orch-conn-row .btn-move { background: none; border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; font-size: .8rem; padding: 0 5px; line-height: 1; border-radius: 4px; flex-shrink: 0; }
+.orch-conn-row .btn-move:hover { color: var(--primary); border-color: var(--primary); }
+.orch-conn-row .btn-move:disabled { opacity: .35; cursor: not-allowed; }
 .orch-conn-row .conn-arrow { color: var(--text-muted); font-weight: 700; font-size: .85rem; flex-shrink: 0; }
 /* Preview in orchestrate */
 .orch-preview-area { border: 1px solid var(--border); border-radius: 6px; flex: 1; min-height: 0; display: block; overflow: auto; background: #fafcfd; position: relative; }

@@ -786,6 +786,8 @@ window.addEventListener('DOMContentLoaded', async function () {
   }
   const target = params.get('target') || 'root';
   const chainId = params.get('chain_id') || '';
+  // 只读预览模式（流程图按钮入口）：隐藏左侧编辑面板，Live Preview 全宽展示
+  if (params.get('view') === '1') document.body.classList.add('orch-viewonly');
   setOrchTarget(target);
   try {
     if (chainId) {
