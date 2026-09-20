@@ -156,7 +156,7 @@ func sendAlert(ctx context.Context, title, content string) {
 }
 
 func GetActivityParam(ruleEngine *templates.RuleExprEngine, inputParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
-	newBindConfig := make([]*param.BindConfig, 0)
+	newBindConfig := make([]*param.BindConfig, len(bindConfig))
 	copy(newBindConfig, bindConfig)
 	for i, item := range newBindConfig {
 		exp := conv.String(item.Value)
@@ -167,11 +167,23 @@ func GetActivityParam(ruleEngine *templates.RuleExprEngine, inputParam map[strin
 				continue
 			}
 			newBindConfig[i].Value = expAny
+			if oneValue, ok := inputParam[item.Key]; ok {
+				oneValue1, ok1 := conv.ConvertForTypeString(item.Type, oneValue)
+				if ok1 {
+					inputParam[item.Key] = oneValue1
+				}
+			}
 			continue
 		}
 		ruleObj := templates.NewTemplate(exp, templates.DefaultPrefix, templates.DefaultSuffix)
 		tempVal := ruleObj.Replace(inputParam)
 		newBindConfig[i].Value, _ = conv.ConvertForTypeString(item.Type, tempVal)
+		if oneValue, ok := inputParam[item.Key]; ok {
+			oneValue1, ok1 := conv.ConvertForTypeString(item.Type, oneValue)
+			if ok1 {
+				inputParam[item.Key] = oneValue1
+			}
+		}
 	}
 	return param.MergeArgumentsByBinding(inputParam, newBindConfig)
 }
