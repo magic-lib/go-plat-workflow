@@ -39,6 +39,29 @@ type ReturnValue struct {
 	Key   string `json:"key,omitempty"`
 	Type  string `json:"type,omitempty"`
 }
+type NodeConfigArgument struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Type        string `json:"type"`
+	Value       string `json:"value"`
+	Required    bool   `json:"required"`
+	Policy      string `json:"policy"`
+	Description string `json:"description"`
+}
+type NodeConfigOverrideArgument struct {
+	Private bool   `json:"private"`
+	Src     string `json:"src"`
+	Value   string `json:"value"`
+}
+
+type NodeConfigResponse struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Type   string `json:"type"`
+	Source string `json:"source"`
+	Ref    string `json:"ref"`
+	Value  string `json:"value"`
+}
 
 // candidateConfigPaths 默认配置文件候选路径（按顺序尝试，存在即用）。
 // 1) 可执行文件同级的 config/app.yaml

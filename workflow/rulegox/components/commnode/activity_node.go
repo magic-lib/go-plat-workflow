@@ -221,8 +221,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	nodeStr := string(currNodeId)
 
 	goroutines.GoAsync(func(param ...any) {
-		logInfoStr := fmt.Sprintf("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d start", actMetaData.TraceId, nodeStr, 0)
-		engine.MysqlLogger.Info(logInfoStr)
+		engine.MysqlLogger.Info(fmt.Sprintf("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d start", actMetaData.TraceId, nodeStr, 0))
 	})
 
 	nodeSpanId := id.GetUUID(nodeStr)
@@ -234,6 +233,10 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		logInfoStr := fmt.Sprintf("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d end", actMetaData.TraceId, nodeStr, durationMs)
 		if err != nil {
 			engine.MysqlLogger.Error(logInfoStr)
+			engine.MysqlLogErrorString("ActivityNode:", "OnMsg allParam:",
+				"allParam:", allParam,
+				"traceId:", actMetaData.TraceId, "allParamStr:", allParamStr,
+				"nodeSpanId:", nodeSpanId, "actMetaData:", actMetaData, "stepFlowCtx:", stepFlowCtx)
 		} else {
 			engine.MysqlLogger.Info(logInfoStr)
 		}
@@ -329,7 +332,7 @@ func (x *ActivityNode) onMsgSuccessEndExec(ctx types.RuleContext, msg types.Rule
 		// 如果没有定义，就将所有activity的返回值进行合并输出
 		newDataMap := make(map[string]any)
 		for _, oneStep := range stepFlowCtx.Steps {
-			if cond.IsJsonMap(conv.String(oneStep.Responses)) {
+			if cond.IsJsonObject(conv.String(oneStep.Responses)) {
 				newDataMap2 := make(map[string]any)
 				_ = conv.Unmarshal(conv.String(oneStep.Responses), &newDataMap2)
 				for k, v := range newDataMap2 {
@@ -593,7 +596,12 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 				_ = conv.Unmarshal(string(actDef.ReturnValues), &returnValues)
 			}
 		}
-		engine.MysqlLogger.Info("execOneActivity traceId:", metaData.TraceId, " NodeSpanID:", nodeSpanId, " param:", conv.String(dataMap))
+		engine.MysqlLogger.Info("execOneActivity traceId:", metaData.TraceId, " NodeSpanID:", nodeSpanId,
+			" param:", conv.String(dataMap),
+			" arguments:", conv.String(newAct.Arguments),
+			" allDataMap:", conv.String(allDataMap), map[string]any{
+				"trace_id": metaData.TraceId,
+			})
 		// 执行Activity方法
 		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil), returnValues)
 		if err != nil {

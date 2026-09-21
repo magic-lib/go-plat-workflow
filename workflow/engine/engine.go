@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/logs"
+	"github.com/samber/lo"
 	"strings"
 	"sync"
 
@@ -23,6 +24,31 @@ var (
 )
 
 var MysqlLogger logs.ILogger
+
+func changeLogStr(p ...any) string {
+	if len(p) == 0 {
+		return ""
+	}
+	pStr := make([]string, 0, len(p))
+	lo.ForEach(p, func(item any, index int) {
+		pStr = append(pStr, conv.String(item))
+	})
+	return strings.Join(pStr, " ")
+}
+func MysqlLogInfoString(p ...any) {
+	pStr := changeLogStr(p...)
+	if pStr == "" {
+		return
+	}
+	MysqlLogger.Info(pStr)
+}
+func MysqlLogErrorString(p ...any) {
+	pStr := changeLogStr(p...)
+	if pStr == "" {
+		return
+	}
+	MysqlLogger.Error(pStr)
+}
 
 // RootChainStore 根规则链仓储接口（engine 包内定义，避免循环依赖）。
 type RootChainStore interface {

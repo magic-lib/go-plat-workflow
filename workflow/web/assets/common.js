@@ -6572,6 +6572,9 @@ function orchBuildDslPreview() {
       config.node_config = config.node_config || {};
       config.node_config.switch_condition = swOv.trim();
     }
+    // 与后端保存行为一致：arguments / responses 按 key 自动排序，便于对比与阅读
+    if (Array.isArray(config.arguments)) config.arguments = config.arguments.slice().sort((a, b) => String((a && a.key) || '').localeCompare(String((b && b.key) || '')));
+    if (Array.isArray(config.responses)) config.responses = config.responses.slice().sort((a, b) => String((a && a.key) || '').localeCompare(String((b && b.key) || '')));
     return { id, type: n.type, name: finalName, configuration: config };
   });
 

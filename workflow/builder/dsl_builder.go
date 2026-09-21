@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/conv"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -13,6 +15,7 @@ import (
 	param "github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
+	confPackage "github.com/magic-lib/go-plat-workflow/workflow/config"
 )
 
 // DSLBuilder 规则链 DSL 组装器，实现 workflow.DSLBuilder 接口。
@@ -94,8 +97,11 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		}
 	}
 
-	// 序列化前先裁剪：删除已被删除节点残留的覆盖配置，避免数据冗余/对应错误
-	nodeParamOverrides := pruneOverrides(req.NodeParamOverrides, validInstances)
+	// 序列化前先裁剪：删除已被删除节点残留的覆盖配置，避免数据冗余/对应错误；
+	// 再按节点定义同步每个实例的参数覆盖：节点已无的参数删除、节点新增的参数补充（以默认值），
+	// 使 node_param_overrides 与节点实时变化保持一致。
+	nodeParamOverrides := reconcileNodeParamOverrides(pruneOverrides(req.NodeParamOverrides, validInstances), nodes)
+
 	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
 	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
 
@@ -314,6 +320,75 @@ func pruneOverrides[V any](m map[string]V, valid map[string]bool) map[string]V {
 	return out
 }
 
+// reconcileNodeParamOverrides 对 node_param_overrides 中每个节点的参数做与节点定义的同步：
+//   - 若该节点已不存在（被删除），整条覆盖丢弃；
+//   - 覆盖中某参数在节点定义中存在 → 保留该对象；
+//   - 覆盖中某参数在节点定义中不存在 → 删除（节点已移除该参数）；
+//   - 节点定义中存在但覆盖中缺少的参数 → 以节点默认值补充上来。
+//
+// overrides 以实例 ID（形如 baseId__N）为 key，节点参数 key 为内层 key。
+func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, nodes []*workflow.NodeDef) map[string]map[string]interface{} {
+	// baseId -> 参数默认值（来自节点 DB 配置 Params）
+	paramDefaults := make(map[string]map[string]interface{}, len(nodes))
+	for _, nd := range nodes {
+		m := map[string]interface{}{}
+		if len(nd.Params) > 0 {
+			var bcs []*param.BindConfig
+			if err := conv.Unmarshal(nd.Params, &bcs); err == nil {
+				for _, bc := range bcs {
+					m[bc.Key] = &confPackage.NodeConfigOverrideArgument{
+						Private: false,
+						Src:     "fixed",
+						Value:   conv.String(bc.Value),
+					}
+				}
+			}
+		}
+		paramDefaults[nd.NodeID] = m
+	}
+
+	out := make(map[string]map[string]interface{}, len(overrides))
+	for instId, entry := range overrides {
+		baseId := instId
+		if idx := strings.Index(instId, "__"); idx >= 0 {
+			baseId = instId[:idx]
+		}
+		defaults, ok := paramDefaults[baseId]
+		if !ok {
+			// 节点已不存在：丢弃该覆盖项（避免引用过期节点参数）
+			continue
+		}
+		newEntry := make(map[string]interface{})
+		// 保留节点定义中存在、且覆盖中也有的参数
+		for k, v := range entry {
+			if _, exists := defaults[k]; exists {
+				newEntry[k] = v
+			}
+		}
+		// 补充节点定义中有但覆盖中缺失的参数（以节点默认值为准）
+		for k, dv := range defaults {
+			if _, has := entry[k]; !has {
+				newEntry[k] = dv
+			}
+		}
+		out[instId] = newEntry
+	}
+	return out
+}
+
+// sortBindConfigsByKey 按 Key 稳定排序 []*param.BindConfig，使 DSL 中的 arguments / responses
+// 顺序与节点定义保持一致、可读且稳定（更新时不受遍历顺序影响）。
+func sortBindConfigsByKey(bcs []*param.BindConfig) {
+	sort.Slice(bcs, func(i, j int) bool {
+		return bcs[i].Key < bcs[j].Key
+	})
+}
+func sortRespConfigsByKey(bcs []*confPackage.NodeConfigResponse) {
+	sort.Slice(bcs, func(i, j int) bool {
+		return bcs[i].Key < bcs[j].Key
+	})
+}
+
 // buildRuleNodes 将节点实例引用转换为 rulego RuleNode 列表（含参数覆盖策略合并）。
 // 同一节点定义可出现多次，每次使用各自的 instanceId 作为 RuleNode ID，
 // 参数覆盖 override key 也以 instanceId 匹配，从而实现同一节点在编排中添加多次。
@@ -326,14 +401,14 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		}
 		config := make(types.Configuration)
 		if len(node.Configuration) > 0 {
-			_ = json.Unmarshal(node.Configuration, &config)
+			_ = conv.Unmarshal(node.Configuration, &config)
 		}
 
 		// 解析节点参数定义（带策略），使用 param 包的覆盖策略合并用户输入与节点默认值
 		// Params 格式: [{"key":"url","value":"https://default.com","policy":"backend+"}, ...]
 		var bindConfigs []*param.BindConfig
 		if len(node.Params) > 0 {
-			_ = json.Unmarshal(node.Params, &bindConfigs)
+			_ = conv.Unmarshal(node.Params, &bindConfigs)
 		}
 
 		// 构建用户传入参数（frontend），override key 使用实例 ID 以区分同一节点的多次添加
@@ -406,14 +481,8 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 					args = append(args, bc)
 				}
 			}
-			// 用户新增了节点定义中不存在的 key，统一追加（按来源设置 policy）
-			for k, v := range frontendMap {
-				if usedKeys[k] {
-					continue
-				}
-				args = append(args, &param.BindConfig{Key: k, Value: v, Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
-			}
-			// arguments 为 BindConfig 数组 JSON：[{"key":..,"value":..,"policy":..}, ...]
+			// 按 key 自动排序，保证 DSL 稳定可读、与节点参数定义实时一致
+			sortBindConfigsByKey(args)
 			config["arguments"] = args
 		} else if len(frontendMap) > 0 {
 			// 无参数定义时的兜底：仍以 BindConfig 数组格式保存，便于后期判断覆盖策略
@@ -421,7 +490,20 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			for k, v := range frontendMap {
 				args = append(args, &param.BindConfig{Key: k, Value: v, Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
 			}
+			sortBindConfigsByKey(args)
 			config["arguments"] = args
+		}
+
+		// responses：取节点定义中的返回值配置（config 已实时从 node.Configuration 加载），
+		// 按 key 自动排序，确保与节点实时变化保持一致、顺序稳定。
+		if raw, ok := config["responses"]; ok && raw != nil {
+			var respArr []*confPackage.NodeConfigResponse
+			if b, _ := json.Marshal(raw); len(b) > 0 && string(b) != "null" {
+				if err := json.Unmarshal(b, &respArr); err == nil && len(respArr) > 0 {
+					sortRespConfigsByKey(respArr)
+					config["responses"] = respArr
+				}
+			}
 		}
 
 		addInfo := make(map[string]interface{})

@@ -245,6 +245,8 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 		headers = metaData.ToHeader(headers)
 	}
 
+	oldParam := conv.String(params)
+
 	resp, params, err := wfWorker.RequestActivity(ctx, actDef, params, headers)
 	durationMs := time.Since(start).Milliseconds()
 
@@ -265,7 +267,7 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 		attributes = logInfo.Attributes
 	}
 	e.asyncPushLog(worker.Project, worker.Env, actDef.ActNamespace, actDef.ActName,
-		level, start.Unix(), durationMs, params, resp, errMsg, rootChainID, traceID, spanID, attributes)
+		level, start.Unix(), durationMs, oldParam, resp, errMsg, rootChainID, traceID, spanID, attributes)
 
 	if err != nil {
 		return nil, params, err
@@ -296,7 +298,7 @@ func (e *MQExecutor) asyncPushLog(project, env, actNamespace, actName, level str
 			RootChainID:  rootChainID,
 			TraceID:      traceID,
 			SpanID:       spanID,
-			Attributes:   toLogString(attributes),
+			Attributes:   conv.String(attributes),
 		}
 		if err := store.Create(context.Background(), def); err != nil {
 			log.Printf("mq_executor: save activity log failed, err: %v", err)
@@ -313,27 +315,8 @@ func toLogRawMessage(v any) json.RawMessage {
 	if raw, ok := v.(json.RawMessage); ok {
 		return raw
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	return b
-}
-
-// toLogString 将任意值转为 JSON 字符串，便于直接存入 ActivityLogDef.Attributes（string 类型）。
-// nil 时返回空串；其余按 JSON 序列化。
-func toLogString(v any) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
+	b := conv.String(v)
+	return []byte(b)
 }
 
 // feishuAlertSender 飞书自定义机器人告警发送器，实现 commnode.AlertSender。
