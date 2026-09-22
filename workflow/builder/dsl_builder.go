@@ -118,7 +118,7 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		ChainKey:            req.ChainKey,
 		Name:                req.ChainName,
 		Description:         req.Description,
-		DSLJSON:             string(dslJSON),
+		DSLJSON:             dslJSON,
 		Status:              1,
 		NodeIDs:             strings.Join(req.NodeIDs, ","),
 		SubChainIDs:         strings.Join(req.SubChainIDs, ","),
@@ -407,14 +407,19 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		}
 		config := make(types.Configuration)
 		if len(node.Configuration) > 0 {
-			_ = conv.Unmarshal(node.Configuration, &config)
+			_ = json.Unmarshal(node.Configuration, &config)
 		}
 
 		// 解析节点参数定义（带策略），使用 param 包的覆盖策略合并用户输入与节点默认值
 		// Params 格式: [{"key":"url","value":"https://default.com","policy":"backend+"}, ...]
 		var bindConfigs []*param.BindConfig
 		if len(node.Params) > 0 {
-			_ = conv.Unmarshal(node.Params, &bindConfigs)
+			// 注意：必须用标准 json.Unmarshal，不要用 conv.Unmarshal。
+			// conv.Unmarshal 内部先走 copier 反射（依赖 go-plat-utils 版本/字段名），
+			// 对 []*param.BindConfig 不可靠，可能静默产出空切片；与 reconcileNodeParamOverrides 保持一致。
+			if err := json.Unmarshal(node.Params, &bindConfigs); err != nil {
+				log.Ctx(context.Background()).Warn().Str("node_id", inst.baseId).Err(err).Msg("parse node.Params failed")
+			}
 		}
 
 		// 构建用户传入参数（frontend），override key 使用实例 ID 以区分同一节点的多次添加
