@@ -328,23 +328,26 @@ func pruneOverrides[V any](m map[string]V, valid map[string]bool) map[string]V {
 //
 // overrides 以实例 ID（形如 baseId__N）为 key，节点参数 key 为内层 key。
 func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, nodes []*workflow.NodeDef) map[string]map[string]interface{} {
-	// baseId -> 参数默认值（来自节点 DB 配置 Params）
-	paramDefaults := make(map[string]map[string]interface{}, len(nodes))
+	// baseId -> 参数默认值（key -> 节点 DB 默认值），用于补充缺失参数
+	paramDefaults := make(map[string]map[string]*confPackage.NodeConfigOverrideArgument, len(nodes))
 	for _, nd := range nodes {
-		m := map[string]interface{}{}
+		defs := make(map[string]*confPackage.NodeConfigOverrideArgument)
 		if len(nd.Params) > 0 {
-			var bcs []*param.BindConfig
-			if err := conv.Unmarshal(nd.Params, &bcs); err == nil {
-				for _, bc := range bcs {
-					m[bc.Key] = &confPackage.NodeConfigOverrideArgument{
+			var args []*confPackage.NodeConfigArgument
+			if err := json.Unmarshal(nd.Params, &args); err == nil {
+				for _, a := range args {
+					if a.Key == "" {
+						continue
+					}
+					defs[a.Key] = &confPackage.NodeConfigOverrideArgument{
 						Private: false,
 						Src:     "fixed",
-						Value:   conv.String(bc.Value),
+						Value:   a.Value,
 					}
 				}
 			}
 		}
-		paramDefaults[nd.NodeID] = m
+		paramDefaults[nd.NodeID] = defs
 	}
 
 	out := make(map[string]map[string]interface{}, len(overrides))
@@ -356,6 +359,12 @@ func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, no
 		defaults, ok := paramDefaults[baseId]
 		if !ok {
 			// 节点已不存在：丢弃该覆盖项（避免引用过期节点参数）
+			continue
+		}
+		// 若节点定义中解析不出任何参数 key（如 Params 为空或非标准格式），
+		// 无法判断哪些参数有效，则保持该实例原有覆盖不变，避免误删/污染。
+		if len(defaults) == 0 {
+			out[instId] = entry
 			continue
 		}
 		newEntry := make(map[string]interface{})

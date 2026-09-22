@@ -6695,7 +6695,8 @@ function renderOrchParamOverrides() {
 
   let html = '';
   nodes.forEach(({ inst, def }) => {
-    const params = parseNodeParams(def);
+    // 按 key 排序，保持与后端输出（node_config.arguments 经 sortBindConfigsByKey 排序）顺序一致
+    const params = parseNodeParams(def).slice().sort((a, b) => String(a.key || '').localeCompare(String(b.key || '')));
     html += `<div class="override-node-block">
       <div class="override-node-header" onclick="this.nextElementSibling.classList.toggle('hidden')">
         <span class="toggle-icon">▾</span>
