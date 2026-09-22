@@ -76,10 +76,7 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	ruleChain := b.buildRuleChain(req, nodes, subChains)
 
 	// 4. 序列化
-	dslJSON, err := json.Marshal(ruleChain)
-	if err != nil {
-		return nil, fmt.Errorf("%w: marshal dsl: %v", workflow.ErrDSLBuildFailed, err)
-	}
+	dslJSON := conv.String(ruleChain)
 
 	// 5. 序列化 connections 为 JSON 存入独立字段，方便后续查看和修改
 	connectionsJSON, _ := json.Marshal(req.Connections)
@@ -432,7 +429,9 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 				// 取其中的 value 作为写入节点 arguments 的最终值。
 				if m, ok := v.(map[string]any); ok {
 					if val, exists := m["value"]; exists {
-						frontendMap[k] = val
+						if k != "" {
+							frontendMap[k] = val
+						}
 						if src, ok := m["src"].(string); ok {
 							frontendSrc[k] = src
 						}
@@ -443,7 +442,9 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 						continue
 					}
 				}
-				frontendMap[k] = v
+				if k != "" {
+					frontendMap[k] = v
+				}
 			}
 		}
 
@@ -476,7 +477,7 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		if len(bindConfigs) > 0 {
 			// 将用户覆盖值合并进 BindConfig 数组（保留 key/value/policy），
 			// 不直接展开为具体值，便于后期执行时按 policy 判断是否需要直接覆盖。
-			args := make([]*param.BindConfig, 0, len(bindConfigs))
+			args := make([]*param.BindConfig, 0)
 			usedKeys := make(map[string]bool, len(bindConfigs))
 			for _, bc := range bindConfigs {
 				if v, ok := frontendMap[bc.Key]; ok {
@@ -484,9 +485,15 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 					nb.Value = v
 					// 编排里已配置来源：按来源改写 DSL 的 policy，避免调用方传同名参数覆盖配置的来源
 					nb.Policy = resolvePolicy(frontendSrc[bc.Key], v, bc.Policy)
+					if nb.Key == "" {
+						continue
+					}
 					args = append(args, &nb)
 					usedKeys[bc.Key] = true
 				} else {
+					if bc.Key == "" {
+						continue
+					}
 					args = append(args, bc)
 				}
 			}
@@ -495,8 +502,11 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			config["arguments"] = args
 		} else if len(frontendMap) > 0 {
 			// 无参数定义时的兜底：仍以 BindConfig 数组格式保存，便于后期判断覆盖策略
-			args := make([]*param.BindConfig, 0, len(frontendMap))
+			args := make([]*param.BindConfig, 0)
 			for k, v := range frontendMap {
+				if k == "" {
+					continue
+				}
 				args = append(args, &param.BindConfig{Key: k, Value: v, Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
 			}
 			sortBindConfigsByKey(args)
