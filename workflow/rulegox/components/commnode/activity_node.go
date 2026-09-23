@@ -402,7 +402,9 @@ type NodeLogDef struct {
 	// TraceID 本次执行的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
 	TraceID     string `json:"trace_id"`
 	RootChainID string `json:"root_chain_id"`
-	SpanID      string `json:"span_id"`
+	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3）。
+	RootChainReleaseID string `json:"root_chain_release_id"`
+	SpanID             string `json:"span_id"`
 	// RelationType 该 node 执行完成后往下传递的连接类型（relationType），
 	// 对应 rulego 的 TellSuccess/TellFailure/TellNext 等，取值如 Success/Failure/True/False 或自定义字符串。
 	// 用于回查本次 node 走了哪条分支链路。
@@ -433,6 +435,7 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 		Result:       conv.String(result),
 		TraceID:      metaData.TraceId,
 		RootChainID:  metaData.RootChainID,
+		RootChainReleaseID: metaData.RootChainReleaseID,
 		SpanID:       nodeSpanId,
 		RelationType: utils.SubStrMaxLen(relationType, 30),
 		CreatedAt:    now,

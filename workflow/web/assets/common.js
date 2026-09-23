@@ -3617,9 +3617,10 @@ let _allLogType = 'node';   // 当前日志类型：node | activity
 let _allLogPage = 1;
 const _allLogPageSize = 20; // 默认每页 20 条
 
-// 打开日志页：初始化环境下拉后加载最新日志
+// 打开日志页：初始化环境下拉与 Root Chain 下拉后加载最新日志
 async function openAllLogsTab() {
   await loadAllLogEnvOptions();
+  await loadAllLogRootChainOptions();
   await loadAllLogs();
 }
 
@@ -3658,9 +3659,13 @@ async function loadAllLogs() {
   const lv = document.getElementById('all-log-level') ? document.getElementById('all-log-level').value : '';
   const env = document.getElementById('all-log-env') ? document.getElementById('all-log-env').value.trim() : '';
   const trace = document.getElementById('all-log-trace-id') ? document.getElementById('all-log-trace-id').value.trim() : '';
+  const rootChainId = document.getElementById('all-log-root-chain-id') ? document.getElementById('all-log-root-chain-id').value.trim() : '';
+  const payload = document.getElementById('all-log-payload') ? document.getElementById('all-log-payload').value.trim() : '';
   if (lv) params.set('level', lv);
   if (env) params.set('env', env);
   if (trace) params.set('trace_id', trace);
+  if (rootChainId) params.set('root_chain_id', rootChainId);
+  if (payload) params.set('keyword', payload);
   params.set('page', String(_allLogPage));
   params.set('page_size', String(_allLogPageSize));
 
@@ -3709,11 +3714,32 @@ function clearAllLogFilters() {
   const lv = document.getElementById('all-log-level');
   const env = document.getElementById('all-log-env');
   const trace = document.getElementById('all-log-trace-id');
+  const rc = document.getElementById('all-log-root-chain-id');
+  const payload = document.getElementById('all-log-payload');
   if (lv) lv.value = '';
   if (env) env.value = '';
   if (trace) trace.value = '';
+  if (rc) rc.value = '';
+  if (payload) payload.value = '';
   _allLogPage = 1;
   loadAllLogs();
+}
+
+// 加载日志页 Root Chain 下拉选项（含"全部 Root Chain"表示忽略该过滤）
+async function loadAllLogRootChainOptions() {
+  const sel = document.getElementById('all-log-root-chain-id');
+  if (!sel) return;
+  const cur = sel.value;
+  try {
+    const p = getProject();
+    if (!p) return;
+    const list = await api('/api/root-chains?project=' + encodeURIComponent(p));
+    const arr = Array.isArray(list) ? list : (list && list.list) || [];
+    sel.innerHTML = '<option value="">全部 Root Chain</option>' + arr.map(c =>
+      '<option value="' + esc(c.chain_id) + '">' + esc(c.name || c.chain_id) + ' · ' + esc(c.chain_id) + '</option>'
+    ).join('');
+    if (cur) sel.value = cur;
+  } catch (e) { /* 选项可选，失败不影响日志查询 */ }
 }
 
 // ===================== 统计页：Node 日志按天统计 =====================
@@ -5302,7 +5328,7 @@ async function setCurrentRelease(version) {
 }
 
 async function deleteReleaseVersion(version) {
-  if (!confirm('确定删除发布版本 v' + version + ' 吗？\n此操作不可恢复（当前生效版本不允许删除）。')) return;
+  if (!confirm('确定删除发布版本 v' + version + ' 吗？\n该操作为逻辑删除：前端不再显示，但数据仍保留在数据库中（可恢复），当前生效版本不允许删除。')) return;
   try {
     await api('/api/root-chains/' + encodeURIComponent(_releaseChainId) + '/releases/' + version, {
       method: 'DELETE',

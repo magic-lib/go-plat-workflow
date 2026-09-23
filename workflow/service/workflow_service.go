@@ -58,9 +58,9 @@ type WorkflowService struct {
 	dslBuilder             *builder.DSLBuilder
 	engine                 *engine.WorkflowEngine
 
-	// invokeRootChainMapCache 缓存「发布在线」的根链 DSL（key = 确定性 ID，value = 解析后的 RuleChain）。
+	// invokeRootChainMapCache 缓存「发布在线」的根链 DSL（key = 确定性 ID，value = 解析后的 RuleChain 及其发布版本标识）。
 	// key 由 project + chain_key 经 id.GetUUID 确定性生成，相同入参直接命中缓存，避免重复查库。
-	invokeRootChainMapCache cmap.ConcurrentMap[string, *types.RuleChain]
+	invokeRootChainMapCache cmap.ConcurrentMap[string, *invokeCacheEntry]
 }
 
 // NewWorkflowService 创建工作流服务实例，自动建表。
@@ -198,7 +198,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		mqExecutor:              workflow.NewMQExecutorWithLogAndEnv(activityLogRepo, envConfigRepo),
 		dslBuilder:              builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
 		engine:                  engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
-		invokeRootChainMapCache: cmap.New[*types.RuleChain](),
+		invokeRootChainMapCache: cmap.New[*invokeCacheEntry](),
 	}
 
 	log.Info().Msg("WorkflowService initialized, tables migrated")
@@ -1123,6 +1123,9 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		RootChainID: rootChainID,
 		RedisConfig: redisCfg,
 		TraceId:     id.GetUUID(traceId),
+		PoolKey:     actConfig.PoolKey, // 发布/invoke 路径下用于引擎池隔离，避免与草稿实例冲突
+		// 发布/invoke 路径下记录本次执行的发布版本标识（形如 R000005@3），写入节点日志。
+		RootChainReleaseID: actConfig.RootChainReleaseID,
 	}
 
 	// 6. 同步执行并捕获结果
@@ -1259,16 +1262,30 @@ func (s *WorkflowService) ClearChainRootByKey(project, chainKey string) {
 	s.invokeRootChainMapCache.Remove(cacheKey)
 }
 
+// invokeCacheEntry 「发布在线」根链缓存项：解析后的 DSL 及对应的发布版本标识。
+type invokeCacheEntry struct {
+	RuleChain *types.RuleChain
+	// ReleaseID 发布版本标识，形如 R000005@3，与 RuleChain 一起缓存，
+	// 保证日志记录的版本号与缓存 DSL 版本一致（发布后缓存失效前不会误报成新版本）。
+	ReleaseID string
+}
+
 // InvokeRootChain 通过 project + chain_key 定位「发布在线」的根链 DSL 并同步执行。
-// 缓存：map[cacheKey]*types.RuleChain，cacheKey = id.GetUUID(project+"-"+chain_key)（确定性），
+// 缓存：map[cacheKey]*invokeCacheEntry，cacheKey = id.GetUUID(project+"-"+chain_key)（确定性），
 // 命中缓存直接复用已解析的 DSL，跳过查询 wf_root_chains 与 wf_root_chain_releases。
 func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey, envName, traceId string, payload map[string]any, isAsync bool) (any, error) {
 	cacheKey := id.GetUUID(project + "-" + chainKey)
 
 	// 1. 先查缓存
-	ruleChain, ok := s.invokeRootChainMapCache.Get(cacheKey)
+	cached, ok := s.invokeRootChainMapCache.Get(cacheKey)
+	var ruleChain *types.RuleChain
+	var releaseID string
+	if ok && cached != nil {
+		ruleChain = cached.RuleChain
+		releaseID = cached.ReleaseID
+	}
 	// 2. 未命中：查库并解析 DSL，再写入缓存
-	if !ok || ruleChain == nil {
+	if ruleChain == nil {
 		// 2.1 通过 project + chain_key 查根链（得到 chain_id）
 		rootDef, err := s.rootChainRepo.GetByKey(ctx, project, chainKey)
 		if err != nil {
@@ -1284,16 +1301,23 @@ func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey
 		if err := json.Unmarshal([]byte(release.DSLJSON), rc); err != nil {
 			return nil, fmt.Errorf("parse root chain dsl failed: %w", err)
 		}
-		rc.RuleChain.ID = cacheKey
-		// 2.4 写入缓存
-		s.invokeRootChainMapCache.Set(cacheKey, rc)
+		// 注意：不可将 rc.RuleChain.ID 覆写为 cacheKey（UUID），否则该 UUID 会经
+		// metaData.RootChainID 流入节点日志 root_chain_id 字段，污染数据。
+		// 引擎池隔离改用 metaData.PoolKey = cacheKey 实现（见 StartWorkFlow）。
+		// 2.4 记录发布版本标识，用于节点日志的 root_chain_release_id 字段
+		releaseID = fmt.Sprintf("%s@%d", rootDef.ChainID, release.Version)
+		// 2.5 写入缓存
+		s.invokeRootChainMapCache.Set(cacheKey, &invokeCacheEntry{RuleChain: rc, ReleaseID: releaseID})
 		ruleChain = rc
 	}
 
-	// 3. 执行
+	// 3. 执行：以真实根链 id 记录日志，以 cacheKey 作为引擎池 key 隔离草稿实例，
+	// 并记录当时执行的发布版本号（root_chain_release_id）。
 	return s.ExecuteRootChainByID(ctx, ruleChain, payload, project, envName, traceId, &rulegox.ActivityFlowConfig{
-		IsAsync:  isAsync,
-		UseCache: true,
+		IsAsync:            isAsync,
+		UseCache:           true,
+		PoolKey:            cacheKey,
+		RootChainReleaseID: releaseID,
 	})
 }
 
@@ -1308,7 +1332,9 @@ func (s *WorkflowService) ExecutePublishedRootChain(ctx context.Context, project
 	if err := s.engine.LoadChainDSL(ctx, project, chainID, release.DSLJSON, release.SubChainIDs); err != nil {
 		return "", err
 	}
-	return s.engine.ExecuteWithEnv(ctx, project, chainID, jsonPayload, envName, redisCfg)
+	// 记录本次执行的发布版本标识（形如 R000005@3），写入节点日志的 root_chain_release_id。
+	releaseID := fmt.Sprintf("%s@%d", chainID, release.Version)
+	return s.engine.ExecuteWithEnv(ctx, project, chainID, jsonPayload, envName, redisCfg, releaseID)
 }
 
 // ============================================================
@@ -1366,8 +1392,8 @@ func (s *WorkflowService) BuildLoadAndExecute(ctx context.Context, req *workflow
 		return "", err
 	}
 
-	// 3. 执行（按环境注入 Redis 元数据）
-	return s.engine.ExecuteWithEnv(ctx, def.Project, def.ChainID, jsonPayload, envName, redisCfg)
+	// 3. 执行（按环境注入 Redis 元数据；BuildLoadAndExecute 为即时编排执行，无发布版本，release 标识留空）
+	return s.engine.ExecuteWithEnv(ctx, def.Project, def.ChainID, jsonPayload, envName, redisCfg, "")
 }
 
 // ============================================================

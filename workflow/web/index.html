@@ -317,7 +317,11 @@
         <option value="info">info</option>
         <option value="error">error</option>
       </select>
-      <input id="all-log-trace-id" placeholder="trace_id" style="width:280px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+      <select id="all-log-root-chain-id" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem;max-width:260px">
+        <option value="">全部 Root Chain</option>
+      </select>
+      <input id="all-log-trace-id" placeholder="trace_id" style="width:240px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+      <input id="all-log-payload" placeholder="payload 内容（模糊匹配，留空忽略）" style="width:260px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
       <button class="btn btn-primary" onclick="loadAllLogs()">搜索</button>
       <button class="btn btn-outline" onclick="clearAllLogFilters()">重置</button>
     </div>

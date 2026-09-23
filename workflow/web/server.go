@@ -2230,6 +2230,7 @@ func (ws *WebServer) handleListNodeLogsGlobal(w http.ResponseWriter, r *http.Req
 		NodeName: q.Get("node_name"),
 		Env:      q.Get("env"),
 		TraceID:  strings.TrimSpace(q.Get("trace_id")),
+		RootChainID: strings.TrimSpace(q.Get("root_chain_id")),
 		Keyword:  q.Get("keyword"),
 		Limit:    pageSize,
 		Offset:   (page - 1) * pageSize,

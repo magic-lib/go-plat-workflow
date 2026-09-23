@@ -25,6 +25,8 @@ type NodeLogModel struct {
 	ErrorMsg     string    `gorm:"column:error_msg;type:text" json:"error_msg"`
 	TraceID      string    `gorm:"column:trace_id;type:varchar(128);index;default:''" json:"trace_id"`
 	RootChainID  string    `gorm:"column:root_chain_id;type:varchar(128);index;default:''" json:"root_chain_id"`
+	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），用于追溯当时执行的是哪个发布版本。
+	RootChainReleaseID string `gorm:"column:root_chain_release_id;type:varchar(128);index;default:''" json:"root_chain_release_id"`
 	SpanID       string    `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
 	RelationType string    `gorm:"column:relation_type;type:varchar(500);default:''" json:"relation_type"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -53,6 +55,7 @@ func (m *NodeLogModel) ToDef() *workflow.NodeLogDef {
 		ErrorMsg:     m.ErrorMsg,
 		TraceID:      m.TraceID,
 		RootChainID:  m.RootChainID,
+		RootChainReleaseID: m.RootChainReleaseID,
 		SpanID:       m.SpanID,
 		RelationType: m.RelationType,
 		CreatedAt:    m.CreatedAt,
@@ -75,6 +78,7 @@ func (m *NodeLogModel) FromDef(def *workflow.NodeLogDef) {
 	m.ErrorMsg = def.ErrorMsg
 	m.TraceID = def.TraceID
 	m.RootChainID = def.RootChainID
+	m.RootChainReleaseID = def.RootChainReleaseID
 	m.SpanID = def.SpanID
 	m.RelationType = def.RelationType
 }
