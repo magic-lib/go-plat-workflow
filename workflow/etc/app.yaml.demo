@@ -16,3 +16,15 @@ custom: # 自定义配置
       port: 8686
     feishu_alert_webhook: "" # 飞书告警机器人 Webhook 地址；配置后 Node 执行失败会异步推送告警到群
     mysql_log_retention_days: 2 # 日志保留天数
+    # ---- rulego 引擎池版本保留策略 ----
+    # 每条根链在引擎池中最多保留的版本实例数量（含在线版本）。
+    # 0 = 不限制数量，仅按存活时间清理（最终只剩在线版本）。
+    root_chain_pool_max_versions: 2
+    # 非在线版本在引擎池中的最长存活时间（分钟）。
+    # 超出数量的版本按【发布时间】先后顺序错峰清理，每间隔该时长清理一个。
+    # 0 = 不限制时间，仅按数量维持（超出即立即清理）。
+    root_chain_pool_ttl_minutes: 30
+    # 是否启用跨副本根链失效广播（Redis pub/sub，复用各 env 已配置的 Redis）。
+    # true  = 多副本部署：发布/回滚时广播通知各副本失效缓存，全副本即时切到新版本。
+    # false = 单机部署：不创建 Redis 订阅与后台协程，省去开销（单机无需通知他人）。
+    root_chain_broadcast_enabled: false
