@@ -1131,7 +1131,9 @@ func (ws *WebServer) handlePublishRootChain(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	ws.svc.ClearChainRootByKey(project, oneRoot.ChainKey)
+	// 发布成功需要失效 DSL 缓存，否则线上仍走老版本。
+	// 走 NotifyRootChainChanged：本地失效 + Redis pub/sub 广播，使多副本全部立即切换。
+	ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "publish")
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", release.Version).Msg("root chain published via web")
 	writeJSON(w, http.StatusOK, release)
 }
@@ -1179,6 +1181,12 @@ func (ws *WebServer) handleRollbackRootChain(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 回滚成功需要失效 InvokeRootChain 的 DSL 缓存，否则线上仍走老版本。
+	// 走 NotifyRootChainChanged：本地失效 + Redis pub/sub 广播，使多副本全部立即切换。
+	// 注意：这里不直接清理引擎实例，由错峰回收策略（数量 + 存活时间）优雅移除。
+	if oneRoot, gerr := ws.svc.GetRootChain(r.Context(), chainID); gerr == nil {
+		ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "rollback")
+	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", req.Version).Msg("root chain rolled back via web")
 	writeJSON(w, http.StatusOK, release)
 }
@@ -1220,6 +1228,11 @@ func (ws *WebServer) handleSetCurrentRelease(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// 设为生效成功后同样需要失效 InvokeRootChain 的 DSL 缓存。
+	// 走 NotifyRootChainChanged：本地失效 + Redis pub/sub 广播，使多副本全部立即切换。
+	if oneRoot, gerr := ws.svc.GetRootChain(r.Context(), chainID); gerr == nil {
+		ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "set_current")
 	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", req.Version).Msg("root chain current release set via web")
 	writeJSON(w, http.StatusOK, release)

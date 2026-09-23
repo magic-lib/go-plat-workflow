@@ -17,7 +17,9 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/conn"
@@ -34,6 +36,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow/models"
 	"github.com/magic-lib/go-plat-workflow/workflow/repo"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
+	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 )
 
@@ -60,7 +63,35 @@ type WorkflowService struct {
 
 	// invokeRootChainMapCache 缓存「发布在线」的根链 DSL（key = 确定性 ID，value = 解析后的 RuleChain 及其发布版本标识）。
 	// key 由 project + chain_key 经 id.GetUUID 确定性生成，相同入参直接命中缓存，避免重复查库。
+	// invokeRootChainMapCache 「发布在线」根链 DSL 缓存，key 为 id.GetUUID(project+"-"+chainKey)。
 	invokeRootChainMapCache cmap.ConcurrentMap[string, *invokeCacheEntry]
+	// chainPoolVersions 每条根链在 rulego 引擎池中已加载版本的登记表，用于错峰回收。
+	// key 同上为 cacheKey，与引擎池实际 key（cacheKey@version）区分。
+	chainPoolVersions cmap.ConcurrentMap[string, *chainPoolEntry]
+	// invalidateBus 根链版本变更的跨副本广播（Redis pub/sub）。
+	// 多副本部署时用于通知其他副本失效本地缓存，使其立即切到新版本。
+	invalidateBus *invalidatePubSub
+}
+
+// cacheKeyOf 计算根链的进程内缓存 key（与 InvokeRootChain 中保持一致）。
+func cacheKeyOf(project, chainKey string) string {
+	return id.GetUUID(project + "-" + chainKey)
+}
+
+// NotifyRootChainChanged 根链版本发生变更（发布/回滚/设为生效/删除）时调用：
+//  1. 失效本进程内的 DSL 缓存（并标记在线版本未知，下次调用重新解析到新版本）；
+//  2. 通过 Redis pub/sub 广播失效事件，让其他副本同步失效 → 全副本立即切到新版本。
+//
+// 广播是异步的且失败仅记录日志，不影响本地变更结果；
+// Redis 未配置时自动降级为仅本地失效（等同单机部署行为）。
+func (s *WorkflowService) NotifyRootChainChanged(project, chainKey, reason string) {
+	// 1) 本地失效
+	s.ClearChainRootByKey(project, chainKey)
+	// 2) 广播给其他副本
+	if s.invalidateBus == nil {
+		return
+	}
+	go s.invalidateBus.broadcast(project, chainKey, reason)
 }
 
 // NewWorkflowService 创建工作流服务实例，自动建表。
@@ -199,7 +230,15 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		dslBuilder:              builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
 		engine:                  engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
 		invokeRootChainMapCache: cmap.New[*invokeCacheEntry](),
+		chainPoolVersions:       cmap.New[*chainPoolEntry](),
 	}
+
+	// 启动后台巡检：即使用户无流量，也能按时间策略错峰回收历史版本实例。
+	go s.chainPoolJanitor()
+
+	// 启动跨副本失效广播的订阅端（Redis 不可用时内部自动降级）。
+	s.invalidateBus = newInvalidatePubSub(s)
+	s.invalidateBus.Start()
 
 	log.Info().Msg("WorkflowService initialized, tables migrated")
 	return s, nil
@@ -771,7 +810,22 @@ func (s *WorkflowService) DeleteRootChain(ctx context.Context, project, chainID 
 	if has {
 		return workflow.ErrRootChainHasReleases
 	}
-	return s.rootChainRepo.Delete(ctx, project, chainID)
+	// 删除前先取回 ChainKey（删除后就查不到了），用于后续清理缓存与引擎池实例。
+	var chainKey string
+	if rc, qerr := s.rootChainRepo.GetByID(ctx, chainID); qerr == nil {
+		chainKey = rc.ChainKey
+	}
+	if err := s.rootChainRepo.Delete(ctx, project, chainID); err != nil {
+		return err
+	}
+	// 根链已删除，其各版本引擎实例不再可用，连同 DSL 缓存一并清理。
+	// 同时广播给其他副本，使其也清理该链的缓存与引擎池实例。
+	if chainKey != "" {
+		s.ClearChainRootByKey(project, chainKey)
+		s.invalidateChainPoolEntry(cacheKeyOf(project, chainKey))
+		s.NotifyRootChainChanged(project, chainKey, reasonDelete)
+	}
+	return nil
 }
 
 // ============================================================
@@ -1259,7 +1313,273 @@ func (s *WorkflowService) filterPayloadArguments(payload map[string]any, nodeGro
 }
 func (s *WorkflowService) ClearChainRootByKey(project, chainKey string) {
 	cacheKey := id.GetUUID(project + "-" + chainKey)
+	// 清除「发布在线」DSL 缓存，强制下次调用重新查库拿到新版本 DSL 与版本号。
+	//
+	// 注意：这里【不能】调用 rulego.Del(cacheKey) 删除引擎池实例！
+	// rulego 的 Pool.Del 内部会调用引擎实例的 Stop(ctx)：先等待活跃消息自然完成
+	// （Pool.Del 传 context.Background()，默认最多等 10s），超时则强制取消上下文
+	// 中断正在执行的流程 —— 存在打断长流程（>10s）的线上风险。
+	// 正确做法：引擎池 key 带发布版本号（见 InvokeRootChain 的 PoolKey），
+	// 发布后新请求自然命中新版本实例；旧版本实例由错峰回收策略（数量 + 存活时间）
+	// 在优雅排空后移除，故这里【不直接清理引擎实例】。
 	s.invokeRootChainMapCache.Remove(cacheKey)
+
+	// 同时把登记表中的「在线版本」标记为未知：
+	// 发布/回滚/设为生效后当前在线版本已变化，需等下次调用重新解析；
+	// 在未知期间巡检保守不动，避免回滚到的版本被误当可清理项回收。
+	s.markChainPoolCurrentUnknown(cacheKey)
+}
+
+// markChainPoolCurrentUnknown 将某条根链的在线版本标记为未知，并重置错峰计时。
+func (s *WorkflowService) markChainPoolCurrentUnknown(cacheKey string) {
+	if e, ok := s.chainPoolVersions.Get(cacheKey); ok && e != nil {
+		e.mu.Lock()
+		e.current = currentUnknown
+		e.waitStart = time.Time{}
+		e.mu.Unlock()
+	}
+}
+
+// ============================================================
+// rulego 引擎池版本登记与清理（错峰 FIFO）
+// ============================================================
+//
+// 背景：InvokeRootChain 的引擎池 key 带发布版本号（<cacheKey>@<version>），
+// 发布后新请求自然命中新实例，旧实例不会被 Del/Stop，因此存量流程安全跑完；
+// 但代价是池中会残留历史版本实例，需要按策略回收。
+//
+// 回收策略（两配置项 custom.normal）：
+//   - root_chain_pool_max_versions：每条根链最多保留的版本实例数（0=不限制数量）
+//   - root_chain_pool_ttl_minutes：非在线版本最长存活时间（分钟，0=不限制时间）
+//
+// 组合语义：
+//   - 仅数量（ttl=0）  ：始终维持该数量，超出部分按发布时间先后【立即】清理；
+//   - 仅时间（数量=0） ：按发布时间先后【错峰】清理，每间隔 ttl 清一个，最终只剩在线版本；
+//   - 两者都配        ：最终保留该数量（含在线版本），超出部分按时间先后错峰清理。
+//
+// 排序依据【发布时间 PublishedAt】而非版本号：回滚场景下老版本号可能重新成为在线版本，
+// 只有发布时间能真实反映先后。在线版本始终受保护，永不被清理。
+
+const (
+	// poolStopGrace 移除版本实例前的优雅排空时长（30 分钟）。
+	// rulego.Del 内部会以 10s 超时强制中断流程，故先用较长宽限期自行 Stop，
+	// 让长流程尽量自然跑完，再 Del 摘除登记。
+	// 设为 30 分钟以覆盖含人工审批、慢外部调用等长流程场景。
+	poolStopGrace = 30 * time.Minute
+	// poolSweepInterval 后台巡检间隔。
+	poolSweepInterval = 1 * time.Minute
+	// currentUnknown 在线版本号未知（版本号从 1 开始，故 -1 可作哨兵）。
+	// 发生在发布/回滚/设为生效之后、下一次调用重新解析之前。
+	// 此时巡检必须保守不动，否则回滚到的版本会被误当成可清理项。
+	currentUnknown = -1
+)
+
+// poolVersionEntry 引擎池中某个已加载版本的登记信息。
+type poolVersionEntry struct {
+	// PoolKey 该版本对应的 rulego 引擎池 key（<cacheKey>@<version>）。
+	PoolKey string
+	// Version 发布版本号。
+	Version int
+	// PublishedAt 该发布版本的发布时间，用于 FIFO 排序（回滚安全）。
+	PublishedAt time.Time
+	// LoadedAt 载入引擎池的时刻，用于同发布时间时的稳定排序。
+	LoadedAt time.Time
+}
+
+// chainPoolEntry 单条根链在引擎池中已加载版本的登记表。
+type chainPoolEntry struct {
+	mu sync.Mutex
+	// current 当前在线版本号，永不被清理。
+	current int
+	// versions version -> 登记项。
+	versions map[int]*poolVersionEntry
+	// waitStart 队首（最早发布）待清理版本的等待起点。
+	// 清理掉队首后置为当前时刻，使下一个版本从此时起再等待一个 ttl，实现错峰。
+	waitStart time.Time
+}
+
+// getOrCreateChainPoolEntry 获取（或新建）某条根链的登记表。
+func (s *WorkflowService) getOrCreateChainPoolEntry(cacheKey string) *chainPoolEntry {
+	if e, ok := s.chainPoolVersions.Get(cacheKey); ok && e != nil {
+		return e
+	}
+	ne := &chainPoolEntry{versions: make(map[int]*poolVersionEntry), current: currentUnknown}
+	s.chainPoolVersions.Set(cacheKey, ne)
+	// 极小概率并发覆盖；以 map 中最终生效者为准，避免两个登记表并存。
+	if cur, ok := s.chainPoolVersions.Get(cacheKey); ok && cur != nil {
+		return cur
+	}
+	return ne
+}
+
+// trackPoolVersion 记录本次使用的版本，并标记其为在线版本。
+func (s *WorkflowService) trackPoolVersion(cacheKey string, version int, poolKey string, publishedAt time.Time) {
+	e := s.getOrCreateChainPoolEntry(cacheKey)
+	e.mu.Lock()
+	e.current = version
+	if it, ok := e.versions[version]; ok {
+		it.PoolKey = poolKey
+		if !publishedAt.IsZero() {
+			it.PublishedAt = publishedAt
+		}
+	} else {
+		e.versions[version] = &poolVersionEntry{
+			PoolKey:     poolKey,
+			Version:     version,
+			PublishedAt: publishedAt,
+			LoadedAt:    time.Now(),
+		}
+	}
+	e.mu.Unlock()
+}
+
+// candidatesLocked 计算待清理候选（需在持锁时调用）。
+// 返回按【发布时间升序】排列的可清理版本；在线版本不在其中。
+// retain 为除在线版本外还可保留的最新版本数量。
+func (e *chainPoolEntry) candidatesLocked(retain int) []*poolVersionEntry {
+	cands := make([]*poolVersionEntry, 0, len(e.versions))
+	for ver, it := range e.versions {
+		if ver == e.current {
+			continue // 在线版本永不清
+		}
+		cands = append(cands, it)
+	}
+	// FIFO：发布时间早的排前面；同发布时间用载入时刻、版本号兜底保证稳定。
+	sort.Slice(cands, func(i, j int) bool {
+		a, b := cands[i], cands[j]
+		if !a.PublishedAt.Equal(b.PublishedAt) {
+			return a.PublishedAt.Before(b.PublishedAt)
+		}
+		if !a.LoadedAt.Equal(b.LoadedAt) {
+			return a.LoadedAt.Before(b.LoadedAt)
+		}
+		return a.Version < b.Version
+	})
+	// 保留最近发布的 retain 个，其余为候选
+	if retain > 0 && len(cands) > retain {
+		return cands[:len(cands)-retain]
+	}
+	if retain > 0 {
+		return nil
+	}
+	return cands
+}
+
+// sweepChainPool 按策略巡检并清理某条根链的引擎池版本实例。
+func (s *WorkflowService) sweepChainPool(cacheKey string) {
+	e, ok := s.chainPoolVersions.Get(cacheKey)
+	if !ok || e == nil {
+		return
+	}
+	maxVersions, ttlMinutes := config.GetRootChainPoolPolicy()
+	ttl := time.Duration(ttlMinutes) * time.Minute
+
+	// 在线版本未知（发布/回滚/设为生效后尚未重新解析）：保守跳过，
+	// 否则回滚到的版本会被误判为可清理项而被回收。
+	e.mu.Lock()
+	unknown := e.current == currentUnknown
+	e.mu.Unlock()
+	if unknown {
+		return
+	}
+
+	// 除在线版本外还可保留的数量：maxVersions 含在线版本，故减 1。
+	retain := 0
+	if maxVersions > 0 {
+		retain = maxVersions - 1
+		if retain < 0 {
+			retain = 0
+		}
+	}
+
+	for {
+		now := time.Now()
+		e.mu.Lock()
+		cands := e.candidatesLocked(retain)
+		if len(cands) == 0 {
+			e.waitStart = time.Time{} // 无可清理项，等待计时归零
+			e.mu.Unlock()
+			return
+		}
+		if e.waitStart.IsZero() {
+			e.waitStart = now // 队首开始计时
+		}
+		head := cands[0]
+		due := e.waitStart.Add(ttl)
+		if now.Before(due) {
+			e.mu.Unlock()
+			return // 未到清理时点
+		}
+		delete(e.versions, head.Version)
+		e.mu.Unlock()
+
+		// 先自行优雅排空（宽限期远大于 rulego.Del 内置的 10s），再摘除池中登记。
+		s.stopAndDropVersion(head.PoolKey, cacheKey, head.Version)
+
+		e.mu.Lock()
+		e.waitStart = time.Now() // 下一个队首从现在起重新计时 → 错峰 T
+		e.mu.Unlock()
+
+		// ttl=0 表示纯数量策略：本轮一直清到满足数量为止。
+		if ttl > 0 {
+			return
+		}
+	}
+}
+
+// stopAndDropVersion 优雅停止并移除某个版本的引擎实例。
+func (s *WorkflowService) stopAndDropVersion(poolKey, cacheKey string, version int) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Error().Any("panic", rec).Str("pool_key", poolKey).Msg("Recovered panic during engine pool version cleanup")
+		}
+	}()
+
+	// 1) 自行 Stop：使用远长于 rulego.Del 内置值（10s）的宽限期，
+	//    尽量让正在执行的流程自然跑完，避免被强制中断。
+	if ins, ok := rulego.Get(poolKey); ok && ins != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), poolStopGrace)
+		ins.Stop(stopCtx)
+		cancel()
+	}
+	// 2) 摘除池中登记项（此时已排空，内部 Stop 会很快返回）。
+	rulego.Del(poolKey)
+
+	log.Info().Str("cache_key", cacheKey).Int("version", version).Str("pool_key", poolKey).
+		Msg("Idle root chain engine instance evicted by pool policy")
+}
+
+// invalidateChainPoolEntry 某条根链对应的根链已被删除时，清理其全部版本实例与登记。
+func (s *WorkflowService) invalidateChainPoolEntry(cacheKey string) {
+	e, ok := s.chainPoolVersions.Get(cacheKey)
+	if !ok || e == nil {
+		return
+	}
+	e.mu.Lock()
+	victims := make([]*poolVersionEntry, 0, len(e.versions))
+	for _, it := range e.versions {
+		victims = append(victims, it)
+	}
+	e.versions = make(map[int]*poolVersionEntry)
+	e.waitStart = time.Time{}
+	e.mu.Unlock()
+
+	for _, it := range victims {
+		s.stopAndDropVersion(it.PoolKey, cacheKey, it.Version)
+	}
+	s.chainPoolVersions.Remove(cacheKey)
+}
+
+// chainPoolJanitor 后台巡检，保证无流量时也能按时间策略清理。
+func (s *WorkflowService) chainPoolJanitor() {
+	ticker := time.NewTicker(poolSweepInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		keys := s.chainPoolVersions.Keys()
+		for _, k := range keys {
+			s.sweepChainPool(k)
+		}
+	}
 }
 
 // invokeCacheEntry 「发布在线」根链缓存项：解析后的 DSL 及对应的发布版本标识。
@@ -1268,6 +1588,11 @@ type invokeCacheEntry struct {
 	// ReleaseID 发布版本标识，形如 R000005@3，与 RuleChain 一起缓存，
 	// 保证日志记录的版本号与缓存 DSL 版本一致（发布后缓存失效前不会误报成新版本）。
 	ReleaseID string
+	// Version 发布版本号，与 DSL 一起缓存，用于生成带版本的引擎池 key。
+	// 每次发布版本号递增，使新请求使用新的引擎实例，从而与旧版本实例彻底隔离。
+	Version int
+	// PublishedAt 该发布版本的发布时间，缓存后用于版本实例的 FIFO 清理排序。
+	PublishedAt time.Time
 }
 
 // InvokeRootChain 通过 project + chain_key 定位「发布在线」的根链 DSL 并同步执行。
@@ -1280,9 +1605,13 @@ func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey
 	cached, ok := s.invokeRootChainMapCache.Get(cacheKey)
 	var ruleChain *types.RuleChain
 	var releaseID string
+	var releaseVersion int
+	var releasePublishedAt time.Time
 	if ok && cached != nil {
 		ruleChain = cached.RuleChain
 		releaseID = cached.ReleaseID
+		releaseVersion = cached.Version
+		releasePublishedAt = cached.PublishedAt
 	}
 	// 2. 未命中：查库并解析 DSL，再写入缓存
 	if ruleChain == nil {
@@ -1303,20 +1632,33 @@ func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey
 		}
 		// 注意：不可将 rc.RuleChain.ID 覆写为 cacheKey（UUID），否则该 UUID 会经
 		// metaData.RootChainID 流入节点日志 root_chain_id 字段，污染数据。
-		// 引擎池隔离改用 metaData.PoolKey = cacheKey 实现（见 StartWorkFlow）。
+		// 引擎池隔离改用 metaData.PoolKey（cacheKey@version）实现（见 StartWorkFlow）。
 		// 2.4 记录发布版本标识，用于节点日志的 root_chain_release_id 字段
 		releaseID = fmt.Sprintf("%s@%d", rootDef.ChainID, release.Version)
+		releaseVersion = release.Version
+		releasePublishedAt = release.PublishedAt
 		// 2.5 写入缓存
-		s.invokeRootChainMapCache.Set(cacheKey, &invokeCacheEntry{RuleChain: rc, ReleaseID: releaseID})
+		s.invokeRootChainMapCache.Set(cacheKey, &invokeCacheEntry{RuleChain: rc, ReleaseID: releaseID, Version: releaseVersion, PublishedAt: releasePublishedAt})
 		ruleChain = rc
 	}
 
-	// 3. 执行：以真实根链 id 记录日志，以 cacheKey 作为引擎池 key 隔离草稿实例，
+	// 3. 执行：以真实根链 id 记录日志，以带版本号的 key 作为引擎池 key 隔离不同发布版本，
 	// 并记录当时执行的发布版本号（root_chain_release_id）。
+	//
+	// 引擎池 key 带版本号（<cacheKey>@<version>）的作用：
+	//   - 发布后版本号递增，新请求必然未命中旧实例，从而用新版本 DSL 重建引擎 → 立即走新流程；
+	//   - 旧版本实例不再被任何新请求引用，且【不会被 Del/Stop】，
+	//     因此正在其上执行的存量流程不受影响，可安全执行完毕后成为孤儿被回收。
+	//   （若直接对旧实例调用 rulego.Del，其内部 Stop() 会在等待 10s 后强制中断长流程。）
+	poolKey := fmt.Sprintf("%s@%d", cacheKey, releaseVersion)
+	// 登记该版本到本链的引擎池登记表（标记在线，参与错峰回收），
+	// 再按策略巡检一次：有流量时即可快速回收超量版本（尤其纯数量策略需立即生效）。
+	s.trackPoolVersion(cacheKey, releaseVersion, poolKey, releasePublishedAt)
+	s.sweepChainPool(cacheKey)
 	return s.ExecuteRootChainByID(ctx, ruleChain, payload, project, envName, traceId, &rulegox.ActivityFlowConfig{
 		IsAsync:            isAsync,
 		UseCache:           true,
-		PoolKey:            cacheKey,
+		PoolKey:            poolKey,
 		RootChainReleaseID: releaseID,
 	})
 }

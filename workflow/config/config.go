@@ -27,10 +27,21 @@ const (
 	mysqlLogRetentionDaysKey = "mysql_log_retention_days"
 	// normalKey 配置文件中 custom.normal 段的 key 名。
 	normalKey = "normal"
+	// rootChainPoolMaxVersionsKey 配置文件中 custom.normal 下
+	// 「每条根链在 rulego 引擎池中最多保留的版本实例数量」的 key 名。
+	rootChainPoolMaxVersionsKey = "root_chain_pool_max_versions"
+	// rootChainPoolTTLMinutesKey 配置文件中 custom.normal 下
+	// 「非在线版本在引擎池中的最长存活时间（分钟）」的 key 名。
+	rootChainPoolTTLMinutesKey = "root_chain_pool_ttl_minutes"
 
 	DefaultTimeout = 60 * time.Second
 
 	DefaultListenAddr = ":8686"
+
+	// DefaultRootChainPoolMaxVersions 每条根链默认保留的最大版本实例数。
+	DefaultRootChainPoolMaxVersions = 5
+	// DefaultRootChainPoolTTLMinutes 非在线版本默认最长存活时间（分钟）。
+	DefaultRootChainPoolTTLMinutes = 30
 )
 
 type ReturnValue struct {
@@ -83,6 +94,38 @@ type AppConfig struct {
 	FeishuAlertWebhook string
 	// MysqlLogRetentionDays 数据保留天数（由 custom.normal.retention_days 读取，缺省默认 7）
 	MysqlLogRetentionDays int
+	// RootChainPoolMaxVersions 每条根链在 rulego 引擎池中最多保留的版本实例数量。
+	// 0 表示不按数量限制，仅按存活时间清理（最终只剩在线版本）。
+	// 缺省 DefaultRootChainPoolMaxVersions。
+	RootChainPoolMaxVersions int
+	// RootChainPoolTTLMinutes 非在线版本在引擎池中的最长存活时间（分钟），
+	// 多出的版本按发布时间先后顺序错峰清理（每间隔该时长清理一个）。
+	// 0 表示不按时间限制，仅按数量维持（超出即立即清理）。
+	// 缺省 DefaultRootChainPoolTTLMinutes。
+	RootChainPoolTTLMinutes int
+}
+
+// poolPolicyOnce 保证根链引擎池清理策略只加载一次（进程内缓存）。
+var (
+	poolPolicyOnce        sync.Once
+	poolPolicyMaxVersions = DefaultRootChainPoolMaxVersions
+	poolPolicyTTLMinutes  = DefaultRootChainPoolTTLMinutes
+)
+
+// GetRootChainPoolPolicy 返回根链 rulego 引擎池的清理策略：
+//   - maxVersions：每条根链最多保留的版本实例数量（0=不限制数量，仅按时间清理）；
+//   - ttlMinutes：非在线版本最长存活时间（分钟，0=不限制时间，仅按数量清理）。
+//
+// 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
+// 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
+func GetRootChainPoolPolicy() (maxVersions int, ttlMinutes int) {
+	poolPolicyOnce.Do(func() {
+		if cfg, err := Load(); err == nil && cfg != nil {
+			poolPolicyMaxVersions = cfg.RootChainPoolMaxVersions
+			poolPolicyTTLMinutes = cfg.RootChainPoolTTLMinutes
+		}
+	})
+	return poolPolicyMaxVersions, poolPolicyTTLMinutes
 }
 
 // Load 通过 startupcfg 从配置文件加载应用配置。
@@ -128,6 +171,10 @@ func Load(path ...string) (*AppConfig, error) {
 
 	// 从 custom.normal.retention_days 读取数据保留天数，缺省默认 7
 	cfg.MysqlLogRetentionDays = customNormalInt(startCfg.Custom, mysqlLogRetentionDaysKey, 7)
+	// 引擎池清理策略：此处 0 是【有意义的显式取值】（数量0=仅按时间清理，时间0=仅按数量清理），
+	// 因此用允许 0 的读取方式，不能复用 customNormalInt（它会把 0 当成无效值回退默认）。
+	cfg.RootChainPoolMaxVersions = customNormalIntAllowZero(startCfg.Custom, rootChainPoolMaxVersionsKey, DefaultRootChainPoolMaxVersions)
+	cfg.RootChainPoolTTLMinutes = customNormalIntAllowZero(startCfg.Custom, rootChainPoolTTLMinutesKey, DefaultRootChainPoolTTLMinutes)
 
 	return cfg, nil
 }
@@ -150,6 +197,30 @@ func customNormalString(custom map[string]interface{}, key string) string {
 	return ""
 }
 
+// customNormalIntAllowZero 与 customNormalInt 类似，但允许显式配置 0：
+// 仅当 key 不存在或值无法转换为整数时才返回 def；
+// 显式配置为 0（或负数按 0 计）时返回 0。
+// 用于「0 本身是有效语义」的配置项（如不限制数量 / 不限制时间）。
+func customNormalIntAllowZero(custom map[string]interface{}, key string, def int) int {
+	normal, ok := custom[normalKey]
+	if !ok {
+		return def
+	}
+	nm, ok := normal.(map[string]interface{})
+	if !ok {
+		return def
+	}
+	v, ok := nm[key]
+	if !ok {
+		return def
+	}
+	n, err := conv.Convert[int64](v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return int(n)
+}
+
 // customNormalInt 从 custom.normal 段读取整数配置项。
 // 找不到、类型不符或值 <= 0 时返回默认值 def。
 func customNormalInt(custom map[string]interface{}, key string, def int) int {
@@ -165,8 +236,8 @@ func customNormalInt(custom map[string]interface{}, key string, def int) int {
 	if !ok {
 		return def
 	}
-	n, ok := conv.Int64(v)
-	if !ok || n <= 0 {
+	n, err := conv.Convert[int64](v)
+	if err != nil || n <= 0 {
 		return def
 	}
 	return int(n)
