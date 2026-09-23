@@ -8,6 +8,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,9 @@ const (
 	// rootChainPoolTTLMinutesKey 配置文件中 custom.normal 下
 	// 「非在线版本在引擎池中的最长存活时间（分钟）」的 key 名。
 	rootChainPoolTTLMinutesKey = "root_chain_pool_ttl_minutes"
+	// rootChainBroadcastEnabledKey 配置文件中 custom.normal 下
+	// 「是否启用跨副本根链失效广播（Redis pub/sub）」的 key 名。
+	rootChainBroadcastEnabledKey = "root_chain_broadcast_enabled"
 
 	DefaultTimeout = 60 * time.Second
 
@@ -42,6 +46,10 @@ const (
 	DefaultRootChainPoolMaxVersions = 5
 	// DefaultRootChainPoolTTLMinutes 非在线版本默认最长存活时间（分钟）。
 	DefaultRootChainPoolTTLMinutes = 30
+	// DefaultRootChainBroadcastEnabled 是否默认启用跨副本根链失效广播。
+	// 默认 true 以保证多副本部署下发布能即时全量生效；
+	// 单机部署可显式设为 false，避免创建无谓的 Redis 订阅与后台协程。
+	DefaultRootChainBroadcastEnabled = true
 )
 
 type ReturnValue struct {
@@ -103,14 +111,31 @@ type AppConfig struct {
 	// 0 表示不按时间限制，仅按数量维持（超出即立即清理）。
 	// 缺省 DefaultRootChainPoolTTLMinutes。
 	RootChainPoolTTLMinutes int
+	// RootChainBroadcastEnabled 是否启用跨副本根链失效广播（Redis pub/sub）。
+	// 多副本部署需开启，否则只有收到发布请求的副本会切到新版本；
+	// 单机部署可关闭以省去订阅开销。缺省 DefaultRootChainBroadcastEnabled。
+	RootChainBroadcastEnabled bool
 }
 
-// poolPolicyOnce 保证根链引擎池清理策略只加载一次（进程内缓存）。
+// rootChainCachePolicy 根链缓存相关策略（进程内只加载一次）。
 var (
-	poolPolicyOnce        sync.Once
-	poolPolicyMaxVersions = DefaultRootChainPoolMaxVersions
-	poolPolicyTTLMinutes  = DefaultRootChainPoolTTLMinutes
+	rootChainCacheOnce sync.Once
+	// poolMaxVersions 每条根链最多保留的版本实例数量。
+	poolMaxVersions = DefaultRootChainPoolMaxVersions
+	// poolTTLMinutes 非在线版本最长存活时间（分钟）。
+	poolTTLMinutes = DefaultRootChainPoolTTLMinutes
+	// broadcastEnabled 是否启用跨副本失效广播。
+	broadcastEnabled = DefaultRootChainBroadcastEnabled
 )
+
+// loadRootChainCachePolicy 加载根链缓存相关策略（只执行一次）。
+func loadRootChainCachePolicy() {
+	if cfg, err := Load(); err == nil && cfg != nil {
+		poolMaxVersions = cfg.RootChainPoolMaxVersions
+		poolTTLMinutes = cfg.RootChainPoolTTLMinutes
+		broadcastEnabled = cfg.RootChainBroadcastEnabled
+	}
+}
 
 // GetRootChainPoolPolicy 返回根链 rulego 引擎池的清理策略：
 //   - maxVersions：每条根链最多保留的版本实例数量（0=不限制数量，仅按时间清理）；
@@ -119,13 +144,17 @@ var (
 // 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
 // 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
 func GetRootChainPoolPolicy() (maxVersions int, ttlMinutes int) {
-	poolPolicyOnce.Do(func() {
-		if cfg, err := Load(); err == nil && cfg != nil {
-			poolPolicyMaxVersions = cfg.RootChainPoolMaxVersions
-			poolPolicyTTLMinutes = cfg.RootChainPoolTTLMinutes
-		}
-	})
-	return poolPolicyMaxVersions, poolPolicyTTLMinutes
+	rootChainCacheOnce.Do(loadRootChainCachePolicy)
+	return poolMaxVersions, poolTTLMinutes
+}
+
+// GetRootChainBroadcastEnabled 返回是否启用跨副本根链失效广播（Redis pub/sub）。
+// 多副本部署需开启；单机部署可关闭（false）以避免创建无谓的 Redis 订阅与后台协程。
+// 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
+// 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
+func GetRootChainBroadcastEnabled() bool {
+	rootChainCacheOnce.Do(loadRootChainCachePolicy)
+	return broadcastEnabled
 }
 
 // Load 通过 startupcfg 从配置文件加载应用配置。
@@ -175,6 +204,7 @@ func Load(path ...string) (*AppConfig, error) {
 	// 因此用允许 0 的读取方式，不能复用 customNormalInt（它会把 0 当成无效值回退默认）。
 	cfg.RootChainPoolMaxVersions = customNormalIntAllowZero(startCfg.Custom, rootChainPoolMaxVersionsKey, DefaultRootChainPoolMaxVersions)
 	cfg.RootChainPoolTTLMinutes = customNormalIntAllowZero(startCfg.Custom, rootChainPoolTTLMinutesKey, DefaultRootChainPoolTTLMinutes)
+	cfg.RootChainBroadcastEnabled = customNormalBool(startCfg.Custom, rootChainBroadcastEnabledKey, DefaultRootChainBroadcastEnabled)
 
 	return cfg, nil
 }
@@ -219,6 +249,41 @@ func customNormalIntAllowZero(custom map[string]interface{}, key string, def int
 		return def
 	}
 	return int(n)
+}
+
+// customNormalBool 从 custom.normal 段读取布尔配置项。
+// 支持 bool、整数（非 0 为真）及常见字符串写法（true/1/yes/y/on）。
+// 仅当 key 不存在或值无法识别时才返回 def。
+func customNormalBool(custom map[string]interface{}, key string, def bool) bool {
+	normal, ok := custom[normalKey]
+	if !ok {
+		return def
+	}
+	nm, ok := normal.(map[string]interface{})
+	if !ok {
+		return def
+	}
+	v, ok := nm[key]
+	if !ok {
+		return def
+	}
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		switch strings.ToLower(strings.TrimSpace(val)) {
+		case "true", "1", "yes", "y", "on":
+			return true
+		case "false", "0", "no", "n", "off":
+			return false
+		}
+		return def
+	default:
+		if n, ok2 := conv.Int64(v); ok2 {
+			return n != 0
+		}
+		return def
+	}
 }
 
 // customNormalInt 从 custom.normal 段读取整数配置项。

@@ -236,9 +236,18 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	// 启动后台巡检：即使用户无流量，也能按时间策略错峰回收历史版本实例。
 	go s.chainPoolJanitor()
 
-	// 启动跨副本失效广播的订阅端（Redis 不可用时内部自动降级）。
-	s.invalidateBus = newInvalidatePubSub(s)
-	s.invalidateBus.Start()
+	// 启动跨副本失效广播的订阅端（仅多副本部署时需要）。
+	// 由 custom.normal.root_chain_broadcast_enabled 控制：
+	//   - true（默认）：多副本部署，建立 Redis 订阅，使各副本发布即时生效；
+	//   - false：单机部署，完全不创建订阅与后台协程，省去 Redis 开销。
+	// 关闭时 invalidateBus 保持 nil，NotifyRootChainChanged 自动退化为仅本地失效。
+	if config.GetRootChainBroadcastEnabled() {
+		s.invalidateBus = newInvalidatePubSub(s)
+		s.invalidateBus.Start()
+		log.Info().Msg("Root chain invalidate broadcast enabled (multi-instance mode)")
+	} else {
+		log.Info().Msg("Root chain invalidate broadcast disabled (single-instance mode)")
+	}
 
 	log.Info().Msg("WorkflowService initialized, tables migrated")
 	return s, nil
