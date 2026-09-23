@@ -6071,8 +6071,27 @@ function addOrchNodeInstance(nodeId) {
     kind: n ? (n.kind || 'action') : 'action',
     outputs: n ? (n.outputs || []) : [],
   });
+  // 新增节点默认所有参数均为"调用传入"（由调用方前端传入），避免忘记配置参数；保存时随 node_param_overrides 落库
+  seedOrchParamDefaults(instanceId);
   renderOrchNodeSelected();
   onOrchSelectionChange();
+}
+
+// 为新加入的节点实例预置参数默认值：每个参数默认来源=调用传入(内部 entry)
+// 仅对"新增"节点生效，编辑已保存链时由 applyOrchParamOverrides 恢复既有配置，不覆盖
+function seedOrchParamDefaults(instanceId) {
+  const inst = (window._orchNodeInstances || []).find(i => i.instanceId === instanceId);
+  if (!inst) return;
+  const def = (_orchNodes || []).find(n => n.node_id === inst.nodeId);
+  if (!def) return;
+  const params = parseNodeParams(def);
+  if (!params.length) return;
+  const preset = {};
+  params.forEach(p => {
+    preset[p.key] = { src: PARAM_SRC_ENTRY, value: '' };
+  });
+  // 不覆盖已存在（理论上新增节点不会存在），确保默认生效
+  if (!_orchParamPreset[instanceId]) _orchParamPreset[instanceId] = preset;
 }
 
 // 删除指定节点实例
