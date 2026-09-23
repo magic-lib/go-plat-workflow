@@ -101,6 +101,7 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 
 	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
 	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
+	nodeCollapseOverrides := pruneOverrides(req.NodeCollapseOverrides, validInstances)
 
 	// 序列化 node_param_overrides 以便保存到根链，后续可恢复
 	nodeParamOverridesJSON, _ := json.Marshal(nodeParamOverrides)
@@ -110,6 +111,9 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 
 	// 序列化 node_name_overrides 以便保存到根链，后续可恢复
 	nodeNameOverridesJSON, _ := json.Marshal(nodeNameOverrides)
+
+	// 序列化 node_collapse_overrides 以便保存到根链（参数配置区收起状态），后续可恢复
+	nodeCollapseOverridesJSON, _ := json.Marshal(nodeCollapseOverrides)
 
 	// 6. 存储到数据库
 	def := &workflow.RootChainDef{
@@ -126,6 +130,7 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		NodeParamOverrides:  string(nodeParamOverridesJSON),
 		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
 		NodeNameOverrides:   string(nodeNameOverridesJSON),
+		NodeCollapseOverrides: string(nodeCollapseOverridesJSON),
 	}
 	// 先尝试更新（按 project+chain_id），不存在再创建。
 	// 避免每次保存都物理删除重建导致自增主键 id 持续增长。
@@ -237,12 +242,14 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 	nodeParamOverrides := pruneOverrides(req.NodeParamOverrides, validInstances)
 	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
 	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
+	nodeCollapseOverrides := pruneOverrides(req.NodeCollapseOverrides, validInstances)
 
 	// 序列化溯源字段
 	connectionsJSON, _ := json.Marshal(req.Connections)
 	nodeParamOverridesJSON, _ := json.Marshal(nodeParamOverrides)
 	nodeSwitchOverridesJSON, _ := json.Marshal(nodeSwitchOverrides)
 	nodeNameOverridesJSON, _ := json.Marshal(nodeNameOverrides)
+	nodeCollapseOverridesJSON, _ := json.Marshal(nodeCollapseOverrides)
 
 	return &workflow.SubChainDef{
 		Project:             req.Project,
@@ -257,6 +264,7 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		NodeParamOverrides:  string(nodeParamOverridesJSON),
 		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
 		NodeNameOverrides:   string(nodeNameOverridesJSON),
+		NodeCollapseOverrides: string(nodeCollapseOverridesJSON),
 	}, nil
 }
 

@@ -890,6 +890,7 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		NodeParamOverrides:  draft.NodeParamOverrides,
 		NodeSwitchOverrides: draft.NodeSwitchOverrides,
 		NodeNameOverrides:   draft.NodeNameOverrides,
+		NodeCollapseOverrides: draft.NodeCollapseOverrides,
 		IsCurrent:           true,
 		PublishedAt:         time.Now(),
 	}

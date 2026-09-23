@@ -6078,19 +6078,63 @@ function addOrchNodeInstance(nodeId) {
 // 删除指定节点实例
 function removeOrchNodeInstance(instanceId) {
   if (!window._orchNodeInstances) return;
+  // 链路中间节点（同时存在父节点与子节点）禁止直接删除，避免破坏拓扑
+  if (orchNodeHasParentAndChild(instanceId)) {
+    showToast('该节点存在父节点与子节点，不能直接删除。请先调整 Connections 连线。', 'error');
+    return;
+  }
   window._orchNodeInstances = window._orchNodeInstances.filter(i => i.instanceId !== instanceId);
   // 同步清理该实例残留的覆盖配置，避免保存时写入已删除节点的冗余/错误数据
   if (window._orchParamPreset) delete window._orchParamPreset[instanceId];
   if (window._orchNameOverrides) delete window._orchNameOverrides[instanceId];
   if (window._orchSwitchOverrides) delete window._orchSwitchOverrides[instanceId];
+  // 端点节点（仅 to 或仅 from）删除时，顺带删除 Connections 中与之相关的连线，保持拓扑完整
+  removeOrchConnRowsByInstance(instanceId);
   renderOrchNodeSelected();
   onOrchSelectionChange();
+}
+
+// 删除所有引用了指定节点实例的连接行（from_id 或 to_id 命中即移除）
+function removeOrchConnRowsByInstance(instanceId) {
+  if (!instanceId) return;
+  document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(row => {
+    const fromSel = row.querySelector('[data-role="orch-from"]');
+    const toSel = row.querySelector('[data-role="orch-to"]');
+    if ((fromSel && fromSel.value === instanceId) || (toSel && toSel.value === instanceId)) {
+      row.remove();
+    }
+  });
+  const container = document.getElementById('orch-conn-container');
+  if (container && !container.querySelector('.orch-conn-row')) {
+    const emptyEl = document.getElementById('orch-conn-empty');
+    if (emptyEl) emptyEl.style.display = '';
+  }
+  updateOrchConnMoveState();
+  refreshOrchConnOptions();
+}
+
+// 判断某节点实例在 Connections 中是否既存在父节点（作为 to 被指向）又存在子节点（作为 from 指向别人）。
+// 同时满足时认为该节点处于链路中间，前端禁止直接删除，需先调整连线。
+function orchNodeHasParentAndChild(instanceId) {
+  if (!instanceId) return false;
+  const conns = collectOrchConnections();
+  let hasParent = false, hasChild = false;
+  conns.forEach(c => {
+    if (c.to_id === instanceId) hasParent = true;
+    if (c.from_id === instanceId) hasChild = true;
+  });
+  return hasParent && hasChild;
 }
 
 // 从 Live Preview 点击节点触发：二次确认后删除该实例（避免误删）
 function removeOrchNodeInstanceConfirm(instanceId) {
   const inst = (window._orchNodeInstances || []).find(i => i.instanceId === instanceId);
   if (!inst) return;
+  // 链路中间节点（同时存在父节点与子节点）禁止直接删除，避免破坏拓扑
+  if (orchNodeHasParentAndChild(instanceId)) {
+    showToast('该节点处于链路中间（同时存在上游父节点与下游子节点），不能直接删除。请先调整 Connections 连线。', 'error');
+    return;
+  }
   const name = inst.name || instanceId;
   if (!window.confirm('确定要删除该节点实例吗？\n\n节点：' + name + '\n实例ID：' + instanceId + '\n\n删除后将从流程图中移除，且不可撤销。')) return;
   removeOrchNodeInstance(instanceId);
@@ -6116,12 +6160,17 @@ function renderOrchNodeSelected() {
       <tbody>${list.map((i, idx) => {
         // 实例对象只存摘要字段（无 configuration），需按 nodeId 回查完整定义才能判断路由功能
         const def = (_orchNodes || []).find(n => n.node_id === i.nodeId);
+        // 链路中间节点（同时存在父节点与子节点）禁止直接删除：隐藏删除按钮，显示锁定提示
+        const locked = orchNodeHasParentAndChild(i.instanceId);
+        const delCell = locked
+          ? `<span class="orch-node-locked" title="该节点处于链路中间（同时存在上游父节点与下游子节点），不能直接删除。请先调整 Connections 连线。">🔒 中间节点</span>`
+          : `<button class="btn btn-sm btn-danger" type="button" onclick="removeOrchNodeInstance('${esc(i.instanceId)}')">删除</button>`;
         return `<tr title="${esc(i.instanceId)}">
           <td>${idx + 1}</td>
           <td>${nodeRouteBadge(def)}${esc(i.name)}</td>
           <td class="code-cell">${esc(i.nodeId)}</td>
           <td class="code-cell">${esc(i.instanceId)}</td>
-          <td style="text-align:right"><button class="btn btn-sm btn-danger" type="button" onclick="removeOrchNodeInstance('${esc(i.instanceId)}')">删除</button></td>
+          <td style="text-align:right">${delCell}</td>
         </tr>`;
       }).join('')}</tbody>
     </table>`;
@@ -6310,6 +6359,18 @@ function refreshOrchConnOptions() {
         toSel.value = curVal;
       }
     }
+    syncOrchConnRowTooltip(row);
+  });
+}
+
+// 鼠标移到 Connection 的 select 上时，用 title 显示完整选中名称（select 自身较窄会截断）
+function syncOrchConnRowTooltip(row) {
+  if (!row) return;
+  ['orch-from', 'orch-to'].forEach(role => {
+    const sel = row.querySelector('[data-role="' + role + '"]');
+    if (!sel) return;
+    const opt = sel.selectedOptions && sel.selectedOptions[0];
+    sel.title = opt ? opt.textContent : sel.value;
   });
 }
 
@@ -6339,9 +6400,12 @@ function addOrchConnRow(fromId, toId, connType) {
   if (fromId) row.querySelector('[data-role="orch-from"]').value = fromId;
   if (toId) row.querySelector('[data-role="orch-to"]').value = toId;
 
-  // Trigger preview update
-  row.querySelector('[data-role="orch-from"]').addEventListener('change', onOrchChange);
-  row.querySelector('[data-role="orch-to"]').addEventListener('change', onOrchChange);
+  // 悬停显示完整选中名称
+  syncOrchConnRowTooltip(row);
+
+  // Trigger preview update；切换选项时同步刷新 tooltip
+  row.querySelector('[data-role="orch-from"]').addEventListener('change', () => { syncOrchConnRowTooltip(row); onOrchChange(); });
+  row.querySelector('[data-role="orch-to"]').addEventListener('change', () => { syncOrchConnRowTooltip(row); onOrchChange(); });
   row.querySelector('[data-role="orch-type"]').addEventListener('input', onOrchChange);
   updateOrchConnMoveState();
 }
@@ -6611,6 +6675,7 @@ function onOrchChange() {
     renderOrchPreview();
     renderOrchDslPreview();
     renderOrchParamOverrides();
+    renderOrchNodeSelected(); // 连线变化后刷新已选节点表，链路中间节点锁定状态实时更新
   }, 200);
 }
 
@@ -6654,6 +6719,17 @@ function orchParamSrcToDisplay(s) {
   return PARAM_SRC_VALUE;
 }
 
+// 按 instanceId 排序比较：格式如 N000015__xsvkn，先按 __ 前的 baseId，再按随机后缀
+function cmpInstanceId(a, b) {
+  a = String(a || '');
+  b = String(b || '');
+  const pa = a.split('__');
+  const pb = b.split('__');
+  const c = (pa[0] || '').localeCompare(pb[0] || '');
+  if (c !== 0) return c;
+  return (pa[1] || '').localeCompare(pb[1] || '');
+}
+
 // 解析节点 params 定义（兼容字符串/数组）
 function parseNodeParams(node) {
   if (!node) return [];
@@ -6675,10 +6751,11 @@ function renderOrchParamOverrides() {
   const nodeIds = getSelectedOrchNodeIds();
   // 以"实例"为单位渲染（同一节点可多次添加），每个实例独立配置参数。
   // instances: [{instanceId, nodeId, name, type, ...}]，仅保留有参数定义的实例。
+  // 按 instanceId 升序排序，方便在参数配置区快速定位某个节点的实例
   const instances = (window._orchNodeInstances || []).filter(inst => {
     const def = _orchNodes.find(n => n.node_id === inst.nodeId);
     return def && parseNodeParams(def).length > 0;
-  });
+  }).sort((a, b) => cmpInstanceId(a.instanceId, b.instanceId));
   const nodes = instances.map(inst => ({
     inst,
     def: _orchNodes.find(n => n.node_id === inst.nodeId),
@@ -6697,14 +6774,15 @@ function renderOrchParamOverrides() {
   nodes.forEach(({ inst, def }) => {
     // 按 key 排序，保持与后端输出（node_config.arguments 经 sortBindConfigsByKey 排序）顺序一致
     const params = parseNodeParams(def).slice().sort((a, b) => String(a.key || '').localeCompare(String(b.key || '')));
+    const collapsed = _orchCollapseState && _orchCollapseState[inst.instanceId] === true;
     html += `<div class="override-node-block">
-      <div class="override-node-header" onclick="this.nextElementSibling.classList.toggle('hidden')">
-        <span class="toggle-icon">▾</span>
-        <span class="code-cell">${esc(inst.instanceId)}</span>
-        <span style="font-weight:400">${esc(def.name || '')}</span>
-        <span style="margin-left:auto;font-weight:400;color:var(--text-muted);font-size:.72rem">${params.length} 个参数</span>
+      <div class="override-node-header" onclick="toggleOrchParamBlock(this, '${esc(inst.instanceId)}')">
+        <span class="toggle-icon">${collapsed ? '▸' : '▾'}</span>
+        <span class="ov-inst-id">${esc(inst.instanceId)}</span>
+        <span class="ov-inst-name">${esc(def.name || '')}</span>
+        <span class="ov-inst-count">${params.length} 个参数</span>
       </div>
-      <div class="override-node-body">`;
+      <div class="override-node-body${collapsed ? ' hidden' : ''}">`;
     params.forEach(p => {
       const required = p.required ? ' <span class="param-required-star">*</span>' : '';
       const typeTag = p.type ? `<span class="param-type-tag">(${esc(p.type)})</span>` : '';
@@ -6769,6 +6847,8 @@ function renderOrchParamOverrides() {
 
 // 暂存已编辑的参数值（key=nodeId, value={key: {src, value}}），用于重渲染时保留
 let _orchParamPreset = {};
+// 节点参数配置区收起状态（key=instanceId, value=true 表示收起），持久化到数据库
+let _orchCollapseState = {};
 
 // 根据来源切换值控件
 function onParamSrcChange(sel) {
@@ -7026,7 +7106,8 @@ function storeParamPreset() {
 // 后端写入节点 arguments 时取其中的 value 字段。
 function collectOrchParamOverrides() {
   const result = {};
-  Object.keys(_orchParamPreset).forEach(nodeId => {
+  // 按 instanceId 升序收集，使保存的 node_param_overrides 顺序与参数配置区展示顺序一致
+  Object.keys(_orchParamPreset).sort(cmpInstanceId).forEach(nodeId => {
     const keys = _orchParamPreset[nodeId];
     Object.keys(keys).forEach(key => {
       const { src, value, private: isPrivate } = keys[key];
@@ -7104,6 +7185,34 @@ function applyOrchParamOverrides(saved) {
       });
     });
   } catch(e) { /* ignore */ }
+}
+
+// 回显已保存的 node_collapse_overrides（编辑加载时调用）。结构：{ instanceId: bool }，true=收起
+function applyOrchCollapseOverrides(saved) {
+  _orchCollapseState = {};
+  if (!saved) return;
+  try {
+    const obj = typeof saved === 'string' ? JSON.parse(saved) : saved;
+    Object.keys(obj || {}).forEach(id => { if (obj[id] === true) _orchCollapseState[id] = true; });
+  } catch(e) { /* ignore */ }
+}
+
+// 切换某个节点参数配置实例的收起/展开，并即时更新状态（稍后随"保存"请求落到数据库）
+function toggleOrchParamBlock(headerEl, instanceId) {
+  const body = headerEl.nextElementSibling;
+  if (!body) return;
+  const nowCollapsed = body.classList.toggle('hidden');
+  const icon = headerEl.querySelector('.toggle-icon');
+  if (icon) icon.textContent = nowCollapsed ? '▸' : '▾';
+  if (nowCollapsed) _orchCollapseState[instanceId] = true;
+  else delete _orchCollapseState[instanceId];
+}
+
+// 收集收起状态（仅记录收起的实例），随保存请求持久化
+function collectOrchCollapseOverrides() {
+  const result = {};
+  Object.keys(_orchCollapseState).forEach(id => { if (_orchCollapseState[id] === true) result[id] = true; });
+  return result;
 }
 
 // ============ 每个节点实例的 switch_condition 覆盖（仅本链生效，不改节点定义）============
@@ -7445,6 +7554,8 @@ function enhanceOrchPreviewNodes(container) {
     const del = document.createElementNS(SVGNS, 'g');
     del.setAttribute('class', 'orch-node-del');
     del.setAttribute('transform', `translate(${px},${py})`);
+    // 链路中间节点（同时存在父节点与子节点）不显示删除叉，避免误删破坏拓扑
+    const isMidChain = orchNodeHasParentAndChild(instId);
     // 透明矩形扩大点击热区，避免误触节点本体打开编辑器
     const hit = document.createElementNS(SVGNS, 'rect');
     hit.setAttribute('x', '-9'); hit.setAttribute('y', '-9');
@@ -7456,7 +7567,7 @@ function enhanceOrchPreviewNodes(container) {
     x2.setAttribute('x1', '-4'); x2.setAttribute('y1', '4'); x2.setAttribute('x2', '4'); x2.setAttribute('y2', '-4');
     x1.setAttribute('class', 'orch-node-del-x'); x2.setAttribute('class', 'orch-node-del-x');
     del.appendChild(hit); del.appendChild(x1); del.appendChild(x2);
-    g.appendChild(del);
+    if (!isMidChain) g.appendChild(del);
 
     // Live Preview 任意节点点击均可打开编辑器（改本链实例名称；Activity/CondSwitch 还可改路由条件）
     // 命中删除叉则删除，否则打开编辑器（用 target 判定，避免热区外误触或 stopPropagation 失效导致误开编辑器）
@@ -7620,6 +7731,7 @@ function newSubChainViaOrch() {
   document.getElementById('orch-chain-desc').value = '';
   document.getElementById('orch-debug-mode').checked = false;
   _orchParamPreset = {}; // 重置节点参数配置暂存
+  _orchCollapseState = {}; // 重置节点参数配置区收起状态
   window._orchNodeInstances = []; // 重置已选节点实例
   document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
   const emptyEl = document.getElementById('orch-conn-empty');
@@ -7672,6 +7784,8 @@ function orchSubChainByIndex(i) {
     applyOrchSwitchOverrides(c.node_switch_overrides);
     // 恢复已保存的每节点名称覆盖（仅本链生效）
     applyOrchNameOverrides(c.node_name_overrides);
+    // 恢复已保存的每节点参数配置区收起状态
+    applyOrchCollapseOverrides(c.node_collapse_overrides);
 
     const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
     restoreOrchNodeInstances(nodeIds);
@@ -7728,6 +7842,7 @@ async function generateOrchRootChain() {
     node_param_overrides: collectOrchParamOverrides(),
     node_switch_overrides: collectOrchSwitchOverrides(),
     node_name_overrides: collectOrchNameOverrides(),
+    node_collapse_overrides: collectOrchCollapseOverrides(),
   };
 
   const btn = document.getElementById('orch-generate-btn');
@@ -7795,6 +7910,8 @@ function loadRootChainToOrch(c) {
     applyOrchSwitchOverrides(c.node_switch_overrides);
     // 恢复已保存的每节点名称覆盖（仅本链生效）
     applyOrchNameOverrides(c.node_name_overrides);
+    // 恢复已保存的每节点参数配置区收起状态
+    applyOrchCollapseOverrides(c.node_collapse_overrides);
 
     // Check nodes
     const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
@@ -8488,6 +8605,8 @@ async function orchLoadRootChainById(chainId) {
       applyOrchParamOverrides(c.node_param_overrides);
       applyOrchSwitchOverrides(c.node_switch_overrides);
       applyOrchNameOverrides(c.node_name_overrides);
+    // 恢复已保存的每节点参数配置区收起状态
+    applyOrchCollapseOverrides(c.node_collapse_overrides);
       const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
       restoreOrchNodeInstances(nodeIds, c.dsl_json);
       const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);

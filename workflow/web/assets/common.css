@@ -208,8 +208,13 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 /* Override section */
 .override-node-block { margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.override-node-header { background: #f3f4f6; padding: 8px 14px; font-size: .82rem; font-weight: 700; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.override-node-header { background: #f3f4f6; padding: 8px 14px; font-size: .82rem; font-weight: 700; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; flex-wrap: wrap; }
 .override-node-header:hover { background: #e5e7eb; }
+/* instanceId 必须完整显示：不收缩、不换行、不截断 */
+.override-node-header .ov-inst-id { font-family: 'SF Mono', 'Fira Code', monospace; font-size: .8rem; color: var(--primary); white-space: nowrap; flex: 0 0 auto; overflow: visible; }
+/* 节点标题：字符过多时换行，占满剩余空间 */
+.override-node-header .ov-inst-name { font-weight: 400; white-space: normal; word-break: break-word; flex: 1 1 auto; min-width: 80px; }
+.override-node-header .ov-inst-count { margin-left: auto; font-weight: 400; color: var(--text-muted); font-size: .72rem; flex: 0 0 auto; white-space: nowrap; }
 .override-node-header .toggle-icon { transition: transform .2s; font-size: .7rem; }
 .override-node-header.collapsed .toggle-icon { transform: rotate(-90deg); }
 .override-node-body { padding: 10px 14px; display: block; }
@@ -300,6 +305,8 @@ g.node:hover > .orch-node-del { opacity: 1; }
 .orch-node-del-x { stroke: #6b7280; stroke-width: 2; stroke-linecap: round; }
 .orch-node-del:hover .orch-node-del-x { stroke: #ef4444; }
 .orch-preview-empty { text-align: center; color: var(--text-muted); padding: 40px; font-size: .9rem; }
+/* 已选节点表中链路中间节点（有父节点也有子节点）的锁定提示，删除按钮被隐藏 */
+.orch-node-locked { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; color: var(--text-muted); white-space: nowrap; }
 .orch-zoom { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
 .orch-zoom-label { min-width: 42px; text-align: center; font-size: .8rem; color: var(--text-muted); }
 .orch-dsl-preview { background: #1e293b; color: #e2e8f0; border-radius: 6px; padding: 14px; font-family: 'SF Mono','Fira Code',monospace; font-size: .75rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 12px; display: none; }

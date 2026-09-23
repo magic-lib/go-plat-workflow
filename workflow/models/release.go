@@ -21,6 +21,7 @@ type RootChainReleaseModel struct {
 	SubChainIDs        string    `gorm:"column:sub_chain_ids;type:text" json:"sub_chain_ids"`
 	ConnectionsData    string    `gorm:"column:connections_data;type:text" json:"connections_data"`
 	NodeParamOverrides string    `gorm:"column:node_param_overrides;type:text" json:"node_param_overrides"`
+	NodeCollapseOverrides string `gorm:"column:node_collapse_overrides;type:text" json:"node_collapse_overrides"`
 	IsCurrent          bool      `gorm:"column:is_current;default:false;index" json:"is_current"`
 	PublishedAt        time.Time `gorm:"column:published_at;not null" json:"published_at"`
 	CreatedAt          time.Time `json:"created_at"`
@@ -44,6 +45,7 @@ func (m *RootChainReleaseModel) ToDef() *workflow.RootChainReleaseDef {
 		SubChainIDs:        m.SubChainIDs,
 		ConnectionsData:    m.ConnectionsData,
 		NodeParamOverrides: m.NodeParamOverrides,
+		NodeCollapseOverrides: m.NodeCollapseOverrides,
 		IsCurrent:          m.IsCurrent,
 		PublishedAt:        m.PublishedAt,
 	}
@@ -61,6 +63,7 @@ func (m *RootChainReleaseModel) FromDef(def *workflow.RootChainReleaseDef) {
 	m.SubChainIDs = def.SubChainIDs
 	m.ConnectionsData = def.ConnectionsData
 	m.NodeParamOverrides = def.NodeParamOverrides
+	m.NodeCollapseOverrides = def.NodeCollapseOverrides
 	m.IsCurrent = def.IsCurrent
 	m.PublishedAt = def.PublishedAt
 }

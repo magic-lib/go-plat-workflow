@@ -244,6 +244,8 @@ type SubChainDef struct {
 	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
 	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
 	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态 JSON（map[instanceId]bool，true=收起），仅前端展示用
+	NodeCollapseOverrides string `json:"node_collapse_overrides,omitempty"`
 }
 
 // RootChainDef 根规则链定义。
@@ -275,6 +277,8 @@ type RootChainDef struct {
 	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
 	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
 	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态 JSON（map[instanceId]bool，true=收起），仅前端展示用
+	NodeCollapseOverrides string `json:"node_collapse_overrides,omitempty"`
 	// HasReleases 是否存在发布记录（存在时不允许删除该根链）
 	HasReleases bool `json:"has_releases"`
 	// MustInputParams 必须输入的参数列表
@@ -309,6 +313,8 @@ type RootChainReleaseDef struct {
 	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
 	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
 	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态 JSON（map[instanceId]bool，true=收起），仅前端展示用
+	NodeCollapseOverrides string `json:"node_collapse_overrides,omitempty"`
 	// IsCurrent 是否为生产环境当前使用的版本
 	IsCurrent bool `json:"is_current"`
 	// PublishedAt 发布时间
@@ -477,6 +483,8 @@ type BuildRequest struct {
 	NodeSwitchOverrides map[string]string `json:"node_switch_overrides,omitempty"`
 	// NodeNameOverrides 每节点实例名称覆盖，key=node 实例 instanceId，value=节点显示名称
 	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态，key=node 实例 instanceId，value=true 表示收起
+	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides,omitempty"`
 }
 
 // BuildSubChainRequest 编排方式组装子链请求。
@@ -509,6 +517,8 @@ type BuildSubChainRequest struct {
 	NodeSwitchOverrides map[string]string `json:"node_switch_overrides,omitempty"`
 	// NodeNameOverrides 每节点实例名称覆盖，key=node 实例 instanceId，value=节点显示名称
 	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态，key=node 实例 instanceId，value=true 表示收起
+	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides,omitempty"`
 }
 
 // ============================================================

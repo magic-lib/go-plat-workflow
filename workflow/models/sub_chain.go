@@ -23,6 +23,7 @@ type SubChainModel struct {
 	NodeParamOverrides string         `gorm:"column:node_param_overrides;type:text" json:"node_param_overrides"`
 	NodeSwitchOverrides string        `gorm:"column:node_switch_overrides;type:text" json:"node_switch_overrides"`
 	NodeNameOverrides  string        `gorm:"column:node_name_overrides;type:text" json:"node_name_overrides"`
+	NodeCollapseOverrides string      `gorm:"column:node_collapse_overrides;type:text" json:"node_collapse_overrides"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
 	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
@@ -48,6 +49,7 @@ func (m *SubChainModel) ToDef() *workflow.SubChainDef {
 		NodeParamOverrides: m.NodeParamOverrides,
 		NodeSwitchOverrides: m.NodeSwitchOverrides,
 		NodeNameOverrides:  m.NodeNameOverrides,
+		NodeCollapseOverrides: m.NodeCollapseOverrides,
 	}
 }
 
@@ -65,4 +67,5 @@ func (m *SubChainModel) FromDef(def *workflow.SubChainDef) {
 	m.NodeParamOverrides = def.NodeParamOverrides
 	m.NodeSwitchOverrides = def.NodeSwitchOverrides
 	m.NodeNameOverrides = def.NodeNameOverrides
+	m.NodeCollapseOverrides = def.NodeCollapseOverrides
 }

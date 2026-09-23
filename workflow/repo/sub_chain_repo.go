@@ -129,6 +129,7 @@ func (r *SubChainRepo) Update(ctx context.Context, def *workflow.SubChainDef) er
 			"node_param_overrides": def.NodeParamOverrides,
 			"node_switch_overrides": def.NodeSwitchOverrides,
 			"node_name_overrides":  def.NodeNameOverrides,
+			"node_collapse_overrides": def.NodeCollapseOverrides,
 		})
 	if result.Error != nil {
 		return result.Error
