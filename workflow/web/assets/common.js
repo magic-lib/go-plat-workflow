@@ -621,8 +621,9 @@ function filterNodes() {
       }
     }
     if (show && tag) {
-      // 第6列是"标签"列（0-based index 5），取所有 chip 文本
-      const tagCell = r.cells[5];
+      // 第5列是"标签"列（0-based index 4），取所有 chip 文本
+      // 注意：原实现误用 index 5（实为命名空间列），添加「已发布引用」列后一并修正
+      const tagCell = r.cells[4];
       const has = tagCell && Array.prototype.some.call(tagCell.querySelectorAll('.tag-chip'), c => c.textContent.replace(' ✓','').trim() === tag);
       if (!has) show = false;
     }
@@ -779,7 +780,7 @@ async function loadNodes() {
     const nodes = await api('/api/nodes' + envQ);
     const tbody = document.querySelector('#nodes-table tbody');
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
       return;
     }
     window._nodesForEdit = nodes; // 缓存供编辑按钮索引使用
@@ -793,11 +794,14 @@ async function loadNodes() {
         <td><span class="badge ${n.kind==='condition'?'badge-warning':'badge-info'}">${n.kind==='condition'?'查询获取':'策略执行'}</span></td>
         <td>${renderTagChipsHtml(n.tags)}</td>
         <td>${esc(n.namespace || '-')}</td>
-        <td class="actions">
-          <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">编辑</button>
-          <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
-          <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
-          <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">删除</button>
+        <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
+        <td>
+          <div class="actions">
+            <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">编辑</button>
+            <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
+            <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
+            <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">删除</button>
+          </div>
         </td>
       </tr>`).join('');
   } catch (e) { showToast('加载节点失败: ' + e.message, 'error'); }
@@ -2304,7 +2308,7 @@ function renderActivityTable(list) {
   const tbody = document.getElementById('act-table');
   const all = list || [];
   if (all.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
     renderActivityPager(0);
     return;
   }
@@ -2347,6 +2351,8 @@ function renderActivityTable(list) {
       <td><span class="code-cell">${escHtml(a.act_namespace)}</span></td>
       <td><span class="code-cell">${escHtml(a.act_name)}</span></td>
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
+      <td class="pubref-count" data-chains="${publishedRefsJsonAttr(a)}" data-empty="${(a.published_root_chains && a.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(a)}</td>
+      <td class="noderef-count" data-nodes="${refNodesJsonAttr(a)}" data-empty="${activityRefNodes(a).length ? '' : '1'}">${refNodesCountHtml(a)}</td>
       <td>${escHtml(a.created_at ? a.created_at.substring(0,10) : '-')}</td>
       <td><div class="actions">
         <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(a.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editActivity('${escHtml(a.activity_id)}')">编辑</button>
@@ -7998,6 +8004,38 @@ function trunc(s, n) { if (!s) return '-'; return s.length > n ? s.substring(0, 
 function publishedLockBadge(title) {
   return ' <span class="published-lock" title="' + esc(title || '已发布') + '">🔒</span>';
 }
+
+// ===== Nodes 列表「已发布引用」列 =====
+// 展示该节点被多少条「当前已发布」的根链引用；悬停列出全部根链（ID / 名称 / 版本），
+// 便于人工定位需要处理的根链。数据源为后端列表回填的 published_root_chains。
+function nodePublishedRootChains(n) {
+  return (n && Array.isArray(n.published_root_chains)) ? n.published_root_chains : [];
+}
+// 列单元格 JSON 属性（供悬停 pop 层读取，避免闭包串行化整个节点对象）
+function publishedRefsJsonAttr(n) {
+  try { return escAttr(JSON.stringify(nodePublishedRootChains(n))); } catch (e) { return '[]'; }
+}
+// 列单元格展示：有引用显示数量（可悬停），无引用显示淡灰 "-"
+function publishedRefsCountHtml(n) {
+  const list = nodePublishedRootChains(n);
+  if (!list.length) return '<span style="color:var(--text-muted)">-</span>';
+  return '<span class="pubref-num">' + list.length + '</span>';
+}
+
+// ===== Activities 列表「引用 Nodes」列 =====
+// 与「已发布引用」是不同维度：这里是直接使用了该 activity 的 Node（影响面），
+// 已发布则是最终生效的根链。修改 activity 前据此评估影响范围。
+function activityRefNodes(a) {
+  return (a && Array.isArray(a.ref_nodes)) ? a.ref_nodes : [];
+}
+function refNodesJsonAttr(a) {
+  try { return escAttr(JSON.stringify(activityRefNodes(a))); } catch (e) { return '[]'; }
+}
+function refNodesCountHtml(a) {
+  const list = activityRefNodes(a);
+  if (!list.length) return '<span style="color:var(--text-muted)">-</span>';
+  return '<span class="pubref-num">' + list.length + '</span>';
+}
 function publishedLockAttrs(published, title) {
   if (!published) return '';
   // 普通用户禁用；管理员仍可直接操作，但前端会二次确认，故只加提示 title 不禁用
@@ -8142,6 +8180,107 @@ try {
   });
   window.addEventListener('scroll', () => pop.classList.remove('show'), true);
 })();
+
+// ============================================================
+// 列表「数量 + 悬停明细」通用浮层
+// 复用 .arg-popover 样式。各类「计数列」（已发布引用、引用 Nodes）共用同一套
+// 定位/显示/隐藏逻辑，仅内容渲染函数不同，避免重复实现。
+// opts: { popId, selector, dataAttr, buildContent }
+// ============================================================
+function attachCountPopover(opts) {
+  let pop = document.getElementById(opts.popId);
+  if (!pop) {
+    pop = document.createElement('div');
+    pop.id = opts.popId;
+    pop.className = 'arg-popover';
+    document.body.appendChild(pop);
+  }
+  let hideTimer = null;
+
+  function showPop(cell) {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    let items = [];
+    try { items = JSON.parse(cell.getAttribute(opts.dataAttr) || '[]'); } catch(e) { items = []; }
+    if (cell.getAttribute('data-empty')) items = [];
+    pop.innerHTML = opts.buildContent(items);
+    pop.classList.add('show');
+    const r = cell.getBoundingClientRect();
+    const pw = pop.offsetWidth, ph = pop.offsetHeight;
+    let left = r.left + r.width / 2 - pw / 2;
+    let top = r.top - ph - 8;
+    if (top < 8) top = r.bottom + 8;                 // 上方放不下则显示到下方
+    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+  }
+
+  function hidePop() {
+    hideTimer = setTimeout(() => pop.classList.remove('show'), 80);
+  }
+
+  document.addEventListener('mouseover', e => {
+    const cell = e.target.closest && e.target.closest(opts.selector);
+    if (cell) showPop(cell);
+  });
+  document.addEventListener('mouseout', e => {
+    const cell = e.target.closest && e.target.closest(opts.selector);
+    if (cell) hidePop();
+  });
+  window.addEventListener('scroll', () => pop.classList.remove('show'), true);
+}
+
+// Nodes 列表「已发布引用」列：悬停列出引用该节点的全部已发布根链
+attachCountPopover({
+  popId: 'pubref-popover',
+  selector: 'td.pubref-count',
+  dataAttr: 'data-chains',
+  buildContent: function(chains) {
+    if (!chains || !chains.length) {
+      return '<div class="ap-none">未被任何已发布根链引用</div>';
+    }
+    let html = '<div class="ap-title">已发布引用根链（' + chains.length + '）</div>';
+    html += chains.map(function(c) {
+      const cid = escHtml(c.chain_id || '-');
+      const name = c.name ? escHtml(c.name) : '';
+      const ver = (c.version === 0 || c.version) ? ('v' + c.version) : '';
+      return '<div class="ap-item">' +
+        '<span class="ap-key">' + cid + '</span>' +
+        (name ? '<span class="ap-label">' + name + '</span>' : '') +
+        (ver ? '<span class="ap-label" style="color:#9ca3af">' + ver + '</span>' : '') +
+        '</div>';
+    }).join('');
+    return html;
+  }
+});
+
+// Activities 列表「引用 Nodes」列：悬停列出使用该 activity 的全部节点，
+// 并标注节点是否已发布（🔒）以区分线上还是草稿影响面。
+attachCountPopover({
+  popId: 'noderef-popover',
+  selector: 'td.noderef-count',
+  dataAttr: 'data-nodes',
+  buildContent: function(nodes) {
+    if (!nodes || !nodes.length) {
+      return '<div class="ap-none">暂无 Node 引用该 activity</div>';
+    }
+    const live = nodes.filter(function(n) { return n.published; }).length;
+    let html = '<div class="ap-title">引用该 activity 的 Node（' + nodes.length + '）</div>';
+    if (live > 0) {
+      html += '<div class="ap-none" style="color:#ef4444">其中 ' + live + ' 个已发布到根链，修改将影响线上</div>';
+    }
+    html += nodes.map(function(n) {
+      const nid = escHtml(n.node_id || '-');
+      const name = n.name ? escHtml(n.name) : '';
+      return '<div class="ap-item">' +
+        '<span class="ap-key">' + nid + '</span>' +
+        (name ? '<span class="ap-label">' + name + '</span>' : '') +
+        (n.published ? '<span class="ap-label" style="color:#ef4444">🔒已发布</span>'
+                     : '<span class="ap-label" style="color:#9ca3af">草稿</span>') +
+        '</div>';
+    }).join('');
+    return html;
+  }
+});
 
 // ===== 参数值绑定相关全局函数（供 renderActivityItemParams / onArgSourceChange / onRefChange 跨作用域复用） =====
 

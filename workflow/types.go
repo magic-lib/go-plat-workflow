@@ -133,6 +133,30 @@ type ProjectConfigResponse struct {
 
 // NodeDef 节点定义，对应 rulego RuleNode。
 // 每个 NodeDef 代表一个可复用的规则节点配置，可以被多个规则链引用。
+// RefNodeInfo 引用了某个 activity 的 Node 信息（用于 Activities 列表展示改动影响面）。
+// 由列表接口实时计算填充，不入库。
+type RefNodeInfo struct {
+	// NodeID 引用该 activity 的节点 ID
+	NodeID string `json:"node_id"`
+	// Name 节点名称
+	Name string `json:"name,omitempty"`
+	// Published 该节点自身是否已被发布到根链（当前生效版本）。
+	// 为 true 表示修改该 activity 会直接影响线上流程，需谨慎。
+	Published bool `json:"published"`
+}
+
+// PublishedRootChainRef 引用了某个节点（或 activity）并已发布的根链信息。
+// 仅统计「当前生效」版本（is_current=true），历史版本不计入。
+// 由列表接口按发布快照实时计算填充，不入库。
+type PublishedRootChainRef struct {
+	// ChainID 根链 ID
+	ChainID string `json:"chain_id"`
+	// Name 根链名称（发布时快照）
+	Name string `json:"name,omitempty"`
+	// Version 当前生效的发布版本号
+	Version int `json:"version"`
+}
+
 type NodeDef struct {
 	// Project 所属项目，用于多项目隔离
 	Project string `json:"project"`
@@ -176,6 +200,10 @@ type NodeDef struct {
 	// PublishedInRootChain 节点是否已被发布到根链（含子链传递引用），为 true 时禁止编辑/删除。
 	// 由列表接口按发布快照实时计算填充，不入库。
 	PublishedInRootChain bool `json:"published_in_root_chain,omitempty"`
+	// PublishedRootChains 引用了该节点且已发布（当前生效版本）的根链明细列表，含 ID、名称与版本号。
+	// 由列表接口按发布快照实时计算填充，不入库；
+	// 前端据此在 Nodes 列表展示「已发布引用」数量，并在悬停时列出全部根链，便于人工处理。
+	PublishedRootChains []*PublishedRootChainRef `json:"published_root_chains,omitempty"`
 	// HasSwitchCondition 节点是否配置了路由条件 switch_condition，为 true 表示该节点带路由分支功能。
 	// 由列表/详情接口按节点配置实时计算填充，不入库。
 	HasSwitchCondition bool `json:"has_switch_condition,omitempty"`
@@ -671,6 +699,14 @@ type ActivityDef struct {
 	// PublishedInRootChain activity 是否已被发布到根链（含子链传递引用），为 true 时禁止编辑/删除。
 	// 由列表接口按发布快照实时计算填充，不入库。
 	PublishedInRootChain bool `json:"published_in_root_chain,omitempty"`
+	// PublishedRootChains 引用了该 activity 且已发布（当前生效版本）的根链明细列表，含 ID、名称与版本号。
+	// 由列表接口按发布快照实时计算填充，不入库；
+	// 前端据此在 Activities 列表展示「已发布引用」数量，并在悬停时列出全部根链，便于人工处理。
+	PublishedRootChains []*PublishedRootChainRef `json:"published_root_chains,omitempty"`
+	// RefNodes 引用了该 activity 的全部 Node 明细（含节点 ID、名称及该节点是否已发布）。
+	// 与 PublishedRootChains 是不同维度：后者是「最终的根链」，这里是「直接使用的节点」，
+	// 用于修改 activity 前评估影响面。由列表接口实时计算填充，不入库。
+	RefNodes []*RefNodeInfo `json:"ref_nodes,omitempty"`
 	// CreatedAt 创建时间
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt 更新时间

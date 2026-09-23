@@ -99,3 +99,39 @@ DSL 缓存与引擎池都是进程内缓存。多副本部署时，发布请求�
 
 **修复**：新增在线版本未知哨兵 `currentUnknown = -1`。版本变更后标记为未知，
 巡检遇到未知状态**保守跳过**，待下次调用重新解析出真实在线版本后恢复巡检。
+
+---
+
+### feat: Nodes / Activities 列表展示「已发布引用」明细
+
+**背景**
+此前 node / activity 只有布尔值 `published_in_root_chain`：被引用时按钮置灰，但**看不出被哪些根链引用**，
+需要人工逐个反查根链发布快照才能处理，排查成本高。
+
+**后端改动**
+
+- 新增类型（`workflow/types.go`，均为列表接口实时计算、不入库）：
+  - `PublishedRootChainRef`：`chain_id` / `name` / `version`；
+  - `RefNodeInfo`：`node_id` / `name` / `published`；
+  - `NodeDef.PublishedRootChains`、`ActivityDef.PublishedRootChains`、`ActivityDef.RefNodes`。
+- `publishedRefIndex` 增加明细索引 `nodeChains` / `activityChains`（键 → 根链集合，去重），
+  配套 `addRef`（按根链去重）与 `sortedRefs`（按 `ChainID` 排序，保证前端展示顺序稳定）。
+- `ListNodes` 填充 `published_root_chains`；`ListActivities` 填充 `published_root_chains` 与 `ref_nodes`。
+- 新增 `buildActivityRefNodes`：构建「activity → 引用它的 Node」索引（`nodeActivityRefs` 解析节点配置），
+  并用 `idx.nodes` 标注每个 Node 自身是否已发布，用于区分线上 / 草稿影响面。
+  构建失败仅 `Warn` 降级为空列表，**不影响主列表返回**。
+- 新增 `NodePublishedRootChains(ctx, project, nodeID)` 便于单节点查询。
+
+> `PublishedRootChains` 与 `RefNodes` 是两个不同维度：前者是**最终生效的根链**，后者是**直接使用该 activity 的节点**，
+> 用于在修改 activity 前评估影响范围。
+
+**前端改动**
+
+- Nodes 列表新增「已发布引用」列（7 列 → 8 列）；Activities 列表新增「已发布引用」「引用 Nodes」两列（8 列 → 10 列）。
+- 计数 + 悬停浮层（复用 `attachCountPopover`）：
+  - 已发布引用：列出根链 ID、名称与版本号（`vN`）；
+  - 引用 Nodes：列出 Node ID、名称，并标注 `🔒已发布` / `草稿`，顶部提示「其中 N 个已发布到根链，修改将影响线上」。
+- **fix**：修正 Nodes 标签筛选失效问题——原实现取 `r.cells[5]`（实为命名空间列），标签列应为 `cells[4]`。
+- Nodes 表格列宽调整：Node ID 与操作列由百分比改为固定像素（`110px` / `300px`），
+  避免宽屏留白与窄屏按钮被压缩显示不全；并移除操作列 `<td>` 上的 flex（改为内层 `<div class="actions">`），
+  修复 `table-layout: fixed` 下操作列按钮溢出的问题。

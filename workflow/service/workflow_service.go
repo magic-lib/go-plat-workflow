@@ -493,6 +493,8 @@ func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag
 			if _, ok := idx.nodes[n.NodeID]; ok {
 				n.PublishedInRootChain = true
 			}
+			// 同时带上明细列表（含根链 ID/名称/版本），供列表展示引用数量与悬停明细
+			n.PublishedRootChains = sortedRefs(idx.nodeChains, n.NodeID)
 		}
 	}
 	return all, nil
@@ -2511,10 +2513,24 @@ func (s *WorkflowService) ListActivities(ctx context.Context, project string, ta
 		if err != nil {
 			return nil, err
 		}
+		// 「activity → 引用它的 Node」索引，用于列表展示改动影响面。
+		// 该列仅为辅助参考，构建失败时降级为空列表，不影响主列表返回。
+		refNodeMap := map[string][]*workflow.RefNodeInfo{}
+		if refNodes, berr := s.buildActivityRefNodes(ctx, project, idx); berr == nil {
+			refNodeMap = refNodes
+		} else {
+			log.Warn().Err(berr).Str("project", project).Msg("Build activity ref node index failed, skip ref_nodes")
+		}
+
 		for _, a := range activities {
-			if _, ok := idx.activities[a.ActNamespace+"\x00"+a.ActName]; ok {
+			key := a.ActNamespace + "\x00" + a.ActName
+			if _, ok := idx.activities[key]; ok {
 				a.PublishedInRootChain = true
 			}
+			// 同时带上明细列表（含根链 ID/名称/版本），供列表展示引用数量与悬停明细
+			a.PublishedRootChains = sortedRefs(idx.activityChains, key)
+			// 引用该 activity 的节点明细（含节点是否已在发布链中）
+			a.RefNodes = refNodeMap[key]
 		}
 	}
 	return activities, nil
