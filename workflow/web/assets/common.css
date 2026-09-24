@@ -234,6 +234,11 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .override-field input.changed { border-color: var(--warning); background: #fffbeb; }
 .override-empty { text-align: center; padding: 16px; color: var(--text-muted); font-size: .85rem; }
 .param-call-hint { display: inline-flex; align-items: center; height: 30px; padding: 0 10px; color: var(--text-muted); font-size: .78rem; background: var(--bg-muted); border: 1px dashed var(--border); border-radius: 4px; }
+/* 引用节点已失效（上游被删除/移出链路）：整行标红并给出提示，要求重新选择来源 */
+.override-field.param-ref-broken { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 4px; padding: 6px; margin: 2px 0; }
+.override-field.param-ref-broken .param-src-select { border-color: #fca5a5; }
+.param-src-need-reselect { box-shadow: 0 0 0 2px rgba(239,68,68,.15); }
+.param-ref-broken-warn { flex: 1 1 100%; color: #b91c1c; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px; font-size: .72rem; padding: 4px 8px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Activity 标签选择 chips */
 .tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 2px; }
@@ -300,6 +305,14 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-conn-row .btn-move:hover { color: var(--primary); border-color: var(--primary); }
 .orch-conn-row .btn-move:disabled { opacity: .35; cursor: not-allowed; }
 .orch-conn-row .conn-arrow { color: var(--text-muted); font-weight: 700; font-size: .85rem; flex-shrink: 0; }
+/* 自定义关系缺少 switch_condition 的行内警告 */
+.orch-conn-row .orch-cond-warn { display: inline-flex; align-items: center; background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; border-radius: 4px; font-size: .7rem; padding: 3px 6px; cursor: pointer; flex-shrink: 0; white-space: nowrap; line-height: 1.4; font-family: inherit; }
+.orch-conn-row .orch-cond-warn[data-level="warn"], .orch-conn-row .orch-cond-warn[data-level="conflict"] { background: #fffbeb; border-color: #fcd34d; color: #b45309; }
+.orch-conn-row .orch-cond-warn:hover { filter: brightness(.95); }
+.orch-conn-row.conn-row-cond-error { background: #fef2f2; border-radius: 4px; padding: 4px; }
+.orch-conn-row.conn-row-cond-warn { background: #fffbeb; border-radius: 4px; padding: 4px; }
+.orch-cond-summary { background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; border-radius: 6px; padding: 7px 10px; margin-bottom: 8px; font-size: .78rem; line-height: 1.5; }
+.orch-cond-summary .orch-cond-summary-conflict { margin-top: 4px; padding-top: 4px; border-top: 1px dashed #fca5a5; color: #b45309; }
 /* Preview in orchestrate */
 .orch-preview-area { border: 1px solid var(--border); border-radius: 6px; flex: 1; min-height: 0; display: block; overflow: auto; background: #fafcfd; position: relative; }
 /* 缩放包裹层：以左上角为原点缩放，配合 overflow:auto 产生滚动条 */

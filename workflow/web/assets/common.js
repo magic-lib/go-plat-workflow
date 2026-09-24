@@ -6412,6 +6412,7 @@ function refreshOrchConnOptions() {
     }
     syncOrchConnRowTooltip(row);
   });
+  refreshOrchConnWarns(); // 节点名称/路由条件变化后同步校验
 }
 
 // 鼠标移到 Connection 的 select 上时，用 title 显示完整选中名称（select 自身较窄会截断）
@@ -6441,6 +6442,7 @@ function addOrchConnRow(fromId, toId, connType) {
     <span class="conn-arrow">→</span>
     <select data-role="orch-to">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
     <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'')}" title="连接类型：留空表示新增未指定（Success / Failure / True / False / Stream 或自定义）">
+    <button type="button" class="orch-cond-warn" data-role="orch-cond-warn" style="display:none" onclick="onOrchConnWarnClick(this)" title=""></button>
     <button class="btn-move" onclick="moveOrchConnRow('orch-conn-row-${orchConnSeq}',-1)" title="上移">▲</button>
     <button class="btn-move" onclick="moveOrchConnRow('orch-conn-row-${orchConnSeq}',1)" title="下移">▼</button>
     <button class="btn-remove" onclick="removeOrchConnRow('orch-conn-row-${orchConnSeq}')" title="删除">&times;</button>
@@ -6459,6 +6461,169 @@ function addOrchConnRow(fromId, toId, connType) {
   row.querySelector('[data-role="orch-to"]').addEventListener('change', () => { syncOrchConnRowTooltip(row); onOrchChange(); });
   row.querySelector('[data-role="orch-type"]').addEventListener('input', onOrchChange);
   updateOrchConnMoveState();
+  refreshOrchConnWarns();
+}
+
+// ============================================================
+// Connections 自定义关系必须配置路由条件（switch_condition）的校验
+// 规则：relationType 只要不是 Success / Failure（留空视为 Success），
+// 起点节点就必须配置 switch_condition，否则运行时该分支根本不会命中。
+// ============================================================
+const ORCH_SKIP_ROUTE_TYPES = ['success', 'failure'];
+
+// 该连接类型是否需要起点节点配置 switch_condition
+function orchConnNeedsSwitch(connType) {
+  const t = String(connType == null ? '' : connType).trim().toLowerCase();
+  if (t === '') return false; // 留空 = Success
+  return ORCH_SKIP_ROUTE_TYPES.indexOf(t) < 0;
+}
+
+// 按 nodeId 取节点定义。
+// 注意：_orchNodes 是本文件顶层的 let 声明，【不会挂到 window 上】（这与 window._orchNodeInstances 不同），
+// 必须直接引用该词法变量；写 window._orchNodes 会恒为 undefined，导致校验全部误判为空。
+function orchNodeDefById(nodeId) {
+  const list = (typeof _orchNodes !== 'undefined' && _orchNodes) ? _orchNodes : (window._orchNodes || []);
+  return list.find(x => x.node_id === nodeId) || null;
+}
+
+// 取该实例【在本页面上实际生效】的 switch_condition。
+// 优先级：本链实例覆盖（node_switch_overrides，页面 🔀 编辑写入） > 节点定义默认值。
+// 返回 known=false 表示「无法确定」（节点定义不在缓存中，如节点已禁用），调用方不应据此判空。
+function orchInstanceSwitchInfo(instanceId) {
+  if (!instanceId) return { known: false, text: '', from: '' };
+  if (Object.prototype.hasOwnProperty.call(_orchSwitchOverrides || {}, instanceId)) {
+    const v = _orchSwitchOverrides[instanceId];
+    return { known: true, text: String(v == null ? '' : v).trim(), from: 'override' };
+  }
+  const baseId = String(instanceId).split('__')[0] || instanceId;
+  const n = orchNodeDefById(baseId);
+  if (!n) return { known: false, text: '', from: '' };
+  return { known: true, text: String(nodeSwitchConditionText(n) || '').trim(), from: 'def' };
+}
+
+// 兼容旧调用：只需「生效文本」的场景
+function orchInstanceSwitchText(instanceId) {
+  return orchInstanceSwitchInfo(instanceId).text;
+}
+
+// 判断连接起点类别：node(可配路由) / sub(子链) / unsupported(节点类型不支持) / unknown(未找到定义)
+function orchConnFromKind(fromId) {
+  if (!fromId) return 'none';
+  const inst = (window._orchNodeInstances || []).find(x => x.instanceId === fromId);
+  if (inst) {
+    let t = inst.type || '';
+    // 实例摘要缺 type 时回查节点定义（baseId = instanceId 去掉 __后缀）
+    if (!t) {
+      const n = orchNodeDefById(String(fromId).split('__')[0] || fromId);
+      t = n ? (n.type || '') : '';
+    }
+    return (t === 'custom/Activity' || t === 'custom/CondSwitch') ? 'node' : 'unsupported';
+  }
+  const subs = (typeof _orchSubChains !== 'undefined' && _orchSubChains) ? _orchSubChains : (window._orchSubChains || []);
+  if (subs.some(s => s.chain_id === fromId)) return 'sub';
+  return 'unknown';
+}
+
+// 刷新每行的路由条件警告；返回必须修复的问题列表（起点可配路由但 switch_condition 为空）
+// 同时把「默认分支却仍配了路由条件」的冲突写入 window._orchConnConflicts（保存时提示用）
+function refreshOrchConnWarns() {
+  const problems = [];
+  const conflicts = [];
+  const rows = Array.from(document.querySelectorAll('#orch-conn-container .orch-conn-row'));
+  rows.forEach(row => {
+    const fromSel = row.querySelector('[data-role="orch-from"]');
+    const typeEl = row.querySelector('[data-role="orch-type"]');
+    const warnEl = row.querySelector('[data-role="orch-cond-warn"]');
+    const fromId = fromSel ? fromSel.value : '';
+    const type = typeEl ? typeEl.value : '';
+    let level = '';
+    let msg = '';
+    if (fromId && !orchConnNeedsSwitch(type)) {
+      // 反向校验：Success / Failure（留空=Success）是默认分支，若起点仍配了 switch_condition，
+      // 输出会按条件走自定义分支，该 Success/Failure 分支很可能不会命中 → 流程走错
+      const kind = orchConnFromKind(fromId);
+      if (kind === 'node') {
+        const info = orchInstanceSwitchInfo(fromId);
+        if (info.known && info.text) {
+          level = 'conflict';
+          const srcTxt = info.from === 'override' ? '本链实例设置（页面 🔀 编辑）' : '节点默认定义';
+          const howTxt = info.from === 'override'
+            ? '可在本页点击此处把该实例的 switch_condition 清空（注意：清空后会回退到节点定义值，若节点定义也有值需一并清除）'
+            : '该值来自节点定义，需到 Node 编辑页清除；仅在本页清空覆盖会回退回节点定义值';
+          msg = '关系「' + (String(type).trim() || 'Success') + '」是默认分支，但起点 ' + fromId + ' 仍配置了 switch_condition（来源：' +
+                srcTxt + '）。配置路由条件后，输出会按条件走自定义分支，该 ' + (String(type).trim() || 'Success') +
+                ' 分支很可能不会命中，流程会走错。' + howTxt + '。';
+          conflicts.push({ row: row, fromId: fromId, type: String(type).trim() || 'Success', from: info.from });
+        }
+      }
+    } else if (orchConnNeedsSwitch(type) && fromId) {
+      const kind = orchConnFromKind(fromId);
+      if (kind === 'node') {
+        const info = orchInstanceSwitchInfo(fromId);
+        if (!info.known) {
+          // 节点定义不在页面缓存中（如已禁用），无法确定 → 只橙色提示，绝不判为空，避免误报
+          level = 'warn';
+          msg = '关系「' + String(type).trim() + '」需要路由条件，但未加载到起点 ' + fromId +
+                ' 的节点定义（可能已禁用），无法确认是否已配置。';
+        } else if (!info.text) {
+          level = 'error';
+          msg = '关系「' + String(type).trim() + '」需要路由条件，但起点 ' + fromId +
+                '（' + (info.from === 'override' ? '本链实例设置' : '节点默认定义') + '）的 switch_condition 为空，' +
+                '运行时不会命中该分支。点击此处配置。';
+        }
+      } else if (kind === 'sub') {
+        level = 'warn';
+        msg = '关系「' + String(type).trim() + '」需要路由条件，但起点是 Sub Chain，无法配置 switch_condition。';
+      } else if (kind === 'unsupported') {
+        level = 'warn';
+        msg = '关系「' + String(type).trim() + '」需要路由条件，但起点节点类型不支持 switch_condition（仅 custom/Activity 与 custom/CondSwitch 支持）。';
+      } else {
+        level = 'warn';
+        msg = '关系「' + String(type).trim() + '」需要路由条件，但未找到起点节点定义，无法校验 switch_condition。';
+      }
+    }
+    row.classList.toggle('conn-row-cond-error', level === 'error');
+    row.classList.toggle('conn-row-cond-warn', level === 'warn' || level === 'conflict');
+    if (warnEl) {
+      warnEl.style.display = level ? 'inline-flex' : 'none';
+      warnEl.dataset.level = level;
+      warnEl.title = msg;
+      warnEl.textContent = level === 'error' ? '⚠️ 缺路由条件' : (level === 'conflict' ? '⚠️ 路由冲突' : '⚠️');
+    }
+    if (level === 'error') problems.push({ row: row, fromId: fromId, type: String(type).trim() });
+  });
+  window._orchConnConflicts = conflicts;
+  updateOrchConnCondSummary(problems.length, conflicts.length);
+  return problems;
+}
+
+// Connections 区块顶部的汇总提示
+function updateOrchConnCondSummary(count, conflictCount) {
+  const el = document.getElementById('orch-conn-cond-summary');
+  if (!el) return;
+  if (!count && !conflictCount) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'block';
+  let html = '';
+  if (count) {
+    html += '<div>⚠️ 有 ' + count + ' 条连接使用了自定义关系（非 Success/Failure），但起点节点的 switch_condition 为空，' +
+            '运行时不会命中这些分支。请点击行内的「⚠️ 缺路由条件」配置。</div>';
+  }
+  if (conflictCount) {
+    html += '<div class="orch-cond-summary-conflict">⚠️ 有 ' + conflictCount +
+            ' 条连接的关系是 Success/Failure（含留空），但起点仍配置了 switch_condition，' +
+            '输出会走自定义分支导致该连接可能不命中、流程走错。请点击行内的「⚠️ 路由冲突」清空。</div>';
+  }
+  el.innerHTML = html;
+}
+
+// 点击行内警告：直接打开起点节点的 switch_condition 编辑器
+function onOrchConnWarnClick(btn) {
+  const row = btn && btn.closest ? btn.closest('.orch-conn-row') : null;
+  if (!row) return;
+  const fromSel = row.querySelector('[data-role="orch-from"]');
+  const id = fromSel ? fromSel.value : '';
+  if (!id) { showToast('请先选择起点节点', 'error'); return; }
+  orchOpenNodeSwitchEditor(id);
 }
 
 // 更新连接行上移/下移按钮的可用状态（首行禁上移、末行禁下移）
@@ -6727,6 +6892,7 @@ function onOrchChange() {
     renderOrchDslPreview();
     renderOrchParamOverrides();
     renderOrchNodeSelected(); // 连线变化后刷新已选节点表，链路中间节点锁定状态实时更新
+    refreshOrchConnWarns();   // 连线/关系变化后实时校验自定义关系是否缺 switch_condition
   }, 200);
 }
 
@@ -6821,11 +6987,24 @@ function renderOrchParamOverrides() {
   if (emptyEl) emptyEl.style.display = 'none';
   if (countEl) countEl.textContent = nodes.length + ' 个节点（含重复实例）';
 
+  // 预扫描：来源为「引用节点」但引用目标已失效的参数（上游被删除 / 移出链路不再是祖先）
+  // key=instanceId → [{key, ref}]，仅用于强制展开该节点并给出提示，不修改用户配置
+  // （用户可能只是临时断开连线，后面还会接上，自动改写会导致重新配置非常繁琐）
+  const brokenRefMap = {};
+  nodes.forEach(({ inst, def }) => {
+    parseNodeParams(def).forEach(p => {
+      if (!orchParamRefBroken(inst.instanceId, resolveOrchParamPreset(inst.instanceId, p.key))) return;
+      const preset = resolveOrchParamPreset(inst.instanceId, p.key);
+      (brokenRefMap[inst.instanceId] = brokenRefMap[inst.instanceId] || []).push({ key: p.key, ref: String(preset.value || '') });
+    });
+  });
+
   let html = '';
   nodes.forEach(({ inst, def }) => {
     // 按 key 排序，保持与后端输出（node_config.arguments 经 sortBindConfigsByKey 排序）顺序一致
     const params = parseNodeParams(def).slice().sort((a, b) => String(a.key || '').localeCompare(String(b.key || '')));
-    const collapsed = _orchCollapseState && _orchCollapseState[inst.instanceId] === true;
+    // 存在失效引用时强制展开，避免用户看不到需要重新选择的参数
+    const collapsed = _orchCollapseState && _orchCollapseState[inst.instanceId] === true && !brokenRefMap[inst.instanceId];
     html += `<div class="override-node-block">
       <div class="override-node-header" onclick="toggleOrchParamBlock(this, '${esc(inst.instanceId)}')">
         <span class="toggle-icon">${collapsed ? '▸' : '▾'}</span>
@@ -6871,29 +7050,118 @@ function renderOrchParamOverrides() {
   container.insertAdjacentHTML('beforeend', html);
 
   // 为每个参数初始化值控件（默认固定值文本框）
+  let brokenTotal = 0;
+  let firstBrokenField = null;
   container.querySelectorAll('.override-field').forEach(field => {
     const nodeId = field.getAttribute('data-node');
     const key = field.getAttribute('data-key');
-    let preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || null;
-    // 兜底：未单独保存 node_param_overrides 时，从 DSL 节点 arguments 恢复（已写入配置后的值）
-    if (!preset) {
-      const inst = (window._orchNodeInstances || []).find(i => i.instanceId === nodeId);
-      if (inst && Array.isArray(inst.override)) {
-        const bc = inst.override.find(b => (b.Key || b.key) === key);
-        if (bc && bc.Value != null && bc.Value !== '') {
-          preset = inferOrchParamPreset(bc.Value);
-          // 从 DSL 恢复私有标志
-          if (preset && Array.isArray(inst.privateKeys) && inst.privateKeys.includes(key)) {
-            preset.private = true;
-          }
-        }
-      }
-    }
+    const preset = resolveOrchParamPreset(nodeId, key);
+    // 引用目标已失效：保持用户原配置不动（可能是临时断开，后面还会接上），仅给出提示
+    const broken = (brokenRefMap[nodeId] || []).find(b => b.key === key);
     initParamValueControl(field, preset);
     // 回显"私有"勾选状态
     const privCheck = field.querySelector('.param-private-check');
     if (privCheck) privCheck.checked = !!(preset && preset.private);
+    if (broken) {
+      markOrchParamRefBroken(field, broken);
+      brokenTotal++;
+      if (!firstBrokenField) firstBrokenField = field;
+    }
   });
+
+  if (brokenTotal > 0) {
+    const msg = '有 ' + brokenTotal + ' 个参数引用的节点已不在其上游（被删除或已移出链路），' +
+                '运行时可能取不到值，请确认后重新选择来源（若只是临时断开连线，重新连上后提示会自动消失）。';
+    if (typeof showToast === 'function') showToast(msg, 'error');
+    if (firstBrokenField && firstBrokenField.scrollIntoView) {
+      firstBrokenField.scrollIntoView({ block: 'center' });
+    }
+  }
+}
+
+// 解析参数当前生效的配置（暂存优先，其次从 DSL 节点 arguments 兜底回显）
+function resolveOrchParamPreset(nodeId, key) {
+  let preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || null;
+  // 兜底：未单独保存 node_param_overrides 时，从 DSL 节点 arguments 恢复（已写入配置后的值）
+  if (!preset) {
+    const inst = (window._orchNodeInstances || []).find(i => i.instanceId === nodeId);
+    if (inst && Array.isArray(inst.override)) {
+      const bc = inst.override.find(b => (b.Key || b.key) === key);
+      if (bc && bc.Value != null && bc.Value !== '') {
+        preset = inferOrchParamPreset(bc.Value);
+        // 从 DSL 恢复私有标志
+        if (preset && Array.isArray(inst.privateKeys) && inst.privateKeys.includes(key)) {
+          preset.private = true;
+        }
+      }
+    }
+  }
+  return preset;
+}
+
+// 「引用节点」失效判定：来源为 upstream，但引用的目标已不在当前节点的可选上游里
+// （目标节点被删除、或连线变动后不再是该节点的祖先），也包括无法解析的历史脏数据。
+// 空值视为「尚未选择」，不算失效。
+function orchParamRefBroken(nodeId, preset) {
+  if (!preset || preset.src !== PARAM_SRC_UPSTREAM) return false;
+  const ref = String(preset.value || '').trim();
+  if (!ref) return false;
+  const parsed = parseStepsRef(ref);
+  if (!parsed || !parsed.nodeId) return true;
+  return !getOrchRefNodeCandidates(nodeId).some(c => c.id === parsed.nodeId);
+}
+
+// 保存前检查：扫描参数面板当前 UI 状态，收集所有失效的「引用节点」配置
+// 只用于提示，不修改配置、不阻断保存
+function collectOrchBrokenRefs() {
+  const out = [];
+  const container = document.getElementById('orch-param-list');
+  if (!container) return out;
+  container.querySelectorAll('.override-field').forEach(field => {
+    const srcSel = field.querySelector('.param-src-select');
+    if (!srcSel || srcSel.value !== PARAM_SRC_UPSTREAM) return;
+    const slot = field.querySelector('.param-value-slot');
+    const finalEl = slot ? slot.querySelector('.param-ref-final') : null;
+    const inputEl = slot ? slot.querySelector('.param-value-input') : null;
+    const ref = finalEl && finalEl.value ? finalEl.value : (inputEl ? inputEl.value : '');
+    if (!ref) return;
+    const nodeId = field.getAttribute('data-node');
+    const parsed = parseStepsRef(ref);
+    if (!parsed || !getOrchRefNodeCandidates(nodeId).some(c => c.id === parsed.nodeId)) {
+      out.push({ nodeId: nodeId, key: field.getAttribute('data-key'), ref: String(ref) });
+    }
+  });
+  return out;
+}
+
+// 清除参数行上的失效提示（用户重新选择来源后调用）
+function clearOrchParamRefBroken(field) {
+  if (!field) return;
+  field.classList.remove('param-ref-broken');
+  const sel = field.querySelector('.param-src-select');
+  if (sel) sel.classList.remove('param-src-need-reselect');
+  const warn = field.querySelector('.param-ref-broken-warn');
+  if (warn) warn.remove();
+}
+
+// 在参数行上标记失效提示，引导用户重新选择来源
+function markOrchParamRefBroken(field, broken) {
+  field.classList.add('param-ref-broken');
+  const sel = field.querySelector('.param-src-select');
+  if (sel) sel.classList.add('param-src-need-reselect');
+  const extra = field.querySelector('.param-extra-row');
+  if (!extra) return;
+  let warn = field.querySelector('.param-ref-broken-warn');
+  if (!warn) {
+    warn = document.createElement('span');
+    warn.className = 'param-ref-broken-warn';
+    extra.appendChild(warn);
+  }
+  const refId = (parseStepsRef(broken.ref) || {}).nodeId || broken.ref;
+  const text = '⚠️ 引用的节点 ' + refId + ' 已不在该节点的上游（已删除或已移出链路），运行时可能取不到值。' +
+               '请重新选择来源，或重新连上连线后本提示会自动消失。';
+  warn.textContent = text;
+  warn.title = text;
 }
 
 // 暂存已编辑的参数值（key=nodeId, value={key: {src, value}}），用于重渲染时保留
@@ -6904,6 +7172,7 @@ let _orchCollapseState = {};
 // 根据来源切换值控件
 function onParamSrcChange(sel) {
   const field = sel.closest('.override-field');
+  clearOrchParamRefBroken(field); // 用户重新选择了来源，去掉失效提示
   const src = sel.value;
   const slot = field.querySelector('.param-value-slot');
   const nodeId = field.getAttribute('data-node');
@@ -7061,6 +7330,12 @@ function renderOrchRefNodeControl(slot, excludeId, presetValue) {
   slot.style.flexWrap = 'wrap';
   const parsed = parseStepsRef(presetValue);
   const cands = getOrchRefNodeCandidates(excludeId);
+  // 已失效引用（目标被删除 / 不再是祖先 / 无法解析）：保留原值渲染，不静默改成别的节点，
+  // 也不清空 —— 用户可能只是临时断开连线，接上后应自动恢复正常
+  if (presetValue && (!parsed || !cands.some(c => c.id === parsed.nodeId))) {
+    renderOrchRefNodeControlBroken(slot, excludeId, presetValue, parsed);
+    return;
+  }
   const selNodeId = parsed ? parsed.nodeId : (cands[0] ? cands[0].id : '');
   const cand = cands.find(c => c.id === selNodeId) || cands[0] || null;
   const kind = parsed ? parsed.kind : 'arguments';
@@ -7082,6 +7357,30 @@ function renderOrchRefNodeControl(slot, excludeId, presetValue) {
     `</select>` +
     `<select class="param-value-input" style="flex:1;min-width:0" onchange="onOrchRefNodeFieldChange(this)">${fieldOpts}</select>` +
     `<input type="hidden" class="param-ref-final" value="${esc(finalRef)}">`;
+}
+
+// 失效引用的专用渲染：节点下拉里给出「⚠️ xxx（已不在上游）」占位项并选中，
+// 字段下拉只有原引用值一项，保证 storeParamPreset 读到的仍是原值（不会被清空或串成别的节点）
+function renderOrchRefNodeControlBroken(slot, excludeId, presetValue, parsed) {
+  slot.style.flex = '1 1 100%';
+  slot.style.flexWrap = 'wrap';
+  const brokenId = parsed ? parsed.nodeId : (String(presetValue).replace(/^\{\{/, '').replace(/\}\}$/, ''));
+  const kind = parsed ? parsed.kind : 'arguments';
+  // 除失效占位项外，同时列出当前可用的上游节点，方便直接改选而无需切换来源
+  let nodeOpts = `<option value="" selected>⚠️ ${esc(brokenId)}（已不在上游）</option>`;
+  getOrchRefNodeCandidates(excludeId).forEach(c => {
+    nodeOpts += `<option value="${esc(c.id)}">${esc(c.id)} ${esc(c.name)}</option>`;
+  });
+  slot.innerHTML =
+    `<select class="param-ref-node-select param-ref-broken-select" style="flex:0 0 200px" onchange="onOrchRefNodeChange(this)">${nodeOpts}</select>` +
+    `<select class="param-ref-kind-select" style="flex:0 0 110px" onchange="onOrchRefNodeChange(this)">` +
+      `<option value="arguments" ${kind === 'arguments' ? 'selected' : ''}>参数定义</option>` +
+      `<option value="responses" ${kind === 'responses' ? 'selected' : ''}>返回值定义</option>` +
+    `</select>` +
+    `<select class="param-value-input" style="flex:1;min-width:0" onchange="onOrchRefNodeFieldChange(this)">` +
+      `<option value="${esc(presetValue)}" selected>${esc(presetValue)}（失效）</option>` +
+    `</select>` +
+    `<input type="hidden" class="param-ref-final" value="${esc(presetValue)}">`;
 }
 
 function renderOrchRefNodeFieldOptions(cand, kind, presetKey) {
@@ -7369,7 +7668,7 @@ async function orchOpenNodeSwitchEditor(instanceId) {
   // 尝试从已选实例/节点定义取默认值（缺失也不影响保存）
   const inst = (window._orchNodeInstances || []).find(x => x.instanceId === instanceId);
   const nodeId = inst ? inst.nodeId : (instanceId.split('__')[0] || instanceId);
-  const n = (window._orchNodes || []).find(x => x.node_id === nodeId);
+  const n = orchNodeDefById(nodeId); // 注意 _orchNodes 不在 window 上，必须走该 helper
   const hasDef = !!n;
   const defExpr = hasDef ? nodeSwitchConditionText(n) : '';
   const hasOverride = Object.prototype.hasOwnProperty.call(_orchSwitchOverrides, instanceId);
@@ -7879,6 +8178,41 @@ async function generateOrchRootChain() {
 
   if (nodeIds.length === 0 && subIds.length === 0) { showToast('请至少选择一个 Node 或 Sub Chain', 'error'); return; }
   if (conns.length === 0) { showToast('请至少添加一条连接', 'error'); return; }
+
+  // 自定义关系（非 Success/Failure）必须由起点节点的 switch_condition 路由，为空则运行时不命中
+  const condProblems = refreshOrchConnWarns();
+  if (condProblems.length > 0) {
+    const firstRow = condProblems[0].row;
+    if (firstRow && firstRow.scrollIntoView) firstRow.scrollIntoView({ block: 'center' });
+    const lines = condProblems.slice(0, 10).map(p => '· ' + p.fromId + ' → 「' + p.type + '」').join('\n');
+    const more = condProblems.length > 10 ? '\n…（共 ' + condProblems.length + ' 条）' : '';
+    const goOn = window.confirm(
+      '检测到 ' + condProblems.length + ' 条连接使用了自定义关系（非 Success/Failure），但起点节点的 switch_condition 为空：\n\n' +
+      lines + more +
+      '\n\n运行时这些分支不会命中。建议先点击行内的「⚠️ 缺路由条件」配置。\n\n仍要继续保存吗？');
+    if (!goOn) return;
+  }
+
+  // 保存前统一检查「默认分支却仍配了路由条件」：只提示，不阻断保存
+  const connConflicts = window._orchConnConflicts || [];
+  if (connConflicts.length > 0) {
+    const lines = connConflicts.slice(0, 5)
+      .map(c => '· ' + c.fromId + ' → 「' + c.type + '」（路由条件来源：' + (c.from === 'override' ? '本链实例设置' : '节点定义') + '）')
+      .join('；');
+    const more = connConflicts.length > 5 ? ' …（共 ' + connConflicts.length + ' 条）' : '';
+    showToast('⚠️ 有 ' + connConflicts.length + ' 条连接用的是 Success/Failure，但起点仍配置了 switch_condition：' +
+              lines + more + '。这些分支可能不会命中、流程会走错，请清空对应路由条件。已照常保存。', 'error');
+  }
+
+  // 保存前统一检查「引用节点」是否仍生效：只提示，不阻断保存
+  // （用户可能只是临时断开连线，更新后重新连上即可，所以不强制改写配置）
+  const brokenRefs = collectOrchBrokenRefs();
+  if (brokenRefs.length > 0) {
+    const lines = brokenRefs.slice(0, 5).map(b => '· ' + b.nodeId + '.' + b.key + ' → ' + b.ref).join('；');
+    const more = brokenRefs.length > 5 ? ' …（共 ' + brokenRefs.length + ' 个）' : '';
+    showToast('⚠️ 有 ' + brokenRefs.length + ' 个参数的「引用节点」已失效（目标不在其上游）：' + lines + more +
+              '。已照常保存，但运行时可能取不到值，请确认后重新选择来源。', 'error');
+  }
 
   const body = {
     project: getProject(),

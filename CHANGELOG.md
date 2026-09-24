@@ -1,5 +1,118 @@
 # 更新日志
 
+## 2026-09-24
+
+### feat: 编排页 Connections 自定义关系缺失路由条件（switch_condition）校验提示
+
+**背景**
+Connections 的 relationType 允许填自定义关系（如 `K1`、`Stream`、业务分支名）。这类关系只有靠起点节点的
+`switch_condition` 路由才会产生；若起点没有配置 `switch_condition`，运行时该分支**永远不会命中**，
+而页面此前没有任何提示，极易漏写。`Success` / `Failure` 是默认分支，不需要路由条件。
+
+**规则**
+- `relationType` 留空视为 `Success` → 不校验；
+- 值为 `Success` / `Failure`（忽略大小写）→ 不校验；
+- 其余值 → 起点必须配置 `switch_condition`（实例覆盖 `node_switch_overrides` 优先，其次节点定义）。
+
+**实现（`web/assets/common.js`）**
+- `orchConnNeedsSwitch(type)`：判断该关系是否需要路由条件。
+- `orchInstanceSwitchText(instanceId)`：取实例生效的 `switch_condition`（覆盖优先，回退节点定义，
+  按 `instanceId.split('__')[0]` 回查 `_orchNodes`——实例摘要对象无 `configuration`）。
+- `orchConnFromKind(fromId)`：区分起点类别，避免误报 ——
+  `node`（Activity / CondSwitch，可配路由）、`sub`（Sub Chain，无法配置）、
+  `unsupported`（其它节点类型，不支持该字段）、`unknown`（未找到定义，无法校验）。
+  实例摘要无 `type` 时回查节点定义兜底。
+- `refreshOrchConnWarns()`：逐行刷新警告，返回**必须修复**的问题列表（仅 `node` 类且条件为空算 error，
+  其余只橙色提示不拦截）；触发点：`addOrchConnRow`、`onOrchChange`、`refreshOrchConnOptions`（改完覆盖即时生效）。
+- 行内 `⚠️ 缺路由条件` 按钮（`onOrchConnWarnClick`）点击直接拉起该实例的 switch 编辑器（`orchOpenNodeSwitchEditor`）。
+- Connections 区块顶部汇总条 `#orch-conn-cond-summary`（`orch.html` 新增容器）。
+- 保存拦截：`generateOrchRootChain` 中若存在 error 级问题，滚动定位到首行并 `confirm` 二次确认，
+  列出「起点 → 关系」清单；取消则不保存。**保留强制保存通道**，避免历史脏数据完全无法保存。
+
+**样式（`web/assets/common.css`）**
+- `.orch-cond-warn`（红）/ `[data-level="warn"]`（橙）、行高亮 `.conn-row-cond-error` / `.conn-row-cond-warn`、
+  汇总条 `.orch-cond-summary`。
+
+**fix（次日）：误报「缺路由条件」**
+现象：24 条自定义关系全部报缺 `switch_condition`，但起点节点明明都配了。
+根因两处：
+1. **`window._orchNodes` 恒为 `undefined`** —— `_orchNodes` / `_orchSubChains` 是本文件顶层 `let` 声明，
+   **不会挂到 `window`**（与 `window._orchNodeInstances` 那种显式赋值不同）。新函数里写 `window._orchNodes`
+   → 节点定义永远取不到 → 一律判成空。同理 `window._orchSubChains` 导致起点是子链时也被误判。
+   新增统一入口 `orchNodeDefById(nodeId)`（优先词法变量，兼容 `window._orchNodes`），
+   并顺带修掉 `orchOpenNodeSwitchEditor` 里同一处历史写法。
+2. **判定源不对**：应以「本页该实例实际生效的配置」为准，即 `_orchSwitchOverrides`（页面 🔀 编辑写入、
+   保存到 `node_switch_overrides`）优先，其次才是节点定义默认值。改为 `orchInstanceSwitchInfo(instanceId)`
+   返回 `{known, text, from}`，`from` 区分 `override` / `def`，提示文案里写明来源。
+- 另：`known=false`（节点定义不在缓存中，如节点已禁用）时**只给橙色提示，绝不判为空**，避免误报。
+
+---
+
+### feat: Connections 默认分支（Success/Failure）仍配了路由条件时提示冲突
+
+**背景**
+`switch_condition` 一旦非空，节点输出就按条件走**自定义分支**（bool→True/False、字符串→同名分支），
+只有在表达式结果既非 bool 又非字符串时才回落到 `Success` / `Failure`。
+所以若把 relationType 改回 `Success` / `Failure`（或留空，等价于 Success）而起点仍留着路由条件，
+该连线**大概率不会命中**，流程悄悄走错且很难排查。
+
+**规则**
+- `relationType` 为 `Success` / `Failure`（忽略大小写）或留空 → 检查起点**生效的** `switch_condition`；
+- 按 `orchInstanceSwitchInfo` 取生效值（本链实例覆盖优先，其次节点定义）；`known=false` 不判（避免误报）；
+- 非空 → 橙色 `⚠️ 路由冲突` + 行高亮。
+
+**提示要点（区分来源，给出可操作的清除方式）**
+- 来源 `override`（本链实例设置）：可在本页 🔀 清空，但**清空后会回退到节点定义值**，若节点定义也有值需一并清除；
+- 来源 `def`（节点默认定义）：需到 Node 编辑页清除，仅在本页清空覆盖会回退回节点定义值。
+
+**实现**
+- `refreshOrchConnWarns` 新增反向分支（level `conflict`，与 `warn` 同为橙色、**不拦截保存**），
+  冲突列表写入 `window._orchConnConflicts`；
+- `updateOrchConnCondSummary(count, conflictCount)` 汇总条改为两段（缺条件红段 + 冲突橙段）；
+- `generateOrchRootChain` 保存前按冲突列表 toast 提示（列出 `起点 → 关系（来源）`），**照常保存成功**。
+
+---
+
+### feat: 节点参数配置「引用节点」失效自动展开并提示（保存时统一检查，不阻断）
+
+**背景**
+参数来源选「引用节点」后，值形如 `{{steps.<上游节点>.arguments.<key>}}`。若该上游节点后续被删除，
+或因连线调整**不再是当前节点的祖先**（移到别的流程分支），运行时根本取不到值，而页面此前仍显示为
+「引用节点」，用户无从察觉，保存后问题被固化到 DSL。
+
+**规则**
+- 来源为 `upstream`（引用节点）且值非空 → 校验引用目标是否仍在 `getOrchRefNodeCandidates(instanceId)`
+  （= 当前节点所有祖先，沿 Connections 反向可达）中；
+- 目标不在其中（已删除 / 已移出链路）或值无法解析（历史脏数据）→ 判定失效；
+- 空值视为「尚未选择」，不判失效。
+
+**处理（只提示，不改配置）**
+> 初版会「自动降级为调用传入」，用户反馈过重：若只是**临时断开连线**（后面还会接上），
+> 全部被改写后要重新配置非常繁琐。因此改为**只提示、不改写**。
+
+1. **自动展开**该实例所在的参数块（覆盖持久化的收起状态 `_orchCollapseState`，仅影响本次渲染、不落库）；
+2. **保留用户原配置**：来源仍是「引用节点」、值仍是原引用字符串。
+   控件走 `renderOrchRefNodeControlBroken` 专用渲染：节点下拉首项为
+   `⚠️ <id>（已不在上游）` 并选中，同时**列出当前可用的上游节点**便于直接改选；
+   字段下拉只有原引用值一项，保证 `storeParamPreset` 读到的仍是原值（不会被清空或串成别的节点）。
+3. **行内红色提示**：`⚠️ 引用的节点 <id> 已不在该节点的上游（已删除或已移出链路），运行时可能取不到值。请重新选择来源，或重新连上连线后本提示会自动消失。`；
+4. **Toast 汇总**「有 N 个参数…请确认后重新选择来源」并 `scrollIntoView` 定位到第一个失效参数。
+
+**保存时统一检查（不阻断）**
+- `generateOrchRootChain` 中新增 `collectOrchBrokenRefs()`：扫描参数面板当前 UI 状态，
+  收集所有来源为 `ref_act` 且引用目标已失效的参数（读 `.param-ref-final`，回退 `.param-value-input`）。
+- 有失效项时给出 toast 提示（列出 `实例.参数 → 引用`），但**照常保存成功**。
+
+**实现**
+- 新增 `resolveOrchParamPreset(nodeId, key)`：把原内联的「暂存优先 → DSL arguments 兜底」逻辑抽出，
+  供渲染与主循环复用（预扫描需要它）。
+- 新增 `orchParamRefBroken` / `markOrchParamRefBroken` / `clearOrchParamRefBroken` / `collectOrchBrokenRefs`；
+- `renderOrchParamOverrides` 渲染前先预扫描生成 `brokenRefMap`，用于强制展开 + 标记；
+- `onParamSrcChange` 开头调用 `clearOrchParamRefBroken`，用户重新选来源后提示即消失；
+- 连线恢复后 `renderOrchParamOverrides` 重渲染，目标重新进入候选 → 提示自动消失。
+
+---
+
 ## 2026-09-23
 
 ### fix: 修复发布/回滚后线上仍走旧版本的问题（需重启才生效）
