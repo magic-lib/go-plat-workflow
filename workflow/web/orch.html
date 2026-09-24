@@ -713,6 +713,10 @@
             <div class="form-group"><label>DB</label><input id="env-redis-db" type="number" value="0"></div>
             <div class="form-group"><label>Username</label><input id="env-redis-user" placeholder="可选"></div>
           </div>
+          <div class="form-row" style="align-items:center;gap:8px;margin-top:2px">
+            <button type="button" class="btn btn-sm btn-outline" id="env-redis-test-btn" onclick="testEnvRedisConn()">🔌 测试连接</button>
+            <span id="env-redis-test-result" class="redis-test-result" style="display:none"></span>
+          </div>
         </div>
         <div class="exec-card" style="flex:1;margin-bottom:12px">
           <h4 style="font-size:.85rem;margin-bottom:8px">MySQL 配置</h4>

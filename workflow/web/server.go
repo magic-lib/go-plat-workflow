@@ -173,6 +173,8 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("POST /api/env-configs", ws.handleSaveEnvConfig)
 	ws.mux.HandleFunc("GET /api/env-configs/{env_name}", ws.handleGetEnvConfig)
 	ws.mux.HandleFunc("DELETE /api/env-configs/{env_name}", ws.handleDeleteEnvConfig)
+	// Redis 连通性探测（用页面上填写/保存的配置试连一下，不落库）
+	ws.mux.HandleFunc("POST /api/env-configs/test-redis", ws.handleTestEnvRedis)
 
 	// Activity API（activity 模板管理，project 通过 ?project= 传入）
 	ws.mux.HandleFunc("GET /api/activities", ws.handleListActivities)
@@ -1754,6 +1756,45 @@ func (ws *WebServer) handleSaveEnvConfig(w http.ResponseWriter, r *http.Request)
 	}
 	log.Info().Str("project", def.Project).Str("env_name", def.EnvName).Msg("env config saved via web")
 	writeJSON(w, http.StatusOK, def)
+}
+
+// redisTestTimeout 一次 Redis 连通性探测的整体超时（含拨号、鉴权、PING、INFO）。
+const redisTestTimeout = 8 * time.Second
+
+// handleTestEnvRedis 根据请求体中的 Redis 配置试连（PING），返回连通结论与简要服务端信息。
+// 目的：环境配置页填完 Redis 后先验证是否连得上，避免保存后才发现不可用。该接口不写入任何数据。
+func (ws *WebServer) handleTestEnvRedis(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Project     string                `json:"project"`
+		EnvName     string                `json:"env_name"`
+		RedisConfig *workflow.RedisConfig `json:"redis_config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	if req.RedisConfig == nil || req.RedisConfig.Addr == "" {
+		writeError(w, http.StatusBadRequest, "redis_config.addr is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), redisTestTimeout)
+	defer cancel()
+	out, err := workflow.TestRedisConnect(ctx, req.RedisConfig)
+	if err != nil {
+		// 连通失败按 200 返回，前端据此展示错误原因（这类失败是用户输入的预期结果，不是服务端异常）
+		log.Warn().Str("project", req.Project).Str("env", req.EnvName).
+			Str("addr", req.RedisConfig.Addr).Int("db", req.RedisConfig.DB).
+			Err(err).Msg("redis connection test failed")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "addr": req.RedisConfig.Addr, "db": req.RedisConfig.DB,
+		})
+		return
+	}
+	out["addr"] = req.RedisConfig.Addr
+	out["db"] = req.RedisConfig.DB
+	log.Info().Str("project", req.Project).Str("env", req.EnvName).
+		Str("addr", req.RedisConfig.Addr).Msg("redis connection test ok")
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (ws *WebServer) handleDeleteEnvConfig(w http.ResponseWriter, r *http.Request) {

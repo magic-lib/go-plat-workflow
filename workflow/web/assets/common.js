@@ -408,6 +408,8 @@ function resetEnvConfigForm() {
   document.getElementById('env-redis-db').value = '0';
   document.getElementById('env-mysql-port').value = '3306';
   document.getElementById('env-save-btn').textContent = '保存环境配置';
+  const r = document.getElementById('env-redis-test-result');
+  if (r) { r.style.display = 'none'; r.textContent = ''; r.className = 'redis-test-result'; }
 }
 
 function showEnvConfigPanel() {
@@ -488,13 +490,7 @@ async function saveEnvConfig() {
     const d = row.querySelector('.env-var-desc').value.trim();
     if (k) vars.push({ key: k, value: v, desc: d });
   });
-  const redisAddr = document.getElementById('env-redis-addr').value.trim();
-  const redis = redisAddr ? {
-    addr: redisAddr,
-    password: document.getElementById('env-redis-pwd').value,
-    db: parseInt(document.getElementById('env-redis-db').value) || 0,
-    username: document.getElementById('env-redis-user').value.trim(),
-  } : null;
+  const redis = envRedisFormConfig();
   const mysqlHost = document.getElementById('env-mysql-host').value.trim();
   const mysqlPort = parseInt(document.getElementById('env-mysql-port').value) || 3306;
   const mysql = (mysqlHost || document.getElementById('env-mysql-dsn').value.trim()) ? {
@@ -521,6 +517,67 @@ async function saveEnvConfig() {
     resetEnvConfigForm();
     loadEnvConfigTable();
   } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
+}
+
+// 从环境表单读取当前填写的 Redis 配置（未填 addr 返回 null）
+function envRedisFormConfig() {
+  const redisAddr = document.getElementById('env-redis-addr').value.trim();
+  if (!redisAddr) return null;
+  return {
+    addr: redisAddr,
+    password: document.getElementById('env-redis-pwd').value,
+    db: parseInt(document.getElementById('env-redis-db').value) || 0,
+    username: document.getElementById('env-redis-user').value.trim(),
+  };
+}
+
+// 用表单里填写的 Redis 配置测试连接（不落库，保存前先确认连得上）
+async function testEnvRedisConn() {
+  const p = currentEnvProject();
+  const cfg = envRedisFormConfig();
+  const resultEl = document.getElementById('env-redis-test-result');
+  const btn = document.getElementById('env-redis-test-btn');
+  if (!cfg) {
+    if (resultEl) {
+      resultEl.style.display = 'inline-block';
+      resultEl.className = 'redis-test-result redis-test-fail';
+      resultEl.textContent = '✗ 请先填写 Addr';
+    }
+    showToast('请先填写 Redis Addr', 'error');
+    return;
+  }
+  const originText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+  if (resultEl) {
+    resultEl.style.display = 'inline-block';
+    resultEl.className = 'redis-test-result';
+    resultEl.textContent = '正在连接 ' + cfg.addr + ' (db' + cfg.db + ')…';
+  }
+  try {
+    const resp = await fetch('/api/env-configs/test-redis?project=' + encodeURIComponent(p || ''), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: p || '', env_name: document.getElementById('env-name').value.trim(), redis_config: cfg }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || data.message || ('HTTP ' + resp.status));
+    if (data.ok) {
+      const parts = ['✓ 连接成功', data.ping ? 'PING=' + data.ping : '', data.server_version ? 'v' + data.server_version : '',
+                     data.latency_ms != null ? data.latency_ms + 'ms' : '', data.db_size != null ? data.db_size + ' keys' : ''];
+      const msg = parts.filter(Boolean).join(' · ');
+      if (resultEl) { resultEl.className = 'redis-test-result redis-test-ok'; resultEl.textContent = msg; }
+      showToast(msg, 'success');
+    } else {
+      const msg = '✗ 连接失败：' + (data.error || '未知错误');
+      if (resultEl) { resultEl.className = 'redis-test-result redis-test-fail'; resultEl.textContent = msg; resultEl.title = data.error || ''; }
+      showToast(msg, 'error');
+    }
+  } catch (e) {
+    const msg = '✗ 连接失败：' + e.message;
+    if (resultEl) { resultEl.className = 'redis-test-result redis-test-fail'; resultEl.textContent = msg; }
+    showToast(msg, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = originText || '🔌 测试连接'; }
+  }
 }
 
 async function deleteEnvConfig(envName) {

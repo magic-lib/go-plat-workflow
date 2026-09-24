@@ -113,6 +113,36 @@ Connections 的 relationType 允许填自定义关系（如 `K1`、`Stream`、�
 
 ---
 
+### feat: 环境配置 Redis 增加「测试连接」按钮
+
+**背景**
+环境的 Redis 配置填完直接保存，只有真正跑起来（MQ worker / 日志收集器）才发现连不上，排查成本高。
+需要在保存前就能用当前填写的配置探一下是否可连。
+
+**后端**
+- 新增 `workflow.TestRedisConnect(ctx, *RedisConfig)`（`workflow/activity_collector.go`）：
+  `redis.NewClient` + `PING`，只读不写；返回 `ok / ping / latency_ms / server_version / db_size`。
+  显式 `Dial/Read/WriteTimeout=5s`、`MaxRetries:1` —— 地址写错时快速失败并给出明确错误，
+  不等默认重试链（默认多次退避会拖到数秒并刷日志）。
+- 新增 `POST /api/env-configs/test-redis`（`web/server.go` `handleTestEnvRedis`）：接收
+  `{project, env_name, redis_config}`，ctx 超时 8s，**不落库**。
+  连通失败按 **HTTP 200 + `{ok:false, error}`** 返回（用户输入导致的失败不是服务端异常），前端据此展示原因。
+  已验证前缀路由 `POST /api/env-configs/test-redis` 与既有 `GET|DELETE /api/env-configs/{env_name}` 不冲突。
+
+**前端**
+- Redis 配置卡片底部加「🔌 测试连接」按钮 + 结果区 `#env-redis-test-result`。
+  **坑**：环境配置面板在 `index.html`（项目管理）与 `orch.html`（编排）里**各有一份 DOM**，
+  只改一个页面另一个就没有按钮，必须同步改。
+- `common.js`：新增 `envRedisFormConfig()`（表单取值，与 `saveEnvConfig` 复用）、
+  `testEnvRedisConn()`（按钮置灰「测试中…」，结果区分绿/红并 toast，`finally` 恢复按钮）；
+  `resetEnvConfigForm()` 一并清空测试结果。
+- `common.css`：`.redis-test-ok` / `.redis-test-fail`。
+
+**冒烟**：本机 `127.0.0.1:6379` → `✓ 连接成功 · PING=PONG · v8.0.1 · 6ms · 867 keys`；
+错端口返回 `✗ 连接失败：dial tcp …: connect: connection refused`。
+
+---
+
 ## 2026-09-23
 
 ### fix: 修复发布/回滚后线上仍走旧版本的问题（需重启才生效）

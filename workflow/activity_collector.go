@@ -468,6 +468,52 @@ func parseNamespace(ns string) (project, env string) {
 	return "", ""
 }
 
+// TestRedisConnect 探测 Redis 连通性并返回简要服务端信息，供管理端「测试连接」使用。
+// 只做只读操作（PING / INFO / DBSIZE），不写入任何数据；ctx 需带超时，避免错误地址把请求挂住。
+// 返回字段：ok / ping / latency_ms / server_version / db_size 等。
+func TestRedisConnect(ctx context.Context, cfg *RedisConfig) (map[string]any, error) {
+	if cfg == nil || cfg.Addr == "" {
+		return nil, fmt.Errorf("redis addr is required")
+	}
+	cli := redis.NewClient(&redis.Options{
+		Addr:         cfg.Addr,
+		Username:     cfg.Username,
+		Password:     cfg.Password,
+		DB:           cfg.DB,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+		// 地址写错时尽快失败并给出明确错误，避免默认重试链（多次退避会拖到数秒并刷日志）
+		MaxRetries: 1,
+	})
+	defer func() { _ = cli.Close() }()
+
+	start := time.Now()
+	pong, err := cli.Ping(ctx).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"ok":         true,
+		"ping":       pong,
+		"latency_ms": time.Since(start).Milliseconds(),
+	}
+	// 以下为补充信息，取不到不影响「是否连通」的结论
+	if info, ierr := cli.Info(ctx, "server").Result(); ierr == nil {
+		for _, line := range strings.Split(info, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "redis_version:") {
+				out["server_version"] = strings.TrimPrefix(line, "redis_version:")
+				break
+			}
+		}
+	}
+	if n, derr := cli.DBSize(ctx).Result(); derr == nil {
+		out["db_size"] = n
+	}
+	return out, nil
+}
+
 // NewActivityCollectorRedisClient 基于 RedisConfig 构建 redis 客户端（带连接探测）。
 func NewActivityCollectorRedisClient(cfg *RedisConfig) (*redis.Client, error) {
 	if cfg == nil || cfg.Addr == "" {

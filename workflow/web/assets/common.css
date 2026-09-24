@@ -305,6 +305,11 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-conn-row .btn-move:hover { color: var(--primary); border-color: var(--primary); }
 .orch-conn-row .btn-move:disabled { opacity: .35; cursor: not-allowed; }
 .orch-conn-row .conn-arrow { color: var(--text-muted); font-weight: 700; font-size: .85rem; flex-shrink: 0; }
+/* Redis 测试连接结果 */
+.redis-test-result { font-size: .75rem; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.redis-test-ok { color: #15803d; background: #dcfce7; border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; }
+.redis-test-fail { color: #b91c1c; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px; padding: 2px 8px; }
+
 /* 自定义关系缺少 switch_condition 的行内警告 */
 .orch-conn-row .orch-cond-warn { display: inline-flex; align-items: center; background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; border-radius: 4px; font-size: .7rem; padding: 3px 6px; cursor: pointer; flex-shrink: 0; white-space: nowrap; line-height: 1.4; font-family: inherit; }
 .orch-conn-row .orch-cond-warn[data-level="warn"], .orch-conn-row .orch-cond-warn[data-level="conflict"] { background: #fffbeb; border-color: #fcd34d; color: #b45309; }
