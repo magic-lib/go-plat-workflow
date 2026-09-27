@@ -1,5 +1,25 @@
 # 更新日志
 
+## 2026-09-27
+
+### fix: 节点参数配置列表标题不跟随图上改名，仍显示节点定义旧名
+
+**现象**
+在右侧 Live Preview 用 🔀 编辑改了实例名称后，「节点参数配置」列表的标题仍是**节点定义的原名**。
+
+**原因**
+`renderOrchParamOverrides` 的 header 直接取 `def.name`（**节点定义名**），没有走实例生效名。
+同一页面其它位置（已选节点表、Live Preview、Connections 下拉、引用节点候选）都是
+`inst.name` 优先，只有这一处漏了。
+
+**修复**
+- 新增 `orchInstanceDisplayName(inst, def)`：
+  `_orchNameOverrides[instanceId]`（本链名称覆盖）→ `inst.name`（保存时在内存中同步）→ `def.name`（节点定义兜底）。
+- 参数列表标题改为 `esc(orchInstanceDisplayName(inst, def))`。
+- `saveOrchSwitchOverride` 改名保存后补 `renderOrchParamOverrides()`，否则标题要等连线变化才重渲染。
+
+---
+
 ## 2026-09-24
 
 ### feat: 编排页 Connections 自定义关系缺失路由条件（switch_condition）校验提示

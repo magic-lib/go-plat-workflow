@@ -6535,6 +6535,17 @@ function orchConnNeedsSwitch(connType) {
   return ORCH_SKIP_ROUTE_TYPES.indexOf(t) < 0;
 }
 
+// 实例在本链中生效的展示名（与右侧 Live Preview 一致）。
+// 优先级：本链名称覆盖 _orchNameOverrides > 实例名 inst.name（保存名称时已同步） > 节点定义名。
+// 注意不要直接用 def.name：那只是节点定义名，用户在图上改名后这里会显示旧名。
+function orchInstanceDisplayName(inst, def) {
+  const id = inst ? inst.instanceId : '';
+  const ov = (id && _orchNameOverrides) ? _orchNameOverrides[id] : '';
+  if (ov && String(ov).trim() !== '') return String(ov).trim();
+  if (inst && inst.name) return String(inst.name);
+  return (def && def.name) || '';
+}
+
 // 按 nodeId 取节点定义。
 // 注意：_orchNodes 是本文件顶层的 let 声明，【不会挂到 window 上】（这与 window._orchNodeInstances 不同），
 // 必须直接引用该词法变量；写 window._orchNodes 会恒为 undefined，导致校验全部误判为空。
@@ -7066,7 +7077,7 @@ function renderOrchParamOverrides() {
       <div class="override-node-header" onclick="toggleOrchParamBlock(this, '${esc(inst.instanceId)}')">
         <span class="toggle-icon">${collapsed ? '▸' : '▾'}</span>
         <span class="ov-inst-id">${esc(inst.instanceId)}</span>
-        <span class="ov-inst-name">${esc(def.name || '')}</span>
+        <span class="ov-inst-name">${esc(orchInstanceDisplayName(inst, def))}</span>
         <span class="ov-inst-count">${params.length} 个参数</span>
       </div>
       <div class="override-node-body${collapsed ? ' hidden' : ''}">`;
@@ -7818,6 +7829,8 @@ function saveOrchSwitchOverride() {
   renderOrchDslPreview();
   // 名称变更后同步刷新 Connections 下拉，使左侧 select 展示名与右侧 Live Preview 一致
   refreshOrchConnOptions();
+  // 同步刷新「节点参数配置」列表：其标题用实例生效名，改名后必须重渲染才不会残留旧名
+  renderOrchParamOverrides();
   showToast(isSwitchable ? '已更新该节点名称与路由条件（仅本链生效）' : '已更新该节点名称（仅本链实例生效）', 'success');
 }
 
