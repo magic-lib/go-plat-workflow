@@ -20,6 +20,44 @@
 
 ---
 
+### fix: Live Preview 横向滚动条远离图片底部（预览区高度贴合流程图）
+
+**现象**
+图一多（尤其是横向很宽）会出现两个滚动条，拖横向滚动条要先把页面滚到很下面才够得着。
+
+**原因**
+- `.orch-preview-scale` 写死 `height: 100%`，而 `.orch-preview-area` 又是 `flex: 1` 把剩余高度撑满；
+- 图片比预览区矮时，图片下方全是空白，横向滚动条落在**预览区底部**，离图片最下端很远。
+
+**修复**
+- CSS：`.orch-preview-scale` 改为 `height: auto`（高度交由 JS 按 mermaid 实际高度贴合）。
+- JS 新增 `syncOrchPreviewSize()`：
+  - 缩放层高度 = mermaid 的**布局高度**（transform 不影响布局，可视高度 = 布局高度 × scale）；
+  - 预览区高度 = 图片可视高度 + 2px 边框，并取上限 `orchPreviewMaxHeight()`（视口剩余空间 - 24px）；
+  - **必须同时把预览区改成 `flex: 0 0 auto`** —— 原来 `flex: 1` 的 `flex-basis: 0%` 会直接覆盖 `height`，
+    只设高度不生效；并清掉只读模式的 `min-height: 70vh`，否则高度仍被撑开。
+- 触发点：`applyOrchPreviewScale()`（缩放/复位）、`renderOrchPreview()` 渲染后 + 80ms 延迟再贴合一次
+  （mermaid 布局可能稍晚稳定）、`window resize` 节流 150ms。
+- 空态（无节点）时还原 `height / flex / minHeight`。
+
+---
+
+### fix: 节点参数配置列表的名称 / instanceId 无法选中复制
+
+**原因**
+`.override-node-header` 整行是 `user-select: none`（避免点击折叠时误选文字），
+导致行内的名称与 instanceId 也一起选不中。
+
+**修复**
+- CSS：新增 `.override-node-header .ov-copyable { user-select: text; -webkit-user-select: text; cursor: text; }`
+  单独放开名称与 instanceId（header 其余区域仍不可选，不影响折叠点击体验）。
+- 名称 `.ov-inst-name` 与 ID `.ov-inst-id` 加 `ov-copyable` 类 + `title="点击可选中复制"`。
+- `toggleOrchParamBlock(header, id, ev)` 增加事件参数：点击落在 `.ov-copyable` 上时
+  **只选中文本、不折叠**（否则拖选完一松手就折叠了，等于还是复制不了）。
+  inline onclick 需显式传 `event`。
+
+---
+
 ## 2026-09-24
 
 ### feat: 编排页 Connections 自定义关系缺失路由条件（switch_condition）校验提示

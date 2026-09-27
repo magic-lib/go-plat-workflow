@@ -220,6 +220,9 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .override-node-header .ov-inst-id { font-family: 'SF Mono', 'Fira Code', monospace; font-size: .8rem; color: var(--primary); white-space: nowrap; flex: 0 0 auto; overflow: visible; }
 /* 节点标题：字符过多时换行，占满剩余空间 */
 .override-node-header .ov-inst-name { font-weight: 400; white-space: normal; word-break: break-word; flex: 1 1 auto; min-width: 80px; }
+/* 名称与 instanceId 需要能被选中复制：header 整体是 user-select:none，这里单独放开 */
+.override-node-header .ov-copyable { user-select: text; -webkit-user-select: text; cursor: text; }
+.override-node-header .ov-copyable::selection { background: #bfdbfe; }
 .override-node-header .ov-inst-count { margin-left: auto; font-weight: 400; color: var(--text-muted); font-size: .72rem; flex: 0 0 auto; white-space: nowrap; }
 .override-node-header .toggle-icon { transition: transform .2s; font-size: .7rem; }
 .override-node-header.collapsed .toggle-icon { transform: rotate(-90deg); }
@@ -320,8 +323,10 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-cond-summary .orch-cond-summary-conflict { margin-top: 4px; padding-top: 4px; border-top: 1px dashed #fca5a5; color: #b45309; }
 /* Preview in orchestrate */
 .orch-preview-area { border: 1px solid var(--border); border-radius: 6px; flex: 1; min-height: 0; display: block; overflow: auto; background: #fafcfd; position: relative; }
-/* 缩放包裹层：以左上角为原点缩放，配合 overflow:auto 产生滚动条 */
-.orch-preview-scale { transform-origin: top left; transition: transform .15s ease; width: 100%; height: 100%; }
+/* 缩放包裹层：以左上角为原点缩放，配合 overflow:auto 产生滚动条。
+   高度不再写死 100%（会撑出一屏空白，把横向滚动条顶到远离图片底部的位置），
+   改由 JS 按 mermaid 实际高度贴合。 */
+.orch-preview-scale { transform-origin: top left; transition: transform .15s ease; width: 100%; height: auto; }
 .orch-preview-area svg { display: block; }
 /* Live Preview 节点右上角删除叉：纯 X，常显，hover 变红 */
 .orch-node-del { opacity: .7; cursor: pointer; pointer-events: all; transition: opacity .12s ease; }

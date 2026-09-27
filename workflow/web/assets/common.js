@@ -7074,10 +7074,10 @@ function renderOrchParamOverrides() {
     // 存在失效引用时强制展开，避免用户看不到需要重新选择的参数
     const collapsed = _orchCollapseState && _orchCollapseState[inst.instanceId] === true && !brokenRefMap[inst.instanceId];
     html += `<div class="override-node-block">
-      <div class="override-node-header" onclick="toggleOrchParamBlock(this, '${esc(inst.instanceId)}')">
+      <div class="override-node-header" onclick="toggleOrchParamBlock(this, '${esc(inst.instanceId)}', event)">
         <span class="toggle-icon">${collapsed ? '▸' : '▾'}</span>
-        <span class="ov-inst-id">${esc(inst.instanceId)}</span>
-        <span class="ov-inst-name">${esc(orchInstanceDisplayName(inst, def))}</span>
+        <span class="ov-inst-id ov-copyable" title="点击可选中复制">${esc(inst.instanceId)}</span>
+        <span class="ov-inst-name ov-copyable" title="点击可选中复制">${esc(orchInstanceDisplayName(inst, def))}</span>
         <span class="ov-inst-count">${params.length} 个参数</span>
       </div>
       <div class="override-node-body${collapsed ? ' hidden' : ''}">`;
@@ -7616,7 +7616,9 @@ function applyOrchCollapseOverrides(saved) {
 }
 
 // 切换某个节点参数配置实例的收起/展开，并即时更新状态（稍后随"保存"请求落到数据库）
-function toggleOrchParamBlock(headerEl, instanceId) {
+function toggleOrchParamBlock(headerEl, instanceId, ev) {
+  // 在名称 / instanceId 上拖选复制时不要折叠：这些元素已放开 user-select，点击它们只用于选中文本
+  if (ev && ev.target && ev.target.closest && ev.target.closest('.ov-copyable')) return;
   const body = headerEl.nextElementSibling;
   if (!body) return;
   const nowCollapsed = body.classList.toggle('hidden');
@@ -7881,9 +7883,53 @@ function applyOrchPreviewScale() {
   if (box) box.style.transform = 'scale(' + _orchPreviewScale + ')';
   const label = document.getElementById('orch-zoom-label');
   if (label) label.textContent = Math.round(_orchPreviewScale * 100) + '%';
+  // 缩放后可视尺寸变化，重算预览区高度，使横向滚动条始终紧贴图片底部
+  syncOrchPreviewSize();
   // 缩放后内容尺寸可能变化，下一帧将预览区滚动到内容中心，方便查看
   requestAnimationFrame(centerOrchPreview);
 }
+
+// 让预览区高度贴合流程图实际高度，避免出现两个滚动条 / 横向滚动条离图片底部很远的问题。
+// 背景：.orch-preview-scale 原先是 height:100%，预览区又被 flex 拉满剩余高度，
+// 图片比预览区矮时下方全是空白，横向滚动条落在预览区底部，拖之前得先往下滚一大段。
+// 做法：缩放层高度 = mermaid 布局高度，预览区高度 = 图片可视高度（= 布局高度 * scale），并设上限。
+function syncOrchPreviewSize() {
+  const area = document.getElementById('orch-preview');
+  const box = document.getElementById('orch-preview-scale');
+  if (!area || !box) return;
+  // 先清掉上次写入的高度，否则本次量到的是被上一次撑开的尺寸
+  box.style.height = '';
+  area.style.height = '';
+  const el = box.querySelector('.mermaid');
+  if (!el) return;
+  const svg = el.querySelector('svg');
+  const layoutH = Math.max(el.offsetHeight || 0, svg ? (svg.offsetHeight || 0) : 0);
+  if (layoutH <= 0) return;
+  // transform 不影响布局高度，可视高度 = 布局高度 * scale
+  const visualH = Math.ceil(layoutH * _orchPreviewScale);
+  box.style.height = layoutH + 'px';
+  const maxH = orchPreviewMaxHeight(area);
+  // 预览区在编排页是 flex:1（flex-basis:0% 会覆盖 height），必须改成不伸展才能真正按内容高度收缩；
+  // 同时清掉只读模式下的 min-height:70vh，否则高度仍被撑开
+  area.style.flex = '0 0 auto';
+  area.style.minHeight = '0';
+  // +2 给边框，避免刚好卡边导致出现 1~2px 的纵向滚动条
+  area.style.height = Math.max(120, Math.min(visualH + 2, maxH)) + 'px';
+}
+
+// 预览区可用高度上限：视口剩余空间（预留一点边距），避免大图把页面撑得过长
+function orchPreviewMaxHeight(area) {
+  const rect = area.getBoundingClientRect();
+  const byViewport = window.innerHeight - rect.top - 24;
+  return Math.max(160, byViewport);
+}
+
+// 视口变化后预览区可用高度变化，重新贴合一次（节流，避免拖拽时频繁重排）
+let _orchResizeTimer = null;
+window.addEventListener('resize', () => {
+  if (_orchResizeTimer) clearTimeout(_orchResizeTimer);
+  _orchResizeTimer = setTimeout(syncOrchPreviewSize, 150);
+});
 
 // 将 Live Preview 滚动到内容中心（节点多/放大后自动居中显示）
 function centerOrchPreview() {
@@ -7917,6 +7963,10 @@ async function renderOrchPreview() {
   if (nodeIds.length === 0 && subIds.length === 0) {
     scaleBox.innerHTML = '<div class="orch-preview-empty">选择节点并添加连接后，这里将显示实时流程图</div>';
     _orchPreviewScale = 1;
+    scaleBox.style.height = '';
+    container.style.height = '';
+    container.style.flex = '';
+    container.style.minHeight = '';
     applyOrchPreviewScale();
     return;
   }
@@ -7937,6 +7987,8 @@ async function renderOrchPreview() {
     applyOrchPreviewScale();
     // mermaid 内部布局可能稍晚稳定，延迟再居中一次确保内容位于视野中间
     setTimeout(centerOrchPreview, 60);
+    // 图片尺寸在 mermaid 布局后才会最终确定，延迟再贴合一次高度
+    setTimeout(syncOrchPreviewSize, 80);
   } catch(e) {
     scaleBox.innerHTML = '<div class="orch-preview-empty" style="color:#ef4444">渲染失败: ' + esc(e.message) + '</div><pre style="font-size:.7rem;margin-top:8px;white-space:pre-wrap;max-height:150px;overflow:auto">' + esc(syntax) + '</pre>';
   }
