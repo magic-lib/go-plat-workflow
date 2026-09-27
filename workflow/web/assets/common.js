@@ -7883,48 +7883,46 @@ function applyOrchPreviewScale() {
   if (box) box.style.transform = 'scale(' + _orchPreviewScale + ')';
   const label = document.getElementById('orch-zoom-label');
   if (label) label.textContent = Math.round(_orchPreviewScale * 100) + '%';
-  // 缩放后可视尺寸变化，重算预览区高度，使横向滚动条始终紧贴图片底部
+  // 缩放后可视尺寸变化，重算尺寸补偿，使横向滚动条始终紧贴图片底部
   syncOrchPreviewSize();
   // 缩放后内容尺寸可能变化，下一帧将预览区滚动到内容中心，方便查看
   requestAnimationFrame(centerOrchPreview);
 }
 
-// 让预览区高度贴合流程图实际高度，避免出现两个滚动条 / 横向滚动条离图片底部很远的问题。
-// 背景：.orch-preview-scale 原先是 height:100%，预览区又被 flex 拉满剩余高度，
-// 图片比预览区矮时下方全是空白，横向滚动条落在预览区底部，拖之前得先往下滚一大段。
-// 做法：缩放层高度 = mermaid 布局高度，预览区高度 = 图片可视高度（= 布局高度 * scale），并设上限。
+// 让预览区【只在横向】滚动：纵向不设高度（交给页面滚动条），横向保留滚动条避免把页面撑宽。
+// 演进：① .orch-preview-scale 写死 height:100% + 预览区 flex:1 撑满剩余高度 →
+//   图片矮时下方大片空白，横向滚动条离图片底部很远（要拖它得先往下滚一大段）。
+//   ② 给预览区写死「图片可视高度」→ 图一高就出现纵向滚动条，默认打开也要滚。
+//   ③ 现在预览区高度完全不设（height:auto），改用缩放层的 margin-bottom 抵消 transform 差值，
+//      使「内容盒高度」恰好等于图片可视高度：横向滚动条紧贴图片底部，纵向永不溢出。
 function syncOrchPreviewSize() {
   const area = document.getElementById('orch-preview');
   const box = document.getElementById('orch-preview-scale');
   if (!area || !box) return;
-  // 先清掉上次写入的高度，否则本次量到的是被上一次撑开的尺寸
+  // 先清掉上次写入的补偿值，否则本次量到的是被上一次撑开的尺寸
   box.style.height = '';
-  area.style.height = '';
+  box.style.marginBottom = '';
+  // 纵向不设高度：内容多高，预览区就多高
+  area.style.height = 'auto';
+  area.style.maxHeight = 'none';
   const el = box.querySelector('.mermaid');
   if (!el) return;
   const svg = el.querySelector('svg');
   const layoutH = Math.max(el.offsetHeight || 0, svg ? (svg.offsetHeight || 0) : 0);
   if (layoutH <= 0) return;
-  // transform 不影响布局高度，可视高度 = 布局高度 * scale
-  const visualH = Math.ceil(layoutH * _orchPreviewScale);
-  box.style.height = layoutH + 'px';
-  const maxH = orchPreviewMaxHeight(area);
   // 预览区在编排页是 flex:1（flex-basis:0% 会覆盖 height），必须改成不伸展才能真正按内容高度收缩；
   // 同时清掉只读模式下的 min-height:70vh，否则高度仍被撑开
   area.style.flex = '0 0 auto';
   area.style.minHeight = '0';
-  // +2 给边框，避免刚好卡边导致出现 1~2px 的纵向滚动条
-  area.style.height = Math.max(120, Math.min(visualH + 2, maxH)) + 'px';
+  box.style.height = layoutH + 'px';
+  // transform 不影响布局：内容盒仍是 layoutH，但视觉上是 layoutH*scale。
+  // 用 margin-bottom 补/抵掉差值（放大为正、缩小为负），使内容盒高度 = 可视高度，
+  // 横向滚动条正好落在图片最下端，且不会出现纵向滚动条。
+  const delta = Math.ceil(layoutH * (_orchPreviewScale - 1));
+  if (delta !== 0) box.style.marginBottom = delta + 'px';
 }
 
-// 预览区可用高度上限：视口剩余空间（预留一点边距），避免大图把页面撑得过长
-function orchPreviewMaxHeight(area) {
-  const rect = area.getBoundingClientRect();
-  const byViewport = window.innerHeight - rect.top - 24;
-  return Math.max(160, byViewport);
-}
-
-// 视口变化后预览区可用高度变化，重新贴合一次（节流，避免拖拽时频繁重排）
+// 视口变化后图片布局尺寸可能变化，重新贴合一次（节流，避免拖拽时频繁重排）
 let _orchResizeTimer = null;
 window.addEventListener('resize', () => {
   if (_orchResizeTimer) clearTimeout(_orchResizeTimer);
@@ -7964,7 +7962,9 @@ async function renderOrchPreview() {
     scaleBox.innerHTML = '<div class="orch-preview-empty">选择节点并添加连接后，这里将显示实时流程图</div>';
     _orchPreviewScale = 1;
     scaleBox.style.height = '';
+    scaleBox.style.marginBottom = '';
     container.style.height = '';
+    container.style.maxHeight = '';
     container.style.flex = '';
     container.style.minHeight = '';
     applyOrchPreviewScale();

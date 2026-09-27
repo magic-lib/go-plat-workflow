@@ -29,15 +29,26 @@
 - `.orch-preview-scale` 写死 `height: 100%`，而 `.orch-preview-area` 又是 `flex: 1` 把剩余高度撑满；
 - 图片比预览区矮时，图片下方全是空白，横向滚动条落在**预览区底部**，离图片最下端很远。
 
-**修复**
+**修复（初版）**
 - CSS：`.orch-preview-scale` 改为 `height: auto`（高度交由 JS 按 mermaid 实际高度贴合）。
-- JS 新增 `syncOrchPreviewSize()`：
-  - 缩放层高度 = mermaid 的**布局高度**（transform 不影响布局，可视高度 = 布局高度 × scale）；
-  - 预览区高度 = 图片可视高度 + 2px 边框，并取上限 `orchPreviewMaxHeight()`（视口剩余空间 - 24px）；
-  - **必须同时把预览区改成 `flex: 0 0 auto`** —— 原来 `flex: 1` 的 `flex-basis: 0%` 会直接覆盖 `height`，
-    只设高度不生效；并清掉只读模式的 `min-height: 70vh`，否则高度仍被撑开。
+- JS 新增 `syncOrchPreviewSize()`：缩放层高度 = mermaid 布局高度；预览区高度 = 图片可视高度 + 2px，
+  并取上限 `orchPreviewMaxHeight()`（视口剩余空间 - 24px）。
+- **必须同时把预览区改成 `flex: 0 0 auto`** —— 原来 `flex: 1` 的 `flex-basis: 0%` 会直接覆盖 `height`，
+  只设高度不生效；并清掉只读模式的 `min-height: 70vh`，否则高度仍被撑开。
 - 触发点：`applyOrchPreviewScale()`（缩放/复位）、`renderOrchPreview()` 渲染后 + 80ms 延迟再贴合一次
   （mermaid 布局可能稍晚稳定）、`window resize` 节流 150ms。
+
+**修正（用户反馈）：`#orch-preview` 不要设高度**
+> 上面的做法给预览区写死了高度 → 图一高就**又出现纵向滚动条**，默认打开也要滚；
+> 而用户希望纵向交给页面滚动条，只保留横向滚动（否则宽图会把页面撑开）。
+
+- `syncOrchPreviewSize()` 不再设置 `area.style.height`：改为 `height: auto` + `maxHeight: none`。
+- 高度贴合换一种做法：**缩放层 `height = layoutH` + `margin-bottom = layoutH × (scale - 1)`**。
+  `transform` 不影响布局，内容盒仍是 `layoutH`、视觉上是 `layoutH × scale`；
+  用 margin 补/抵掉差值（放大为正、缩小为负），使内容盒高度恰好 = 图片可视高度 ——
+  横向滚动条正好落在图片最下端，纵向永不溢出（高图由页面滚动条承接）。
+- 删除 `orchPreviewMaxHeight()`（不再需要高度上限）。
+- 空态一并还原 `height / maxHeight / flex / minHeight` 与缩放层的 `marginBottom`。
 - 空态（无节点）时还原 `height / flex / minHeight`。
 
 ---

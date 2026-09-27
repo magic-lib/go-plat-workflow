@@ -323,9 +323,10 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-cond-summary .orch-cond-summary-conflict { margin-top: 4px; padding-top: 4px; border-top: 1px dashed #fca5a5; color: #b45309; }
 /* Preview in orchestrate */
 .orch-preview-area { border: 1px solid var(--border); border-radius: 6px; flex: 1; min-height: 0; display: block; overflow: auto; background: #fafcfd; position: relative; }
-/* 缩放包裹层：以左上角为原点缩放，配合 overflow:auto 产生滚动条。
-   高度不再写死 100%（会撑出一屏空白，把横向滚动条顶到远离图片底部的位置），
-   改由 JS 按 mermaid 实际高度贴合。 */
+/* 缩放包裹层：以左上角为原点缩放，配合 .orch-preview-area 的 overflow 产生【横向】滚动条。
+   高度不写死（写 100% 会撑出一屏空白，把横向滚动条顶到远离图片底部的位置），
+   由 JS 写入 mermaid 实际布局高度 + margin-bottom 抵消缩放差；
+   预览区本身不设高度（纵向交给页面滚动），因此不会出现纵向滚动条。 */
 .orch-preview-scale { transform-origin: top left; transition: transform .15s ease; width: 100%; height: auto; }
 .orch-preview-area svg { display: block; }
 /* Live Preview 节点右上角删除叉：纯 X，常显，hover 变红 */
