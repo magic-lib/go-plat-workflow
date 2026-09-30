@@ -8455,11 +8455,13 @@ function setOrchTarget(type) {
   window._orchTarget = type;
   // root/sub 模式内容区分：切换 root-only / sub-only 区块显隐
   const showRoot = (type === 'root');
+  // 注意：默认 CSS 把 .root-only/.sub-only 设为 display:none，这里显式设为 'block'
+  // 才能真正覆盖（style.display='' 只会回退到 CSS 的 none，导致无法显示）。
   document.querySelectorAll('.root-only').forEach(el => {
-    el.style.display = showRoot ? '' : 'none';
+    el.style.display = showRoot ? 'block' : 'none';
   });
   document.querySelectorAll('.sub-only').forEach(el => {
-    el.style.display = showRoot ? 'none' : '';
+    el.style.display = showRoot ? 'none' : 'block';
   });
   // 标题与区分提示
   const titleEl = document.getElementById('orch-target-title');
