@@ -8726,17 +8726,8 @@ function loadRootChainToOrch(c) {
 
   // Wait for data to load, then check the boxes
   loadOrchData().then(() => {
-    // 恢复已保存的节点参数配置（在勾选节点前 apply，renderOrchParamOverrides 会回显）
-    applyOrchParamOverrides(c.node_param_overrides);
-    // 恢复已保存的每节点 switch_condition 覆盖（仅本链生效）
-    applyOrchSwitchOverrides(c.node_switch_overrides);
-    // 恢复已保存的每节点名称覆盖（仅本链生效）
-    applyOrchNameOverrides(c.node_name_overrides);
-    // 恢复已保存的每节点参数配置区收起状态
-    applyOrchCollapseOverrides(c.node_collapse_overrides);
-    // 恢复根节点返回值定义（Root Chain 专属）
-    applyOrchRootResponses(c.root_responses);
-
+    // 先勾选并恢复画布节点实例与子链：根节点返回值定义的候选下拉依赖 _orchNodeInstances，
+    // 必须在 applyOrchRootResponses 之前完成，否则节点/字段下拉无数据、无法回显已保存的选择。
     // Check nodes
     const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
     document.querySelectorAll('#orch-node-list input[type="checkbox"]').forEach(cb => {
@@ -8748,6 +8739,17 @@ function loadRootChainToOrch(c) {
       cb.checked = subIds.includes(cb.value);
     });
     onOrchSelectionChange();
+
+    // 恢复已保存的节点参数配置（在勾选节点后 apply，renderOrchParamOverrides 会回显）
+    applyOrchParamOverrides(c.node_param_overrides);
+    // 恢复已保存的每节点 switch_condition 覆盖（仅本链生效）
+    applyOrchSwitchOverrides(c.node_switch_overrides);
+    // 恢复已保存的每节点名称覆盖（仅本链生效）
+    applyOrchNameOverrides(c.node_name_overrides);
+    // 恢复已保存的每节点参数配置区收起状态
+    applyOrchCollapseOverrides(c.node_collapse_overrides);
+    // 恢复根节点返回值定义（Root Chain 专属）—— 必须在节点实例恢复之后
+    applyOrchRootResponses(c.root_responses);
 
     // Load connections
     document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
@@ -9559,17 +9561,19 @@ async function orchLoadRootChainById(chainId) {
     btn.dataset.edit = '1';
     setOrchTarget('root');
     loadOrchData().then(() => {
+      // 先恢复画布上的节点实例与子链选择：根节点返回值定义的候选下拉依赖它们，
+      // 必须在 applyOrchRootResponses 之前完成，否则节点/字段下拉无数据、无法回显已保存的选择。
+      const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
+      restoreOrchNodeInstances(nodeIds, c.dsl_json);
+      const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
+      document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => { cb.checked = subIds.includes(cb.value); });
       applyOrchParamOverrides(c.node_param_overrides);
       applyOrchSwitchOverrides(c.node_switch_overrides);
       applyOrchNameOverrides(c.node_name_overrides);
     // 恢复已保存的每节点参数配置区收起状态
     applyOrchCollapseOverrides(c.node_collapse_overrides);
-      // 恢复根节点返回值定义（Root Chain 专属）
+      // 恢复根节点返回值定义（Root Chain 专属）—— 必须在节点实例恢复之后
       applyOrchRootResponses(c.root_responses);
-      const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
-      restoreOrchNodeInstances(nodeIds, c.dsl_json);
-      const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
-      document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => { cb.checked = subIds.includes(cb.value); });
       onOrchSelectionChange();
       document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
       try {
