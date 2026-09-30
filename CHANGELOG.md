@@ -63,6 +63,36 @@ activity 的 worker 挂掉后**没有任何主动通知**，往往等流程调�
   `activity_offline_alert_remind_minutes`（默认 30，0=只提醒一次）。
   与引擎池策略一样走 sync.Once，**改配置需重启**。
 
+**排查「hbLast 为什么为空 / 为什么不告警」**
+- 新增 `OfflineAlertStatus()` 诊断快照 + `GET /api/offline-alert/status`（**仅 admin**）：
+  `alert_envs` / `no_redis_env` / `published_error` / `monitored` / `heartbeat_keys` / `matched` / `offline`。
+  判读顺序：alert_envs 空 → 没环境开启告警；no_redis_env 非空 → 开启了告警但采集不到心跳；
+  monitored=0 → 该项目没有已发布 activity（根链未发布或查询出错）；
+  heartbeat_keys=0 → 一个心跳都没收到；matched=0 → 监控对象与心跳的 `project|env|ns|name` 对不上。
+- 巡检时若 monitored 或 matched 为 0，节流（5 分钟）输出一条 Warn 日志，直接带上上述字段。
+- **fix（漏报）：服务重启后原本就离线的 activity 不告警** ——
+  初版把「曾收到过心跳（`hbLast` 有记录）」作为告警的必要条件，导致**服务重启后 `hbLast` 为空、
+  原本一直就没连上来的 activity 完全不会被告警**，而这恰恰是最该报的场景（用户指出）。
+  判定改为「无有效心跳」两种情形都算离线：
+  - **曾在线后掉线**：`hbLast` 有记录且 `now - 最后心跳 ≥ 阈值`（原逻辑）；
+  - **从未收到心跳**：`hbLast` 无记录 —— 新增，覆盖重启后仍离线的场景。
+  为防大面积误报，后者需满足两个前提：
+  ① `setting.hasRedis`：环境必须有可用的 Redis 监听任务，否则管理端根本采集不到心跳，
+  「无心跳」不能作为离线依据（否则会把该环境全部已发布 activity 误报一遍）；
+  ② 超过纳入宽限期 `offlineStartupGrace`（2 分钟，从**首次纳入监控**起算，不随 5 分钟刷新重置）——
+  服务刚启动 / 环境刚开启告警时心跳还没采集上来，需等待。
+- 告警文案区分两者：`从未上报心跳`（多为 worker 未启动或心跳 Redis 配置不一致）vs `已离线 X`（运行中掉线）；
+  恢复通知标注「恢复前状态」。新增 `TestNeverOnlineAlert` 覆盖四种组合。
+- **fix（会崩进程的缺陷）：`parseNamespace` 越界 panic** ——
+  原实现 `if len(parts) >= 2 { return parts[1], parts[2] }`：namespace 只有两段（如 `workflow/demo`，
+  缺少 env）时取 `parts[2]` 直接 **index out of range**；该函数在心跳扫描**协程**里调用，
+  goroutine 的 panic 无法被外层 recover → **整个进程崩溃**，自然 `hbLast` 恒为空。
+  已改为按段数 `switch` 安全返回（1 段 / 2 段 / 3 段分别处理），并补 `TestParseNamespaceSafe`。
+- **fix（真实缺陷）：心跳扫描用了 `t.env` 而非 key 里的 env** ——
+  多个环境常共用同一个 Redis（或同一 DB），SCAN 会把其它环境的心跳 key 一起扫出来；
+  一律记为 `t.env` 会把 test 的心跳当成 prod 的，既串环境，也让离线判定拿不到真实数据。
+  改为从 key 的 namespace 解析 env（`parseNamespace` 第二个返回值），空则回退 `t.env`。
+
 **测试**
 - 新增 `workflow/activity_collector_offline_test.go`：覆盖首次告警 / 恢复通知 /
   未开启告警环境不告警 / 从未上报心跳不告警 / 重复提醒间隔 / 关闭开关后清理状态 /

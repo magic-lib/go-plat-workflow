@@ -177,6 +177,8 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("DELETE /api/env-configs/{env_name}", ws.handleDeleteEnvConfig)
 	// Redis 连通性探测（用页面上填写/保存的配置试连一下，不落库）
 	ws.mux.HandleFunc("POST /api/env-configs/test-redis", ws.handleTestEnvRedis)
+	// Activity 离线告警诊断（排查「为什么没告警」：监控集合 / 心跳数据是否为空）
+	ws.mux.HandleFunc("GET /api/offline-alert/status", ws.handleOfflineAlertStatus)
 
 	// Activity API（activity 模板管理，project 通过 ?project= 传入）
 	ws.mux.HandleFunc("GET /api/activities", ws.handleListActivities)
@@ -1801,6 +1803,20 @@ func (ws *WebServer) handleTestEnvRedis(w http.ResponseWriter, r *http.Request) 
 	log.Info().Str("project", req.Project).Str("env", req.EnvName).
 		Str("addr", req.RedisConfig.Addr).Msg("redis connection test ok")
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleOfflineAlertStatus 返回 Activity 离线告警的诊断快照，用于排查「配置了却不告警」。
+// 仅管理员可访问（告警配置含环境信息）。
+func (ws *WebServer) handleOfflineAlertStatus(w http.ResponseWriter, r *http.Request) {
+	if !ws.currentUserIsAdmin(r) {
+		writeError(w, http.StatusForbidden, "admin only")
+		return
+	}
+	if ws.collector == nil {
+		writeError(w, http.StatusNotFound, "collector not started")
+		return
+	}
+	writeJSON(w, http.StatusOK, ws.collector.OfflineAlertStatus())
 }
 
 func (ws *WebServer) handleDeleteEnvConfig(w http.ResponseWriter, r *http.Request) {

@@ -42,6 +42,11 @@ const (
 	monitorRefreshInterval = 5 * time.Minute
 	// offlineGiveUp 持续离线超过该时长后停止重复提醒（视为长期下线，避免永久刷屏）
 	offlineGiveUp = 24 * time.Hour
+	// offlineStartupGrace 监控项的「纳入宽限期」：
+	// 已发布上线但【从未收到心跳】的 activity 也要告警（服务重启后原本就离线的不能漏报），
+	// 但刚启动 / 刚开启告警时心跳还没采集上来，需给一段时间的宽限，避免一次性误报全部。
+	// worker 每 10s 上报一次、扫描每 5s 一次，2 分钟足够容纳启动与采集延迟。
+	offlineStartupGrace = 2 * time.Minute
 	// offlineAlertBatchMax 单条汇总告警最多列出的 activity 条目数
 	offlineAlertBatchMax = 20
 )
@@ -74,10 +79,49 @@ type AlertEnvLister interface {
 	ListAlertEnvs(ctx context.Context) ([]*EnvConfigDef, error)
 }
 
+// offlineDiag 离线告警诊断快照，用于回答「为什么没有告警」（hbLast 为空 / 监控集合为空等）。
+type offlineDiag struct {
+	// alertEnvs 开启告警的环境（project/env）；为空说明没有任何环境开启告警
+	alertEnvs []string
+	// noRedisEnv 开启告警但【没有可用 Redis 监听任务】的环境：
+	// 没有监听任务就采集不到心跳 → hbLast 永远为空 → 该环境永远不会告警
+	noRedisEnv []string
+	// pubErr 最近一次查询「已发布 activity」的错误（非空说明监控集合可能构建失败）
+	pubErr string
+	// monCount 监控集合大小（已发布 activity × 开启告警的环境）
+	monCount int
+	// hbCount 已收到过心跳的 activity 实例数（hbLast 大小）
+	hbCount int
+	// matched 最近一次巡检中「监控集合 ∩ 已收到心跳」的数量；
+	// 为 0 说明监控的 activity 一个心跳都没收到（未部署 / Redis 不通 / project-env 名对不上）
+	matched int
+
+	// ---- 心跳扫描统计（累加值），定位「hbLast 为什么为空」 ----
+	// scanRounds 扫描轮次（为 0 = 没有任何 Redis 监听任务，即环境没配 Redis / 连不上）
+	scanRounds int
+	// scanKeys SCAN 匹配到的 workflow:heartbeat:* key 累计数（为 0 = Redis 里根本没有心跳 key）
+	scanKeys int
+	// scanFields 读取到的 hash field 累计数（每个 field = 一个上报中的 activity）
+	scanFields int
+	// scanFresh 通过 2 分钟 TTL 校验、实际写入缓存的条目累计数
+	// （fields > 0 但 fresh = 0 → 心跳时间戳已过期，worker 早就停了）
+	scanFresh int
+	// scanErr 最近一次扫描失败原因
+	scanErr string
+	// scanAt 最近一次扫描时间（Unix 秒）
+	scanAt int64
+	// offlineCount 当前处于离线状态的实例数
+	offlineCount int
+	// updatedAt 最近一次更新时间
+	updatedAt time.Time
+}
+
 // activityOfflineState 单个 activity 实例（project+env+ns+name）的离线告警状态。
 type activityOfflineState struct {
 	// offlineAt 首次判定离线的时间（用于「持续离线」时长与放弃提醒的判断）
 	offlineAt time.Time
+	// neverOnline 是否属于「从未收到过心跳」（区别于「曾在线后掉线」）
+	neverOnline bool
 	// lastAlertAt 上次发送告警的时间（用于重复提醒间隔）
 	lastAlertAt time.Time
 	// lastSeenAt 最近一次收到心跳的时间
@@ -95,6 +139,10 @@ type envAlertSetting struct {
 	threshold time.Duration
 	// remind 持续离线的重复提醒间隔（0 = 只提醒一次）
 	remind time.Duration
+	// hasRedis 该环境是否有可用的 Redis 监听任务。
+	// false 表示管理端根本采集不到心跳（环境没配 Redis / 连不上），
+	// 此时「没有心跳」不能作为离线依据，否则会把该环境所有已发布 activity 全误报一遍。
+	hasRedis bool
 }
 
 // activityOfflineItem 一条待告警 / 待恢复通知的离线项。
@@ -103,10 +151,21 @@ type activityOfflineItem struct {
 	env          string
 	actNamespace string
 	actName      string
-	// gap 距最近一次心跳的时长（恢复通知中表示离线总时长）
+	// gap 距最近一次心跳的时长（恢复通知中表示离线总时长；从未在线时为 0）
 	gap time.Duration
+	// neverOnline true 表示【从未收到过心跳】（服务重启后仍在监控集合里却一直没有心跳），
+	// 与「曾在线后掉线」区分开：前者通常是 worker 从未启动，后者是运行中掉线。
+	neverOnline bool
 	// target 该 activity 所属环境生效的告警设置（决定发到哪个群、阈值与提醒间隔）
 	target *envAlertSetting
+}
+
+// gapText 返回该离线项的时长文案（区分「从未上报心跳」与「已离线 X」）。
+func (it activityOfflineItem) gapText() string {
+	if it.neverOnline {
+		return "从未上报心跳"
+	}
+	return "已离线 " + it.gap.Round(time.Second).String()
 }
 
 // thresholdText 返回该离线项所属环境的判定阈值文案。
@@ -179,10 +238,20 @@ type ActivityCollector struct {
 	// 仅包含「该环境开启了告警」且「该 activity 已发布上线」的组合。
 	monMu     sync.RWMutex
 	monitored map[string]*envAlertSetting
+	// monAddedAt 每条监控项【首次纳入监控集合】的时间（key 同 monitored）。
+	// 用于「从未收到心跳」场景的宽限判定：刚纳入（服务刚启动 / 刚开启告警）时
+	// 心跳可能还没采集上来，不能立刻判定离线，否则会一次性误报全部。
+	monAddedAt map[string]time.Time
 
 	// 离线状态机：key = cacheKey，仅在判定离线期间存在
 	offlineMu sync.Mutex
 	offline   map[string]*activityOfflineState
+
+	// 离线告警诊断快照（供 OfflineAlertStatus 与周期日志排查「为什么不告警」）
+	diagMu sync.RWMutex
+	diag   offlineDiag
+	// lastDiagLogAt 上一次输出诊断日志的时间（节流，避免每 30s 刷屏）
+	lastDiagLogAt time.Time
 
 	// 各环境 Redis 监听任务：key = project|env
 	taskMu sync.Mutex
@@ -210,6 +279,7 @@ func NewActivityCollectorWithAlert(logRepo ActivityLogStore, nodeLogRepo NodeLog
 		hbCache:     make(map[string][]int64),
 		hbLast:      make(map[string]int64),
 		monitored:   make(map[string]*envAlertSetting),
+		monAddedAt:  make(map[string]time.Time),
 		offline:     make(map[string]*activityOfflineState),
 		tasks:       make(map[string]*redisTask),
 		stopCh:      make(chan struct{}),
@@ -462,23 +532,33 @@ func (c *ActivityCollector) heartbeatScanLoop(t *redisTask) {
 }
 
 // scanHeartbeats 扫描当前 redis 心跳 hash，读取每个 actName 最近心跳时间戳，更新全局缓存。
+// hbLast 是【唯一】在这里写入的：先 SCAN 心跳 key → HGetAll 读 field → 解析时间戳并过滤 → 写入。
 func (c *ActivityCollector) scanHeartbeats(t *redisTask) {
 	keys, err := c.scanKeys(t.redisCli, collectorHeartbeatPrefix+"*")
 	if err != nil {
 		log.Warn().Err(err).Str("project", t.project).Str("env", t.env).
 			Msg("activity collector: scan heartbeat keys failed")
+		c.recordHbScan(0, 0, 0, err.Error())
 		return
 	}
 	now := time.Now().Unix()
 	fresh := make(map[string][]int64)
+	fieldCount := 0
 	for _, key := range keys {
 		// 从 namespace 解析 project/env：key = workflow:heartbeat:workflow/<project>/<env>
-		project, _ := parseNamespace(key[len(collectorHeartbeatPrefix):])
+		// 【必须用 key 里的 env，不能用 t.env】——多个环境常共用同一个 Redis（或同一 DB），
+		// SCAN 会把其它环境的心跳 key 也扫出来；若一律记为 t.env，会把 test 的心跳当成 prod 的，
+		// 既造成跨环境串数据，也可能让 prod 的离线判定永远拿不到真实数据。
+		project, keyEnv := parseNamespace(key[len(collectorHeartbeatPrefix):])
+		if keyEnv == "" {
+			keyEnv = t.env // 老数据/异常 key 兜底
+		}
 		fields, err := t.redisCli.HGetAll(context.Background(), key).Result()
 		if err != nil {
 			continue
 		}
 		for field, tsStr := range fields {
+			fieldCount++
 			// field = actNamespace|actName（见 mq_activity.go getActivityKey），拆开以区分 namespace
 			actNamespace, actName := splitActivityField(field)
 			if actName == "" {
@@ -491,10 +571,16 @@ func (c *ActivityCollector) scanHeartbeats(t *redisTask) {
 			if now-ts > int64(heartbeatCacheTTL.Seconds()) {
 				continue
 			}
-			ck := cacheKey(project, t.env, actNamespace, actName)
+			ck := cacheKey(project, keyEnv, actNamespace, actName)
 			fresh[ck] = append(fresh[ck], ts)
 		}
 	}
+	freshCount := 0
+	for _, tsList := range fresh {
+		freshCount += len(tsList)
+	}
+	c.recordHbScan(len(keys), fieldCount, freshCount, "")
+
 	if len(fresh) == 0 {
 		return
 	}
@@ -555,10 +641,19 @@ func (c *ActivityCollector) HeartbeatRatio(project, env, actNamespace, actName s
 // ============================================================
 // 判定口径（三条同时满足才告警，避免噪声）：
 //  1. 总开关开启：custom.normal.activity_offline_alert_enabled（默认 true）；
-//  2. 环境开启告警：该环境配置的 AlertEnabled = true（逐环境开关，用于屏蔽测试/开发环境）；
+//  2. 环境开启告警：该环境告警配置 alert_config.enabled = true（逐环境开关，屏蔽测试/开发环境）；
 //  3. activity 已发布上线：出现在当前生效版本的根链发布快照中（含子链传递引用）；
-//  4. 曾经在线：收到过心跳，但已超过阈值时间没有再收到（从未上报过心跳的不告警 ——
-//     那属于「还没部署 / 已废弃」，与「运行中掉线」不是一回事）。
+//  4. 无有效心跳，两种情形都算离线：
+//     a) 曾在线后掉线：hbLast 有记录，且 now - 最后心跳 ≥ 该环境阈值；
+//     b) 从未收到心跳：hbLast 无记录 —— 覆盖「服务重启时就已经离线」的场景，
+//        但需满足两个前提才判定（见下），否则会大面积误报。
+//
+// 关于 (b) 的两个防误报前提：
+//   - 该环境必须有可用的 Redis 监听任务（setting.hasRedis）：否则管理端根本采集不到心跳，
+//     「无心跳」不代表离线，跳过（否则会把该环境所有已发布 activity 全误报一遍）；
+//   - 必须超过纳入宽限期 offlineStartupGrace（默认 2 分钟）：监控项刚纳入时
+//     （服务刚启动 / 环境刚开启告警）心跳还没采集上来，需等待再判定。
+//     宽限从【首次纳入监控】起算，不随每 5 分钟的监控刷新重置。
 
 // offlineAlertLoop 周期执行：刷新监控集合 + 巡检离线状态。
 func (c *ActivityCollector) offlineAlertLoop() {
@@ -610,13 +705,40 @@ func (c *ActivityCollector) refreshMonitored() {
 		return
 	}
 	envs := c.alertEnvs()
+	// 诊断：记录开启告警的环境，以及其中「没有 Redis 监听任务」的（采集不到心跳）
+	envNames := make([]string, 0, len(envs))
+	noRedis := make([]string, 0)
+	// envKey → 该环境是否有可用的 Redis 监听任务
+	redisOK := make(map[string]bool, len(envs))
+	c.taskMu.Lock()
+	for _, e := range envs {
+		if e == nil || e.Project == "" || e.EnvName == "" {
+			continue
+		}
+		envNames = append(envNames, e.Project+"/"+e.EnvName)
+		if _, ok := c.tasks[taskKey(e.Project, e.EnvName)]; !ok {
+			noRedis = append(noRedis, e.Project+"/"+e.EnvName)
+			redisOK[e.Project+"/"+e.EnvName] = false
+		} else {
+			redisOK[e.Project+"/"+e.EnvName] = true
+		}
+	}
+	c.taskMu.Unlock()
+
 	if len(envs) == 0 {
 		c.monMu.Lock()
 		c.monitored = make(map[string]*envAlertSetting)
+		c.monAddedAt = make(map[string]time.Time)
 		c.monMu.Unlock()
 		c.offlineMu.Lock()
 		c.offline = make(map[string]*activityOfflineState)
 		c.offlineMu.Unlock()
+		c.recordDiag(func(d *offlineDiag) {
+			d.alertEnvs = envNames
+			d.noRedisEnv = noRedis
+			d.pubErr = ""
+			d.monCount = 0
+		})
 		return
 	}
 	// project → 开启告警的环境（含该环境生效的告警设置）
@@ -630,13 +752,17 @@ func (c *ActivityCollector) refreshMonitored() {
 			bucket = make(map[string]*envAlertSetting)
 			alertEnvs[e.Project] = bucket
 		}
-		bucket[e.EnvName] = buildEnvAlertSetting(e.AlertConfig)
+		setting := buildEnvAlertSetting(e.AlertConfig)
+		setting.hasRedis = redisOK[e.Project+"/"+e.EnvName]
+		bucket[e.EnvName] = setting
 	}
 	next := make(map[string]*envAlertSetting)
+	var pubErr string
 	for project, envSettings := range alertEnvs {
 		acts, err := c.pubLister.ListPublishedActivities(context.Background(), project)
 		if err != nil {
 			log.Warn().Err(err).Str("project", project).Msg("offline alert: list published activities failed")
+			pubErr = err.Error()
 			continue
 		}
 		for _, a := range acts {
@@ -648,8 +774,30 @@ func (c *ActivityCollector) refreshMonitored() {
 			}
 		}
 	}
+	c.recordDiag(func(d *offlineDiag) {
+		d.alertEnvs = envNames
+		d.noRedisEnv = noRedis
+		d.pubErr = pubErr
+		d.monCount = len(next)
+	})
+	if len(noRedis) > 0 {
+		log.Warn().Strs("envs", noRedis).
+			Msg("offline alert: env has alert enabled but no redis listener task (no heartbeat can be collected)")
+	}
 	c.monMu.Lock()
+	// 保留已存在监控项的首次纳入时间，仅为【新增项】记录当前时间：
+	// 宽限期从「被纳入监控」起算，而不是从每次刷新起算，避免每 5 分钟重置一次宽限。
+	addedAt := make(map[string]time.Time, len(next))
+	nowAdded := time.Now()
+	for ck := range next {
+		if old, ok := c.monAddedAt[ck]; ok {
+			addedAt[ck] = old
+		} else {
+			addedAt[ck] = nowAdded
+		}
+	}
 	c.monitored = next
+	c.monAddedAt = addedAt
 	c.monMu.Unlock()
 
 	// 监控集合变化后，已不在集合内的离线状态需要清理（如环境关闭告警 / activity 下线）
@@ -660,6 +808,71 @@ func (c *ActivityCollector) refreshMonitored() {
 		}
 	}
 	c.offlineMu.Unlock()
+}
+
+// recordDiag 在锁内更新诊断快照。
+func (c *ActivityCollector) recordDiag(fn func(d *offlineDiag)) {
+	c.diagMu.Lock()
+	defer c.diagMu.Unlock()
+	fn(&c.diag)
+	c.diag.updatedAt = time.Now()
+}
+
+// recordHbScan 累加记录一轮心跳扫描的统计（用于定位 hbLast 为空的原因）。
+func (c *ActivityCollector) recordHbScan(keys, fields, fresh int, errStr string) {
+	c.diagMu.Lock()
+	defer c.diagMu.Unlock()
+	c.diag.scanRounds++
+	c.diag.scanKeys += keys
+	c.diag.scanFields += fields
+	c.diag.scanFresh += fresh
+	if errStr != "" {
+		c.diag.scanErr = errStr
+	}
+	c.diag.scanAt = time.Now().Unix()
+}
+
+// OfflineAlertStatus 返回离线告警的当前诊断快照，用于排查「为什么没有告警」。
+// 关注字段：
+//   - alert_envs 为空 → 没有任何环境开启告警（去环境配置页开启）；
+//   - no_redis_env 非空 → 这些环境开启了告警但采集不到心跳（未配 Redis / Redis 连不上）；
+//   - monitored=0 → 该项目下没有「已发布上线」的 activity（根链未发布，或 pub_err 有错）；
+//   - heartbeat_keys=0 → 一个心跳都没收到（worker 没起 / Redis 与 worker 的不是同一个 / DB 不一致）；
+//   - matched=0 且上面都正常 → 监控的 activity 与实际心跳的 project|env|ns|name 对不上。
+func (c *ActivityCollector) OfflineAlertStatus() map[string]any {
+	c.diagMu.RLock()
+	d := c.diag
+	c.diagMu.RUnlock()
+	c.hbLastMu.RLock()
+	hbCount := len(c.hbLast)
+	c.hbLastMu.RUnlock()
+	c.offlineMu.Lock()
+	offlineCount := len(c.offline)
+	c.offlineMu.Unlock()
+	enabled, thresholdSec, remindMin := config.GetActivityOfflineAlertPolicy()
+	return map[string]any{
+		"global_enabled":    enabled,
+		"threshold_seconds": thresholdSec,
+		"remind_minutes":    remindMin,
+		"alert_envs":        append([]string(nil), d.alertEnvs...),
+		"no_redis_env":      append([]string(nil), d.noRedisEnv...),
+		"published_error":   d.pubErr,
+		"monitored":         d.monCount,
+		"heartbeat_keys":    hbCount,
+		"matched":           d.matched,
+		"offline":           offlineCount,
+		"updated_at":        d.updatedAt.Unix(),
+		// 心跳扫描统计（累加值），定位 hbLast 为空：
+		//   scan_rounds=0  → 没有任何 Redis 监听任务（环境没配 Redis / 连不上）
+		//   scan_keys=0    → Redis 里没有 workflow:heartbeat:* key（worker 没上报 / Redis 或 DB 不一致）
+		//   scan_fields>0 但 scan_fresh=0 → 心跳时间戳超过 2 分钟（worker 早已停止）
+		"hb_scan_rounds": d.scanRounds,
+		"hb_scan_keys":   d.scanKeys,
+		"hb_scan_fields": d.scanFields,
+		"hb_scan_fresh":  d.scanFresh,
+		"hb_scan_err":    d.scanErr,
+		"hb_scan_at":     d.scanAt,
+	}
 }
 
 // buildEnvAlertSetting 将环境的告警配置与全局配置合并为巡检用的设置快照。
@@ -699,20 +912,43 @@ func (c *ActivityCollector) checkOfflineActivities() {
 
 	c.monMu.RLock()
 	mon := make(map[string]*envAlertSetting, len(c.monitored))
+	monAdded := make(map[string]time.Time, len(c.monAddedAt))
 	for k, v := range c.monitored {
 		mon[k] = v
+	}
+	for k, v := range c.monAddedAt {
+		monAdded[k] = v
 	}
 	c.monMu.RUnlock()
 
 	now := time.Now()
 	c.hbLastMu.RLock()
 	snap := make(map[string]int64, len(c.hbLast))
+	hbCount := len(c.hbLast)
 	for k, v := range c.hbLast {
 		if _, ok := mon[k]; ok {
 			snap[k] = v
 		}
 	}
 	c.hbLastMu.RUnlock()
+
+	// 诊断：监控集合与心跳数据的匹配情况（matched=0 是「不告警」的最常见根因）
+	c.recordDiag(func(d *offlineDiag) { d.hbCount = hbCount; d.matched = len(snap) })
+	// 节流输出诊断日志（每 5 分钟一次；监控为空或未匹配到任何心跳时用 Warn，便于直接发现根因）
+	c.diagMu.Lock()
+	needLog := (len(mon) == 0 || len(snap) == 0) && time.Since(c.lastDiagLogAt) > monitorRefreshInterval
+	if needLog {
+		c.lastDiagLogAt = time.Now()
+		alertEnvs := append([]string(nil), c.diag.alertEnvs...)
+		noRedis := append([]string(nil), c.diag.noRedisEnv...)
+		pubErr := c.diag.pubErr
+		c.diagMu.Unlock()
+		log.Warn().Int("monitored", len(mon)).Int("heartbeat_keys", hbCount).Int("matched", len(snap)).
+			Strs("alert_envs", alertEnvs).Strs("no_redis_env", noRedis).Str("published_error", pubErr).
+			Msg("offline alert: no activity matched for monitoring, check env alert config / redis / published activities")
+	} else {
+		c.diagMu.Unlock()
+	}
 
 	var newOffline, remindOffline, recovered []activityOfflineItem
 
@@ -753,6 +989,54 @@ func (c *ActivityCollector) checkOfflineActivities() {
 			remindOffline = append(remindOffline, activityOfflineItem{
 				project: info.project, env: info.env, target: setting,
 				actNamespace: info.actNamespace, actName: info.actName, gap: gap,
+			})
+		}
+	}
+	// 【从未收到心跳】的判定：已发布上线、所在环境能采集心跳，但纳入监控后一直没有心跳。
+	// 覆盖「服务重启时就已经离线」的场景 —— 此时 hbLast 里根本没有记录，
+	// 若只按 hbLast 判定就会漏报（用户反馈的真实问题）。
+	// 两个前提避免误报：
+	//   ① setting.hasRedis：环境没有 Redis 监听任务时管理端采集不到任何心跳，
+	//      此时「无心跳」不代表离线，跳过（否则会把该环境全部已发布 activity 误报一遍）；
+	//   ② 超过 offlineStartupGrace 宽限期：刚启动 / 刚开启告警时心跳还没采集上来，需等待。
+	for ck, setting := range mon {
+		if setting == nil || !setting.hasRedis {
+			continue
+		}
+		if _, ok := snap[ck]; ok {
+			continue // 有心跳记录，走上面的「心跳中断」判定
+		}
+		addedAt, ok := monAdded[ck]
+		if !ok || addedAt.IsZero() {
+			addedAt = now // 兜底：未记录纳入时间时按当前时间起算宽限
+		}
+		if now.Sub(addedAt) < offlineStartupGrace {
+			continue // 宽限期内不判定
+		}
+		info, ok := parseCacheKey(ck)
+		if !ok {
+			continue
+		}
+		st := c.offline[ck]
+		if st == nil {
+			st = &activityOfflineState{offlineAt: now, lastAlertAt: now, neverOnline: true}
+			c.offline[ck] = st
+			newOffline = append(newOffline, activityOfflineItem{
+				project: info.project, env: info.env, target: setting,
+				actNamespace: info.actNamespace, actName: info.actName, neverOnline: true,
+			})
+			continue
+		}
+		st.neverOnline = true
+		if now.Sub(st.offlineAt) > offlineGiveUp {
+			delete(c.offline, ck)
+			continue
+		}
+		if setting.remind > 0 && now.Sub(st.lastAlertAt) >= setting.remind {
+			st.lastAlertAt = now
+			remindOffline = append(remindOffline, activityOfflineItem{
+				project: info.project, env: info.env, target: setting,
+				actNamespace: info.actNamespace, actName: info.actName, neverOnline: true,
 			})
 		}
 	}
@@ -813,10 +1097,11 @@ func sendActivityOfflineAlerts(kind string, items []activityOfflineItem) {
 				lines = append(lines, fmt.Sprintf("… 其余 %d 个省略", len(group)-offlineAlertBatchMax))
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d) 项目: %s｜环境: %s｜命名空间: %s｜Activity: %s｜已离线: %s",
-				i+1, it.project, it.env, it.actNamespace, it.actName, it.gap.Round(time.Second).String()))
+			lines = append(lines, fmt.Sprintf("%d) 项目: %s｜环境: %s｜命名空间: %s｜Activity: %s｜%s",
+				i+1, it.project, it.env, it.actNamespace, it.actName, it.gapText()))
 		}
-		lines = append(lines, "说明: 该 Activity 已发布到线上根链，但其 worker 停止上报心跳，可能导致流程调用失败")
+		lines = append(lines, "说明: 该 Activity 已发布到线上根链。若从未上报心跳，通常是 worker 未启动或心跳 Redis 配置不一致；")
+		lines = append(lines, "      若是心跳中断，说明 worker 已停止或异常退出。两种情况都会导致流程调用失败。")
 		lines = append(lines, "时间: "+time.Now().Format("2006-01-02 15:04:05"))
 		log.Warn().Str("kind", kind).Int("count", len(group)).Str("target", target).Msg("activity offline detected")
 		sendAlertToTarget(target, "[工作流告警] "+kind, strings.Join(lines, "\n"))
@@ -836,8 +1121,14 @@ func sendActivityRecoveredAlerts(items []activityOfflineItem) {
 				lines = append(lines, fmt.Sprintf("… 其余 %d 个省略", len(group)-offlineAlertBatchMax))
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d) 项目: %s｜环境: %s｜命名空间: %s｜Activity: %s｜离线时长: %s",
-				i+1, it.project, it.env, it.actNamespace, it.actName, it.gap.Round(time.Second).String()))
+			lines = append(lines, fmt.Sprintf("%d) 项目: %s｜环境: %s｜命名空间: %s｜Activity: %s｜恢复前状态: %s",
+				i+1, it.project, it.env, it.actNamespace, it.actName,
+				func() string {
+					if it.neverOnline {
+						return "从未上报心跳"
+					}
+					return "离线时长 " + it.gap.Round(time.Second).String()
+				}()))
 		}
 		lines = append(lines, "时间: "+time.Now().Format("2006-01-02 15:04:05"))
 		log.Info().Int("count", len(group)).Str("target", target).Msg("activity offline recovered")
@@ -945,12 +1236,19 @@ func trimToWindow(tsList []int64, now int64) []int64 {
 }
 
 // parseNamespace 从 "workflow/<project>/<env>" 中解析 project 与 env。
+// 【坑】原实现判断 len(parts)>=2 却直接取 parts[2]：当 namespace 只有两段（如 "workflow/demo"，
+// 缺少 env）时会 index out of range panic；而本函数在心跳扫描协程里调用，panic 会直接杀掉
+// 整个进程（goroutine 里的 panic 无法被外层 recover）。因此段数不足时必须安全返回。
 func parseNamespace(ns string) (project, env string) {
 	parts := strings.SplitN(ns, "/", 3)
-	if len(parts) >= 2 {
+	switch len(parts) {
+	case 3:
 		return parts[1], parts[2]
+	case 2:
+		return parts[1], ""
+	default:
+		return "", ""
 	}
-	return "", ""
 }
 
 // TestRedisConnect 探测 Redis 连通性并返回简要服务端信息，供管理端「测试连接」使用。

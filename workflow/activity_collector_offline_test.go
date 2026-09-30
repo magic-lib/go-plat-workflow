@@ -132,7 +132,9 @@ func TestCheckOfflineActivities(t *testing.T) {
 		t.Fatalf("恢复后应清除离线状态")
 	}
 
-	// 3) 从未上报过心跳的 activity（不在 hbLast 中）不应告警
+	// 3) 从未上报过心跳的 activity（不在 hbLast 中）：
+	// 该测试环境没有 Redis 监听任务（hasRedis=false），故不告警。
+	// 「有监听任务 + 超过宽限期」的从未心跳场景由 TestNeverOnlineAlert 覆盖。
 	c2 := newTestCollector(envs, acts)
 	c2.refreshMonitored()
 	c2.checkOfflineActivities()
@@ -184,6 +186,97 @@ func TestOfflineAlertRemind(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("未收到持续离线提醒")
+	}
+}
+
+// TestNeverOnlineAlert 覆盖「已发布上线但从未收到心跳」的场景：
+// 服务重启后原本就离线的 activity 在 hbLast 里没有记录，必须仍然告警（用户反馈的真实问题）。
+// 同时验证两个防误报前提：环境无 Redis 监听任务不告警、纳入宽限期内不告警。
+func TestNeverOnlineAlert(t *testing.T) {
+	sender := &captureAlertSender{ch: make(chan string, 8)}
+	SetAlertSender(sender)
+	defer SetAlertSender(nil)
+
+	acts := []*PublishedActivityRef{{Project: "demo", ActNamespace: "ns1", ActName: "actD"}}
+
+	// 1) 环境有 Redis 监听任务 + 已超过纳入宽限期 → 应告警（hbLast 中无任何记录）
+	envs := []*EnvConfigDef{alertEnv("demo", "prod", true, nil)}
+	c := newTestCollector(envs, acts)
+	// 模拟该环境存在监听任务（否则判定为「采集不到心跳」而不告警）
+	c.tasks[taskKey("demo", "prod")] = &redisTask{project: "demo", env: "prod"}
+	c.refreshMonitored()
+	key := cacheKey("demo", "prod", "ns1", "actD")
+	// 把纳入时间提前，越过 offlineStartupGrace 宽限期
+	c.monMu.Lock()
+	c.monAddedAt[key] = time.Now().Add(-offlineStartupGrace - time.Minute)
+	c.monMu.Unlock()
+
+	c.checkOfflineActivities()
+	select {
+	case msg := <-sender.ch:
+		if !strings.Contains(msg, "[工作流告警] Activity 离线") {
+			t.Fatalf("期望离线告警，实际: %s", msg)
+		}
+		if !strings.Contains(msg, "从未上报心跳") {
+			t.Fatalf("应标注「从未上报心跳」以区分「曾在线后掉线」，实际: %s", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("从未收到心跳的已发布 activity 应告警")
+	}
+
+	// 2) 心跳恢复 → 发送恢复通知
+	c.hbLast[key] = time.Now().Unix()
+	c.checkOfflineActivities()
+	select {
+	case msg := <-sender.ch:
+		if !strings.Contains(msg, "Activity 已重新上线") {
+			t.Fatalf("期望恢复通知，实际: %s", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("未收到恢复通知")
+	}
+
+	// 3) 环境【没有】Redis 监听任务 → 采集不到心跳，不能判定离线（防误报）
+	c2 := newTestCollector(envs, acts)
+	c2.refreshMonitored() // tasks 为空 → hasRedis=false
+	c2.monMu.Lock()
+	c2.monAddedAt[key] = time.Now().Add(-offlineStartupGrace - time.Minute)
+	c2.monMu.Unlock()
+	c2.checkOfflineActivities()
+	select {
+	case msg := <-sender.ch:
+		t.Fatalf("环境无 Redis 监听任务时不应告警（采集不到心跳）: %s", msg)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// 4) 宽限期内（刚纳入监控）→ 不告警，避免服务刚启动时一次性误报全部
+	c3 := newTestCollector(envs, acts)
+	c3.tasks[taskKey("demo", "prod")] = &redisTask{project: "demo", env: "prod"}
+	c3.refreshMonitored() // 纳入时间 = 现在，仍在宽限期内
+	c3.checkOfflineActivities()
+	select {
+	case msg := <-sender.ch:
+		t.Fatalf("纳入宽限期内不应告警: %s", msg)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestParseNamespaceSafe 覆盖 parseNamespace 的段数不足场景：
+// 历史上判断 len>=2 却直接取 parts[2]，两段 namespace 会 index out of range panic，
+// 而该函数在心跳扫描协程里调用，panic 会直接杀掉进程 → hbLast 恒为空。
+func TestParseNamespaceSafe(t *testing.T) {
+	cases := []struct{ ns, project, env string }{
+		{"workflow/demo/prod", "demo", "prod"},
+		{"workflow/demo/", "demo", ""},     // env 为空：三段
+		{"workflow/demo", "demo", ""},      // 仅两段：不得 panic
+		{"demo", "", ""},                   // 仅一段：不得 panic
+		{"", "", ""},                       // 空串：不得 panic
+	}
+	for _, c := range cases {
+		p, e := parseNamespace(c.ns)
+		if p != c.project || e != c.env {
+			t.Fatalf("parseNamespace(%q) = (%q,%q), want (%q,%q)", c.ns, p, e, c.project, c.env)
+		}
 	}
 }
 
