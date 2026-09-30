@@ -18,6 +18,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -962,6 +963,7 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		NodeSwitchOverrides:   draft.NodeSwitchOverrides,
 		NodeNameOverrides:     draft.NodeNameOverrides,
 		NodeCollapseOverrides: draft.NodeCollapseOverrides,
+		RootResponses:         draft.RootResponses,
 		IsCurrent:             true,
 		PublishedAt:           time.Now(),
 	}
@@ -1223,12 +1225,224 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		if resultParam == nil {
 			return nil, fmt.Errorf("execute root chain %s: empty result", rootChainID)
 		}
-		// 需要将返回数据提供给responses里
+		// 按「根节点返回值定义」把各节点的入参/返回值回填到 responses 里，
+		// 使调用方直接拿到配置好的返回结构，而不必自行从 steps 中翻找。
+		s.fillRootResponses(execCtx, resultParam, ruleChain)
 
 		return resultParam, nil
 	case <-execCtx.Done():
 		return nil, fmt.Errorf("execute root chain %s: timeout after %s: %w", rootChainID, executeRootChainByIDTimeout, execCtx.Err())
 	}
+}
+
+// rootResponsesDSLKey 根节点返回值定义在 DSL 中的存放键（ruleChain.additionalInfo）。
+// 与 builder 注入时使用的键保持一致：定义随 DSL 走，草稿与发布快照都会自动携带。
+const rootResponsesDSLKey = "root_responses"
+
+// fillRootResponses 按根链上配置的「根节点返回值定义」生成返回结构并写入 FlowContext.Responses。
+//
+// 定义取自 DSL 的 ruleChain.additionalInfo.root_responses（编排页配置、构建时注入），
+// 因此草稿执行与发布版本执行都自动生效，无需额外传参。
+//
+// 取值来源（Value）支持占位符：
+//   - {{steps.<节点实例ID>.arguments.<key>}} / {{steps.<节点实例ID>.responses.<key>}}
+//   - {{steps.<节点实例ID>.responses}}：取该节点的整个返回值
+//   - {{arguments.<key>}} / {{<key>}}：取调用方传入的入参
+//   - 占位符与其它文本混排时，占位符按字符串替换（如 "共 {{steps.N1.responses.total}} 条"）
+//
+// 不含占位符时按字面量取值。取到值后按配置的 Type 做类型转换（不转换则原样返回）。
+// 无定义、解析失败或取不到值时都不中断执行：未取到的字段写入空串，保证返回结构完整。
+func (s *WorkflowService) fillRootResponses(ctx context.Context, resultParam *paramx.FlowContext, ruleChain *types.RuleChain) {
+	if resultParam == nil || ruleChain == nil {
+		return
+	}
+	items := parseRootResponsesFromDSL(ruleChain)
+	if len(items) == 0 {
+		return
+	}
+	ctxMap, err := resultParam.ToMaps()
+	if err != nil || len(ctxMap) == 0 {
+		log.Ctx(ctx).Warn().Err(err).Msg("fill root responses: build flow context map failed")
+		return
+	}
+	out := make(map[string]any, len(items))
+	for _, it := range items {
+		out[it.Key] = convertRootResponseValue(resolveRootResponseValue(it.Value, ctxMap), it.Type)
+	}
+	resultParam.SetResponses(out)
+}
+
+// parseRootResponsesFromDSL 从 DSL 的 ruleChain.additionalInfo 中解析根节点返回值定义。
+// additionalInfo 反序列化后是 interface{}（[]interface{} of map），故重新 marshal 后再解析。
+func parseRootResponsesFromDSL(ruleChain *types.RuleChain) []workflow.RootResponseItem {
+	raw, ok := ruleChain.RuleChain.GetAdditionalInfo(rootResponsesDSLKey)
+	if !ok || raw == nil {
+		return nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var items []workflow.RootResponseItem
+	if err := json.Unmarshal(b, &items); err != nil {
+		return nil
+	}
+	out := make([]workflow.RootResponseItem, 0, len(items))
+	for _, it := range items {
+		if strings.TrimSpace(it.Key) == "" {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// rootResponsePlaceholder 匹配 {{...}} 占位符。
+var rootResponsePlaceholder = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+
+// resolveRootResponseValue 解析取值来源：
+//   - 整个值就是一个占位符时，返回取到的原始值（保留其真实类型，如数字/对象/数组）；
+//   - 占位符与文本混排时，逐个替换为字符串后拼接；
+//   - 不含占位符时原样返回字符串（后续按 Type 转换）。
+func resolveRootResponseValue(value string, ctxMap map[string]any) any {
+	if value == "" {
+		return ""
+	}
+	// 整个值就是一个占位符：直接返回原始值，保留类型
+	if m := rootResponsePlaceholder.FindStringSubmatch(value); m != nil && m[0] == value {
+		if v, ok := lookupContextPath(ctxMap, strings.TrimSpace(m[1])); ok {
+			return v
+		}
+		return ""
+	}
+	// 混排：按字符串替换
+	return rootResponsePlaceholder.ReplaceAllStringFunc(value, func(ph string) string {
+		m := rootResponsePlaceholder.FindStringSubmatch(ph)
+		if m == nil {
+			return ph
+		}
+		v, ok := lookupContextPath(ctxMap, strings.TrimSpace(m[1]))
+		if !ok || v == nil {
+			return ""
+		}
+		return conv.String(v)
+	})
+}
+
+// lookupContextPath 按 "." 分隔的路径在上下文 map 中取值。
+// 上下文结构：{ meta:{...}, arguments:{...}, responses:..., steps:{ <stepId>: {arguments, responses, ...} } }。
+// 先按原路径查找；未命中时再尝试 arguments.<path>（兼容 {{参数key}} 简写）。
+func lookupContextPath(ctxMap map[string]any, path string) (any, bool) {
+	if path == "" {
+		return nil, false
+	}
+	if v, ok := lookupDotPath(ctxMap, path); ok {
+		return v, true
+	}
+	return lookupDotPath(ctxMap, "arguments."+path)
+}
+
+// lookupDotPath 沿 map 逐段取值，任一段不是 map 或不存在即失败。
+func lookupDotPath(root map[string]any, path string) (any, bool) {
+	var cur any = root
+	for _, seg := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		v, ok := m[seg]
+		if !ok {
+			return nil, false
+		}
+		cur = v
+	}
+	return cur, true
+}
+
+// convertRootResponseValue 按配置的转换类型把取到的值转成目标类型；转换失败时返回原值。
+func convertRootResponseValue(v any, typ string) any {
+	switch strings.TrimSpace(typ) {
+	case workflow.RootResponseTypeRaw:
+		return v
+	case workflow.RootResponseTypeString:
+		if v == nil {
+			return ""
+		}
+		return conv.String(v)
+	case workflow.RootResponseTypeInt64:
+		if n, ok := conv.Int64(v); ok {
+			return n
+		}
+		if s, ok := v.(string); ok {
+			if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+				return n
+			}
+		}
+		return v
+	case workflow.RootResponseTypeFloat64:
+		if s, ok := v.(string); ok {
+			if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+				return f
+			}
+		}
+		if f, ok := toFloat64(v); ok {
+			return f
+		}
+		return v
+	case workflow.RootResponseTypeBool:
+		if b, ok := conv.Bool(v); ok {
+			return b
+		}
+		if s, ok := v.(string); ok {
+			if b, err := strconv.ParseBool(strings.TrimSpace(s)); err == nil {
+				return b
+			}
+		}
+		return v
+	case workflow.RootResponseTypeSlice:
+		if _, ok := v.([]any); ok {
+			return v
+		}
+		if s, ok := v.(string); ok {
+			var arr []any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(s)), &arr); err == nil {
+				return arr
+			}
+		}
+		return v
+	case workflow.RootResponseTypeMap:
+		if _, ok := v.(map[string]any); ok {
+			return v
+		}
+		if s, ok := v.(string); ok {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(s)), &m); err == nil {
+				return m
+			}
+		}
+		return v
+	default:
+		// formula 等：不做转换，由表达式引擎/调用方自行处理
+		return v
+	}
+}
+
+// toFloat64 将常见数值类型转为 float64。
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
 }
 
 func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayload map[string]any) *paramx.FlowContext {

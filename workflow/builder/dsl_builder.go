@@ -75,6 +75,11 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	// 3. 构建 RuleChain DSL
 	ruleChain := b.buildRuleChain(req, nodes, subChains)
 
+	// 3.1 注入根节点返回值定义到 DSL（ruleChain.additionalInfo.root_responses）。
+	// 必须放在序列化之前：运行时（草稿执行 / 发布版本执行）都是从 DSL 里读回该定义，
+	// 因此发布快照只要带上 dsl_json 就自动携带，无需额外传参。
+	injectRootResponses(ruleChain, req.RootResponses)
+
 	// 4. 序列化
 	dslJSON := conv.String(ruleChain)
 
@@ -115,6 +120,9 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	// 序列化 node_collapse_overrides 以便保存到根链（参数配置区收起状态），后续可恢复
 	nodeCollapseOverridesJSON, _ := json.Marshal(nodeCollapseOverrides)
 
+	// 序列化 root_responses（根节点返回值定义）以便保存到根链，编排页可直接恢复
+	rootResponsesJSON, _ := json.Marshal(normalizeRootResponses(req.RootResponses))
+
 	// 6. 存储到数据库
 	def := &workflow.RootChainDef{
 		Project:             req.Project,
@@ -131,6 +139,7 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
 		NodeNameOverrides:   string(nodeNameOverridesJSON),
 		NodeCollapseOverrides: string(nodeCollapseOverridesJSON),
+		RootResponses:      string(rootResponsesJSON),
 	}
 	// 先尝试更新（按 project+chain_id），不存在再创建。
 	// 避免每次保存都物理删除重建导致自增主键 id 持续增长。
@@ -266,6 +275,55 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		NodeNameOverrides:   string(nodeNameOverridesJSON),
 		NodeCollapseOverrides: string(nodeCollapseOverridesJSON),
 	}, nil
+}
+
+// rootResponsesDSLKey 根节点返回值定义在 DSL 中的存放键。
+// 放在 ruleChain.additionalInfo 下（rulego 的扩展字段，不影响引擎执行），
+// 使草稿与发布快照都只要带 dsl_json 就能读到该定义。
+const rootResponsesDSLKey = "root_responses"
+
+// normalizeRootResponses 清洗根节点返回值定义：去掉空 key，并规范化字段空白。
+// 返回 nil 表示没有有效定义（此时调用方不要写入空数组，避免污染 DSL 与数据库）。
+func normalizeRootResponses(items []workflow.RootResponseItem) []workflow.RootResponseItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]workflow.RootResponseItem, 0, len(items))
+	for _, it := range items {
+		key := strings.TrimSpace(it.Key)
+		if key == "" {
+			continue
+		}
+		out = append(out, workflow.RootResponseItem{
+			Key:   key,
+			Label: strings.TrimSpace(it.Label),
+			Type:  strings.TrimSpace(it.Type),
+			Value: strings.TrimSpace(it.Value),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// injectRootResponses 将根节点返回值定义写入 DSL 的 ruleChain.additionalInfo.root_responses。
+// 无有效定义时不写入（并清掉可能残留的旧值），保证 DSL 干净。
+func injectRootResponses(ruleChain *types.RuleChain, items []workflow.RootResponseItem) {
+	if ruleChain == nil {
+		return
+	}
+	normalized := normalizeRootResponses(items)
+	if len(normalized) == 0 {
+		if ruleChain.RuleChain.AdditionalInfo != nil {
+			delete(ruleChain.RuleChain.AdditionalInfo, rootResponsesDSLKey)
+		}
+		return
+	}
+	if ruleChain.RuleChain.AdditionalInfo == nil {
+		ruleChain.RuleChain.AdditionalInfo = make(map[string]interface{})
+	}
+	ruleChain.RuleChain.AdditionalInfo[rootResponsesDSLKey] = normalized
 }
 
 // instanceRef 描述一个编排中的节点实例：baseId 为节点定义 ID，instanceId 为 DSL 中

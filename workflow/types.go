@@ -307,6 +307,9 @@ type RootChainDef struct {
 	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
 	// NodeCollapseOverrides 每节点实例参数配置区收起状态 JSON（map[instanceId]bool，true=收起），仅前端展示用
 	NodeCollapseOverrides string `json:"node_collapse_overrides,omitempty"`
+	// RootResponses 根节点返回值定义 JSON（[]RootResponseItem），执行结束后据此生成返回结构。
+	// 同时会注入 DSL 的 ruleChain.additionalInfo.root_responses，发布快照随 dsl_json 一起携带。
+	RootResponses string `json:"root_responses,omitempty"`
 	// HasReleases 是否存在发布记录（存在时不允许删除该根链）
 	HasReleases bool `json:"has_releases"`
 	// MustInputParams 必须输入的参数列表
@@ -343,6 +346,8 @@ type RootChainReleaseDef struct {
 	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
 	// NodeCollapseOverrides 每节点实例参数配置区收起状态 JSON（map[instanceId]bool，true=收起），仅前端展示用
 	NodeCollapseOverrides string `json:"node_collapse_overrides,omitempty"`
+	// RootResponses 根节点返回值定义 JSON（[]RootResponseItem），发布时快照，回滚后随之恢复
+	RootResponses string `json:"root_responses,omitempty"`
 	// IsCurrent 是否为生产环境当前使用的版本
 	IsCurrent bool `json:"is_current"`
 	// PublishedAt 发布时间
@@ -518,6 +523,46 @@ type ConnectionDef struct {
 	Label string `json:"label,omitempty"`
 }
 
+// 根节点返回值定义的转换类型（与节点参数/返回值的类型转换保持一致）。
+const (
+	// RootResponseTypeRaw 不转换，原样返回取到的值
+	RootResponseTypeRaw = ""
+	// RootResponseTypeString 转为字符串
+	RootResponseTypeString = "string"
+	// RootResponseTypeInt64 转为整数
+	RootResponseTypeInt64 = "int64"
+	// RootResponseTypeFloat64 转为浮点数
+	RootResponseTypeFloat64 = "float64"
+	// RootResponseTypeBool 转为布尔
+	RootResponseTypeBool = "bool"
+	// RootResponseTypeSlice 转为数组（字符串按 JSON 解析）
+	RootResponseTypeSlice = "slice"
+	// RootResponseTypeMap 转为对象（字符串按 JSON 解析）
+	RootResponseTypeMap = "map"
+	// RootResponseTypeFormula 表达式：由表达式引擎计算，此处不做转换
+	RootResponseTypeFormula = "formula"
+)
+
+// RootResponseItem 根节点返回值定义项（根链级别的返回结构定义）。
+//
+// 背景：流程执行完返回 FlowContext，其中 Responses（根节点返回值）此前一直为空，
+// 调用方只能从 Steps 里自行翻找各节点的入参与返回值。通过本定义在编排页配置返回结构：
+// 每个字段指定「取值来源」（可引用链上任意节点的 arguments / responses）与「转换类型」，
+// 执行结束后按定义把占位符替换为真实值、转换后写入 FlowContext.Responses 返回。
+type RootResponseItem struct {
+	// Key 返回字段的键名（必填）
+	Key string `json:"key"`
+	// Label 字段中文名/说明（选填，便于阅读）
+	Label string `json:"label,omitempty"`
+	// Type 转换类型，见 RootResponseType* 常量；空表示不转换
+	Type string `json:"type,omitempty"`
+	// Value 取值来源：
+	//   - 引用形式：{{steps.<节点实例ID>.arguments.<key>}} / {{steps.<节点实例ID>.responses.<key>}}；
+	//     也支持 {{steps.<id>.responses}} 取整个返回值、{{arguments.<key>}} 取出参、{{<key>}} 简写。
+	//   - 固定值：不含占位符时按字面量（再按 Type 转换）。
+	Value string `json:"value,omitempty"`
+}
+
 // BuildRequest 组装根链请求。
 type BuildRequest struct {
 	// Project 所属项目
@@ -551,6 +596,9 @@ type BuildRequest struct {
 	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
 	// NodeCollapseOverrides 每节点实例参数配置区收起状态，key=node 实例 instanceId，value=true 表示收起
 	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides,omitempty"`
+	// RootResponses 根节点返回值定义：执行结束后按此结构从各节点取值并写入 FlowContext.Responses。
+	// 可引用链上任意节点的 arguments / responses（不要求是上游）。
+	RootResponses []RootResponseItem `json:"root_responses,omitempty"`
 }
 
 // BuildSubChainRequest 编排方式组装子链请求。

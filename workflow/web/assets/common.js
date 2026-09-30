@@ -7044,6 +7044,7 @@ function onOrchChange() {
     renderOrchParamOverrides();
     renderOrchNodeSelected(); // 连线变化后刷新已选节点表，链路中间节点锁定状态实时更新
     refreshOrchConnWarns();   // 连线/关系变化后实时校验自定义关系是否缺 switch_condition
+    refreshOrchRootResponseCandidates(); // 节点增删后刷新返回值定义的引用候选
   }, 200);
 }
 
@@ -7582,6 +7583,231 @@ function renderFixedInput(slot, value, placeholder) {
   slot.style.flex = '1 1 100%';
   slot.style.flexWrap = 'wrap';
   slot.innerHTML = `<input class="param-value-input" style="flex:1;min-width:200px" placeholder="${esc(placeholder || '')}" value="${esc(value || '')}" oninput="storeParamPreset()">`;
+}
+
+// ============================================================
+// 根节点返回值定义（Root Chain 的返回结构）
+// 定义保存在 _orchRootResponses：[{key,label,type,value}]，随根链保存为 root_responses。
+// value 支持占位符 {{steps.<实例ID>.arguments|responses.<字段>}} / {{arguments.<key>}} 或固定值，
+// 执行结束后由后端替换为真实值并按 type 转换，写入 FlowContext.Responses 返回。
+// ============================================================
+let _orchRootResponses = [];
+
+// 转换类型候选（与节点参数/返回值的类型转换保持一致）
+const ROOT_RESPONSE_TYPES = ['', 'string', 'int64', 'float64', 'bool', 'slice', 'map', 'formula'];
+const ROOT_RESPONSE_TYPE_LABELS = {
+  '': '不转换', 'string': 'string', 'int64': 'int64', 'float64': 'float64',
+  'bool': 'bool', 'slice': 'slice', 'map': 'map', 'formula': 'formula'
+};
+
+function orchRootResponseTypeHTML(type) {
+  const cur = type || '';
+  return ROOT_RESPONSE_TYPES.map(t =>
+    '<option value="' + esc(t) + '"' + (cur === t ? ' selected' : '') + '>' + esc(ROOT_RESPONSE_TYPE_LABELS[t]) + '</option>'
+  ).join('');
+}
+
+// 根节点返回值可引用的对象：链上【所有】已选节点实例 + 子链。
+// 与节点参数配置的「引用节点」不同 —— 那里只允许上游（时间上先执行），
+// 而根链返回值是在流程结束后统一取值，所以可以引用任意节点。
+function getOrchAllNodeCandidates() {
+  const cands = [];
+  (window._orchNodeInstances || []).forEach(inst => {
+    const def = (_orchNodes || []).find(n => n.node_id === inst.nodeId);
+    if (!def) return;
+    cands.push({
+      id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type,
+      params: parseNodeParams(def), outputs: parseNodeOutputs(def)
+    });
+  });
+  getSelectedOrchSubIds().forEach(subId => {
+    const s = (_orchSubChains || []).find(x => x.chain_id === subId);
+    if (!s) return;
+    cands.push({
+      id: s.chain_id, name: s.name || s.chain_id, type: 'sub',
+      params: parseNodeParams(s), outputs: parseNodeOutputs(s)
+    });
+  });
+  return cands;
+}
+
+function addOrchRootResponseRow() {
+  _orchRootResponses.push({ key: '', label: '', type: '', value: '' });
+  renderOrchRootResponses();
+  const box = document.getElementById('orch-rr-list');
+  const rows = box ? box.querySelectorAll('.rr-row') : [];
+  const last = rows[rows.length - 1];
+  if (last) {
+    const k = last.querySelector('.rr-key');
+    if (k) k.focus();
+    if (last.scrollIntoView) last.scrollIntoView({ block: 'center' });
+  }
+}
+
+function removeOrchRootResponseRow(idx) {
+  _orchRootResponses.splice(idx, 1);
+  renderOrchRootResponses();
+}
+
+// 单行内把各控件的值写回状态数组（避免重渲染丢失未提交的输入）
+function storeOrchRootResponseRow(row) {
+  const idx = parseInt(row.getAttribute('data-idx'), 10);
+  if (isNaN(idx) || !_orchRootResponses[idx]) return;
+  const key = row.querySelector('.rr-key');
+  const label = row.querySelector('.rr-label');
+  const type = row.querySelector('.rr-type');
+  const value = row.querySelector('.rr-value');
+  if (key) _orchRootResponses[idx].key = key.value.trim();
+  if (label) _orchRootResponses[idx].label = label.value.trim();
+  if (type) _orchRootResponses[idx].type = type.value;
+  if (value) _orchRootResponses[idx].value = value.value.trim();
+}
+
+function onOrchRootResponseChange(el) {
+  const row = el && el.closest ? el.closest('.rr-row') : null;
+  if (row) storeOrchRootResponseRow(row);
+  const cnt = document.getElementById('orch-rr-count');
+  if (cnt) cnt.textContent = collectOrchRootResponses().length + ' 个字段';
+}
+
+// 切换引用的节点 / 参数定义·返回值定义：刷新字段下拉
+function onOrchRRNodeChange(sel) {
+  const row = sel.closest('.rr-row');
+  if (!row) return;
+  const nodeSel = row.querySelector('.rr-node');
+  const kindSel = row.querySelector('.rr-kind');
+  const fieldSel = row.querySelector('.rr-field');
+  const cand = getOrchAllNodeCandidates().find(c => c.id === nodeSel.value) || null;
+  fieldSel.innerHTML = orchRRFieldOptions(cand, kindSel.value, '');
+  row.querySelector('.rr-value').value = '';
+  onOrchRootResponseChange(row.querySelector('.rr-value'));
+}
+
+// 选中具体字段：拼出 {{steps.<id>.<kind>.<key>}} 写入取值框
+function onOrchRRFieldChange(sel) {
+  const row = sel.closest('.rr-row');
+  if (!row) return;
+  const valueEl = row.querySelector('.rr-value');
+  valueEl.value = sel.value || '';
+  onOrchRootResponseChange(valueEl);
+}
+
+function orchRRFieldOptions(cand, kind, presetKey) {
+  if (!cand) return '<option value="">— 无可用节点 —</option>';
+  const list = (kind === 'responses') ? cand.outputs : cand.params;
+  if (!list || !list.length) {
+    return '<option value="">— ' + (kind === 'responses' ? '无返回值定义' : '无参数定义') + ' —</option>';
+  }
+  let opts = '<option value="">— 选择字段 —</option>';
+  list.forEach(f => {
+    const ref = '{{steps.' + cand.id + '.' + kind + '.' + f.key + '}}';
+    opts += '<option value="' + esc(ref) + '"' + (f.key === presetKey ? ' selected' : '') + '>' +
+            esc(f.label || f.key) + ' (' + esc(f.key) + ')</option>';
+  });
+  return opts;
+}
+
+// 解析取值里的 {{steps.<id>.<kind>.<key>}}，用于回显节点/类型/字段三个下拉
+function parseRRValue(value) {
+  const m = /^\{\{\s*steps\.([^.]+)\.(arguments|responses)\.([^}]+?)\s*\}\}$/.exec(String(value || '').trim());
+  if (!m) return null;
+  return { nodeId: m[1], kind: m[2], key: m[3] };
+}
+
+function renderOrchRootResponses() {
+  const box = document.getElementById('orch-rr-list');
+  const cnt = document.getElementById('orch-rr-count');
+  if (!box) return;
+  const cands = getOrchAllNodeCandidates();
+  if (cnt) cnt.textContent = _orchRootResponses.length + ' 个字段';
+  if (!_orchRootResponses.length) {
+    box.innerHTML = '<div style="text-align:center;padding:14px;color:var(--text-muted);font-size:.82rem">' +
+      '尚未定义返回字段。执行结果默认返回各节点的入参与返回值（steps），定义后则返回这里配置的结构。</div>';
+    return;
+  }
+  box.innerHTML = _orchRootResponses.map((it, i) => {
+    const parsed = parseRRValue(it.value);
+    let nodeOpts = '<option value="">— 选择节点 —</option>';
+    cands.forEach(c => {
+      nodeOpts += '<option value="' + esc(c.id) + '"' + (parsed && c.id === parsed.nodeId ? ' selected' : '') + '>' +
+                  esc(c.id) + ' ' + esc(c.name) + '</option>';
+    });
+    const kind = parsed ? parsed.kind : 'responses';
+    const cand = parsed ? cands.find(c => c.id === parsed.nodeId) : null;
+    return '<div class="rr-row" data-idx="' + i + '" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0;border-bottom:1px dashed var(--border)">' +
+        '<input class="rr-key" placeholder="字段名" title="返回结构中的键名" style="flex:0 0 130px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace" value="' + esc(it.key || '') + '" oninput="onOrchRootResponseChange(this)">' +
+        '<input class="rr-label" placeholder="说明" title="中文名/说明（选填）" style="flex:0 0 110px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem" value="' + esc(it.label || '') + '" oninput="onOrchRootResponseChange(this)">' +
+        '<select class="rr-type" title="转换类型：把取到的值转为指定格式" style="flex:0 0 92px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem" onchange="onOrchRootResponseChange(this)">' + orchRootResponseTypeHTML(it.type) + '</select>' +
+        '<select class="rr-node" title="引用哪个节点（链上任意节点）" style="flex:0 0 170px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem" onchange="onOrchRRNodeChange(this)">' + nodeOpts + '</select>' +
+        '<select class="rr-kind" title="取该节点的参数定义还是返回值定义" style="flex:0 0 100px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem" onchange="onOrchRRNodeChange(this)">' +
+          '<option value="arguments"' + (kind === 'arguments' ? ' selected' : '') + '>参数定义</option>' +
+          '<option value="responses"' + (kind === 'responses' ? ' selected' : '') + '>返回值定义</option>' +
+        '</select>' +
+        '<select class="rr-field" title="选择字段" style="flex:0 0 150px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem" onchange="onOrchRRFieldChange(this)">' + orchRRFieldOptions(cand, kind, parsed ? parsed.key : '') + '</select>' +
+        '<input class="rr-value" placeholder="取值：{{steps.xxx.responses.key}} 或固定值" title="最终取值，可手工编辑" style="flex:1 1 220px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace" value="' + esc(it.value || '') + '" oninput="onOrchRootResponseChange(this)">' +
+        '<button class="btn btn-sm btn-danger" type="button" title="删除该字段" onclick="removeOrchRootResponseRow(' + i + ')">✕</button>' +
+      '</div>';
+  }).join('');
+}
+
+// 节点变动后刷新各行的「引用节点」下拉（只重建下拉，不动用户输入，避免打断编辑）
+function refreshOrchRootResponseCandidates() {
+  const box = document.getElementById('orch-rr-list');
+  if (!box) return;
+  const cands = getOrchAllNodeCandidates();
+  box.querySelectorAll('.rr-row').forEach(row => {
+    const nodeSel = row.querySelector('.rr-node');
+    if (!nodeSel) return;
+    const cur = nodeSel.value;
+    let nodeOpts = '<option value="">— 选择节点 —</option>';
+    cands.forEach(c => {
+      nodeOpts += '<option value="' + esc(c.id) + '"' + (c.id === cur ? ' selected' : '') + '>' +
+                  esc(c.id) + ' ' + esc(c.name) + '</option>';
+    });
+    nodeSel.innerHTML = nodeOpts;
+    const stillExists = cur && cands.some(c => c.id === cur);
+    nodeSel.value = stillExists ? cur : '';
+    // 引用目标被删除：标注出来，提醒重新选择（不自动清空，避免误删用户配置）
+    const valueEl = row.querySelector('.rr-value');
+    if (!valueEl) return;
+    if (cur && !stillExists) {
+      valueEl.classList.add('rr-broken');
+      valueEl.title = '引用的节点已不在链上，请重新选择';
+    } else {
+      valueEl.classList.remove('rr-broken');
+      valueEl.title = '最终取值，可手工编辑';
+    }
+  });
+}
+
+// 收集为 root_responses（过滤掉未填字段名的项）
+function collectOrchRootResponses() {
+  return _orchRootResponses
+    .filter(it => it && String(it.key || '').trim())
+    .map(it => ({
+      key: String(it.key).trim(),
+      label: String(it.label || '').trim(),
+      type: String(it.type || '').trim(),
+      value: String(it.value || '').trim()
+    }));
+}
+
+// 回显已保存的 root_responses（编辑加载时调用）。入参为 JSON 字符串或数组
+function applyOrchRootResponses(saved) {
+  _orchRootResponses = [];
+  if (!saved) { renderOrchRootResponses(); return; }
+  try {
+    const list = typeof saved === 'string' ? JSON.parse(saved) : saved;
+    (list || []).forEach(it => {
+      if (!it) return;
+      // 兼容旧格式：直接是字符串时按 {key: '', value: 字符串} 处理
+      if (typeof it === 'string') { _orchRootResponses.push({ key: '', label: '', type: '', value: it }); return; }
+      _orchRootResponses.push({
+        key: it.key || '', label: it.label || '', type: it.type || '', value: it.value == null ? '' : String(it.value)
+      });
+    });
+  } catch (e) { /* ignore */ }
+  renderOrchRootResponses();
 }
 
 // 将当前 UI 中的参数配置写入暂存对象
@@ -8287,6 +8513,8 @@ function newSubChainViaOrch() {
   document.getElementById('orch-debug-mode').checked = false;
   _orchParamPreset = {}; // 重置节点参数配置暂存
   _orchCollapseState = {}; // 重置节点参数配置区收起状态
+  _orchRootResponses = []; // 重置根节点返回值定义
+  renderOrchRootResponses();
   window._orchNodeInstances = []; // 重置已选节点实例
   document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
   const emptyEl = document.getElementById('orch-conn-empty');
@@ -8433,6 +8661,8 @@ async function generateOrchRootChain() {
     node_switch_overrides: collectOrchSwitchOverrides(),
     node_name_overrides: collectOrchNameOverrides(),
     node_collapse_overrides: collectOrchCollapseOverrides(),
+    // 仅 Root Chain 有「根节点返回值定义」；子链目标下为空数组
+    root_responses: (window._orchTarget === 'sub') ? [] : collectOrchRootResponses(),
   };
 
   const btn = document.getElementById('orch-generate-btn');
@@ -8502,6 +8732,8 @@ function loadRootChainToOrch(c) {
     applyOrchNameOverrides(c.node_name_overrides);
     // 恢复已保存的每节点参数配置区收起状态
     applyOrchCollapseOverrides(c.node_collapse_overrides);
+    // 恢复根节点返回值定义（Root Chain 专属）
+    applyOrchRootResponses(c.root_responses);
 
     // Check nodes
     const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
@@ -9330,6 +9562,8 @@ async function orchLoadRootChainById(chainId) {
       applyOrchNameOverrides(c.node_name_overrides);
     // 恢复已保存的每节点参数配置区收起状态
     applyOrchCollapseOverrides(c.node_collapse_overrides);
+      // 恢复根节点返回值定义（Root Chain 专属）
+      applyOrchRootResponses(c.root_responses);
       const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
       restoreOrchNodeInstances(nodeIds, c.dsl_json);
       const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);

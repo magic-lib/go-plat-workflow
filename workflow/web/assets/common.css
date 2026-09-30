@@ -308,6 +308,10 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-conn-row .btn-move:hover { color: var(--primary); border-color: var(--primary); }
 .orch-conn-row .btn-move:disabled { opacity: .35; cursor: not-allowed; }
 .orch-conn-row .conn-arrow { color: var(--text-muted); font-weight: 700; font-size: .85rem; flex-shrink: 0; }
+/* 根节点返回值定义：引用节点已不在链上时标红 */
+.rr-value.rr-broken { border-color: #fca5a5 !important; background: #fef2f2; }
+.rr-row { align-items: center; }
+
 /* Redis 测试连接结果 */
 .redis-test-result { font-size: .75rem; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .redis-test-ok { color: #15803d; background: #dcfce7; border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; }

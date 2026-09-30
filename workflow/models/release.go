@@ -24,6 +24,8 @@ type RootChainReleaseModel struct {
 	ConnectionsData    string    `gorm:"column:connections_data;type:text" json:"connections_data"`
 	NodeParamOverrides string    `gorm:"column:node_param_overrides;type:text" json:"node_param_overrides"`
 	NodeCollapseOverrides string `gorm:"column:node_collapse_overrides;type:text" json:"node_collapse_overrides"`
+	// RootResponses 根节点返回值定义 JSON（[]workflow.RootResponseItem），发布时快照
+	RootResponses      string    `gorm:"column:root_responses;type:text" json:"root_responses"`
 	IsCurrent          bool      `gorm:"column:is_current;default:false;index" json:"is_current"`
 	PublishedAt        time.Time `gorm:"column:published_at;not null" json:"published_at"`
 	CreatedAt          time.Time `json:"created_at"`
@@ -52,6 +54,7 @@ func (m *RootChainReleaseModel) ToDef() *workflow.RootChainReleaseDef {
 		ConnectionsData:    m.ConnectionsData,
 		NodeParamOverrides: m.NodeParamOverrides,
 		NodeCollapseOverrides: m.NodeCollapseOverrides,
+		RootResponses:      m.RootResponses,
 		IsCurrent:          m.IsCurrent,
 		PublishedAt:        m.PublishedAt,
 	}
@@ -70,6 +73,7 @@ func (m *RootChainReleaseModel) FromDef(def *workflow.RootChainReleaseDef) {
 	m.ConnectionsData = def.ConnectionsData
 	m.NodeParamOverrides = def.NodeParamOverrides
 	m.NodeCollapseOverrides = def.NodeCollapseOverrides
+	m.RootResponses = def.RootResponses
 	m.IsCurrent = def.IsCurrent
 	m.PublishedAt = def.PublishedAt
 }

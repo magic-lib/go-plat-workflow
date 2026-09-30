@@ -154,6 +154,24 @@
           </div>
         </div>
 
+        <!-- 根节点返回值定义（仅 Root Chain） -->
+        <div class="orch-section root-only" id="orch-rr-section" style="margin-top:12px">
+          <h3 style="display:flex;justify-content:space-between;align-items:center">
+            根节点返回值定义
+            <span style="display:flex;align-items:center;gap:6px">
+              <span class="count" id="orch-rr-count" style="font-weight:400;color:var(--text-muted);font-size:.78rem">0 个字段</span>
+              <button class="btn btn-sm btn-outline" onclick="addOrchRootResponseRow()" type="button">+ 添加字段</button>
+            </span>
+          </h3>
+          <div class="orch-param-help" style="font-size:.76rem;color:var(--text-muted);margin-bottom:8px;line-height:1.6">
+            定义根链执行完成后的<b>返回结构</b>：每个字段可引用链上<b>任意节点</b>的参数(arguments)或返回值(responses)，
+            形如 <code>{{steps.N000004__ab12c.responses.total}}</code>；也可填 <code>{{arguments.参数key}}</code> 取调用入参，或填固定值。
+            <b>转换类型</b>用于把取到的值转成指定格式（string / int64 / float64 / bool / slice / map）。
+            执行结束后按这里的结构生成 <code>responses</code> 返回给调用方。
+          </div>
+          <div id="orch-rr-list" style="max-height:300px;overflow-y:auto"></div>
+        </div>
+
         <!-- Actions -->
         <div class="orch-actions">
           <button class="btn btn-primary" onclick="generateOrchRootChain()" id="orch-generate-btn">&#128736; 生成 Root Chain</button>

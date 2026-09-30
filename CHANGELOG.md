@@ -1,5 +1,65 @@
 # 更新日志
 
+## 2026-10-01
+
+### feat: 根节点返回值定义（Root Chain 返回结构 + 转换类型）
+
+**背景**
+`ExecuteRootChainByID` 返回 `FlowContext`，其中只有 `Steps`（每个节点的 arguments / responses），
+**根节点级的 `Responses` 一直为空**，调用方拿到结果后必须自己从 steps 里按节点 ID 翻找想要的值，
+节点 ID 带随机后缀（`N000004__ab12c`）时尤其痛苦，且返回结构与下游期望的格式常常不一致。
+
+**方案**
+在编排页（仅 Root Chain）新增「根节点返回值定义」栏目，像节点参数配置那样逐字段配置：
+字段名 / 说明 / **转换类型** / 取值来源。执行结束后按定义把占位符替换为真实值、按类型转换，
+写入 `FlowContext.Responses` 返回。
+
+**取值来源（可引用链上任意节点，不限于上游）**
+- `{{steps.<实例ID>.arguments.<key>}}` / `{{steps.<实例ID>.responses.<key>}}`
+- `{{steps.<实例ID>.responses}}`：整个返回值
+- `{{arguments.<key>}}` / `{{<key>}}`：调用入参
+- 占位符与文本混排时按字符串替换（如 `共 {{steps.N1.responses.total}} 条`）
+- 不含占位符 → 字面量；取不到 → 空串（保证返回结构完整）
+
+**转换类型**：`不转换 / string / int64 / float64 / bool / slice / map / formula`
+（与节点参数、Activity 返回值的类型候选保持一致）。
+
+**存储与生效路径（关键设计）**
+- 定义写入 **DSL 的 `ruleChain.additionalInfo.root_responses`**（rulego 扩展字段，不影响引擎执行）。
+  这样草稿执行与**发布版本执行（发布快照只要带 `dsl_json`）都自动生效**，无需给执行函数加参数。
+- 同时在 `wf_root_chains.root_responses` / `wf_root_chain_releases.root_responses` 存一份 JSON，
+  供编排页回显与发布快照溯源（AutoMigrate 自动加列）。
+- `PublishRootChain` 拷贝该字段；`rootChainContentEqual` 比较 DSL，改了返回值定义即 DSL 变化，
+  可正常发布新版本。
+
+**后端改动**
+- `types.go`：`RootResponseItem` + `RootResponseType*` 常量；`BuildRequest.RootResponses`、
+  `RootChainDef/RootChainReleaseDef.RootResponses`。
+- `models/root_chain.go` / `models/release.go`：新增列与 ToDef/FromDef。
+- `repo/root_chain_repo.go`：Update 显式列 map 补 `root_responses`（漏加则不持久化）。
+- `builder/dsl_builder.go`：`normalizeRootResponses`（去空 key + trim）+ `injectRootResponses`
+  （写入 DSL；无定义时清掉残留），序列化进 def。
+- `service/workflow_service.go`：`ExecuteRootChainByID` 执行成功后调用 `fillRootResponses`；
+  配套 `parseRootResponsesFromDSL` / `resolveRootResponseValue` / `lookupContextPath` /
+  `convertRootResponseValue`。无定义或解析失败**不改动 Responses**，不影响执行结果。
+- `web/server.go`：`executeRequest` 增加 `root_responses` 并透传给 `BuildRequest`。
+
+**前端改动**
+- `orch.html`：新增「根节点返回值定义」区块（`root-only`，子链目标下隐藏）。
+- `common.js`：`_orchRootResponses` 状态 + `renderOrchRootResponses` / `addOrchRootResponseRow` /
+  `removeOrchRootResponseRow` / `collectOrchRootResponses` / `applyOrchRootResponses` /
+  `refreshOrchRootResponseCandidates`；保存 body 带 `root_responses`（子链目标传空数组），
+  两个根链加载入口（`loadRootChainToOrch`、`orchLoadRootChainById`）回显。
+- 引用对象为**链上所有节点/子链**（`getOrchAllNodeCandidates`），区别于节点参数配置的
+  「仅上游」（那里因取值时机在前，只能引用祖先）。
+
+**测试**
+- `workflow/service/root_responses_test.go`：引用节点入参/返回值、调用入参、slice、固定值转换、
+  混排替换、取不到值、无定义不改 Responses、DSL 反序列化回读。
+- `workflow/builder/root_responses_test.go`：注入 DSL、空定义清理、字段 trim。
+
+---
+
 ## 2026-09-30
 
 ### feat: Activity 离线告警（按环境开关 + 仅告警已发布的 Activity）

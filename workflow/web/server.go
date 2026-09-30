@@ -971,6 +971,7 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 		NodeSwitchOverrides: req.NodeSwitchOverrides,
 		NodeNameOverrides:  req.NodeNameOverrides,
 		NodeCollapseOverrides: req.NodeCollapseOverrides,
+		RootResponses:      req.RootResponses,
 	}
 
 	def, err := ws.svc.SaveRootChain(r.Context(), buildReq)
@@ -1287,6 +1288,8 @@ type executeRequest struct {
 	NodeSwitchOverrides map[string]string                `json:"node_switch_overrides"`
 	NodeNameOverrides  map[string]string                `json:"node_name_overrides"`
 	NodeCollapseOverrides map[string]bool               `json:"node_collapse_overrides"`
+	// RootResponses 根节点返回值定义（保存根链时提交，执行结束后据此生成返回结构）
+	RootResponses []workflow.RootResponseItem `json:"root_responses"`
 }
 
 // parsePayload 将请求中的 payload 解析为 map。

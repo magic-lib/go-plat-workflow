@@ -25,6 +25,8 @@ type RootChainModel struct {
 	NodeSwitchOverrides string        `gorm:"column:node_switch_overrides;type:text" json:"node_switch_overrides"`
 	NodeNameOverrides  string        `gorm:"column:node_name_overrides;type:text" json:"node_name_overrides"`
 	NodeCollapseOverrides string      `gorm:"column:node_collapse_overrides;type:text" json:"node_collapse_overrides"`
+	// RootResponses 根节点返回值定义 JSON（[]workflow.RootResponseItem），执行结束后据此生成返回结构
+	RootResponses      string         `gorm:"column:root_responses;type:text" json:"root_responses"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
 	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
@@ -52,6 +54,7 @@ func (m *RootChainModel) ToDef() *workflow.RootChainDef {
 		NodeSwitchOverrides: m.NodeSwitchOverrides,
 		NodeNameOverrides:  m.NodeNameOverrides,
 		NodeCollapseOverrides: m.NodeCollapseOverrides,
+		RootResponses:      m.RootResponses,
 	}
 }
 
@@ -71,4 +74,5 @@ func (m *RootChainModel) FromDef(def *workflow.RootChainDef) {
 	m.NodeSwitchOverrides = def.NodeSwitchOverrides
 	m.NodeNameOverrides = def.NodeNameOverrides
 	m.NodeCollapseOverrides = def.NodeCollapseOverrides
+	m.RootResponses = def.RootResponses
 }

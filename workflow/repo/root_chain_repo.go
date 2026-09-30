@@ -130,6 +130,7 @@ func (r *RootChainRepo) Update(ctx context.Context, def *workflow.RootChainDef) 
 			"node_switch_overrides": def.NodeSwitchOverrides,
 			"node_name_overrides":  def.NodeNameOverrides,
 			"node_collapse_overrides": def.NodeCollapseOverrides,
+			"root_responses":          def.RootResponses,
 		})
 	if result.Error != nil {
 		return result.Error
