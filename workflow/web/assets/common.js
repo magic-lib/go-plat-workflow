@@ -435,7 +435,7 @@ async function loadEnvConfigTable() {
     const data = await res.json();
     const tbody = document.querySelector('#env-configs-table tbody');
     if (!data.length) {
-      tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><p>暂无环境配置</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><p>暂无环境配置</p></div></td></tr>';
       return;
     }
     window._envConfigsForEdit = data;
@@ -446,8 +446,12 @@ async function loadEnvConfigTable() {
         <td>${c.redis_config ? '<span class="badge badge-on">已配</span>' : '<span class="badge badge-off">未配</span>'}</td>
         <td>${c.mysql_config ? '<span class="badge badge-on">已配</span>' : '<span class="badge badge-off">未配</span>'}</td>
         <td>${(c.env_vars||[]).length}</td>
+        <td title="开启后该环境下已发布的 Activity 掉线会发送告警">${
+          (c.alert_config && c.alert_config.enabled)
+            ? '<span class="badge badge-on">开</span>' : '<span class="badge badge-off">关</span>'}</td>
         <td class="actions">
           <button class="btn btn-sm btn-outline" onclick="editEnvConfigByIndex(${i})">编辑</button>
+          <button class="btn btn-sm btn-outline" onclick="openEnvAlertConfig('${esc(c.env_name)}')" title="配置该环境的告警（通道/Webhook/阈值/提醒间隔）">🔔 告警</button>
           <button class="btn btn-sm btn-danger" onclick="deleteEnvConfig('${esc(c.env_name)}')">删除</button>
         </td>
       </tr>`).join('');
@@ -501,6 +505,8 @@ async function saveEnvConfig() {
     db_name: document.getElementById('env-mysql-db').value.trim(),
     dsn: document.getElementById('env-mysql-dsn').value.trim(),
   } : null;
+  // 告警配置由「🔔 告警」弹窗单独维护（存 alert_config JSON），
+  // 这里必须带上原值，否则保存环境表单会把告警设置清掉
   const body = {
     project: p,
     env_name: envName,
@@ -508,6 +514,7 @@ async function saveEnvConfig() {
     env_vars: vars,
     redis_config: redis,
     mysql_config: mysql,
+    alert_config: currentEnvAlertConfig(envName),
   };
   try {
     await fetch('/api/env-configs?project=' + encodeURIComponent(p), {
@@ -515,6 +522,82 @@ async function saveEnvConfig() {
     });
     showToast('环境配置已保存', 'success');
     resetEnvConfigForm();
+    loadEnvConfigTable();
+  } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
+}
+
+// 取指定环境当前的告警配置（从已加载的列表缓存中读取，未配置返回 null）
+function currentEnvAlertConfig(envName) {
+  const list = window._envConfigsForEdit || [];
+  const c = list.find(x => x && x.env_name === envName);
+  return (c && c.alert_config) ? c.alert_config : null;
+}
+
+// 打开环境告警设置弹窗
+function openEnvAlertConfig(envName) {
+  const p = currentEnvProject();
+  if (!p) { showToast('请先选择项目', 'error'); return; }
+  const cfg = currentEnvAlertConfig(envName) || {};
+  document.getElementById('env-alert-env-name').value = envName;
+  const tip = document.getElementById('env-alert-env-tip');
+  if (tip) tip.textContent = p + ' / ' + envName;
+  document.getElementById('env-alert-enabled').checked = !!cfg.enabled;
+  document.getElementById('env-alert-channel').value = cfg.channel || 'feishu';
+  document.getElementById('env-alert-webhook').value = cfg.webhook || '';
+  document.getElementById('env-alert-threshold').value =
+    (cfg.threshold_seconds == null ? '' : cfg.threshold_seconds);
+  document.getElementById('env-alert-remind').value =
+    (cfg.remind_minutes == null ? '' : cfg.remind_minutes);
+  const ov = document.getElementById('env-alert-modal-overlay');
+  if (ov) ov.classList.add('show');
+}
+
+function closeEnvAlertModal() {
+  const ov = document.getElementById('env-alert-modal-overlay');
+  if (ov) ov.classList.remove('show');
+}
+
+// 保存环境告警设置：读取该环境现有配置，仅替换 alert_config 后整体保存
+// （后台以 JSON 存 alert_config；未填的阈值/提醒间隔留空即回落全局配置）
+async function saveEnvAlertConfig() {
+  const p = currentEnvProject();
+  const envName = document.getElementById('env-alert-env-name').value.trim();
+  if (!p || !envName) { showToast('环境信息不完整', 'error'); return; }
+  const cur = (window._envConfigsForEdit || []).find(x => x && x.env_name === envName);
+  if (!cur) { showToast('请先加载该环境的配置', 'error'); return; }
+
+  const enabled = document.getElementById('env-alert-enabled').checked;
+  const thresholdRaw = document.getElementById('env-alert-threshold').value.trim();
+  const remindRaw = document.getElementById('env-alert-remind').value.trim();
+  const threshold = thresholdRaw === '' ? null : (parseInt(thresholdRaw, 10) || null);
+  const remind = remindRaw === '' ? null : parseInt(remindRaw, 10);
+  if (remind !== null && (isNaN(remind) || remind < 0)) { showToast('重复提醒间隔不能为负数', 'error'); return; }
+  if (threshold !== null && threshold <= 0) { showToast('离线判定阈值需大于 0', 'error'); return; }
+
+  const alertConfig = {
+    enabled: enabled,
+    channel: document.getElementById('env-alert-channel').value || 'feishu',
+    webhook: document.getElementById('env-alert-webhook').value.trim(),
+  };
+  // 用指针语义区分「未配置（回落全局）」与「显式 0（只提醒一次）」：不填即不带该字段
+  if (threshold !== null) alertConfig.threshold_seconds = threshold;
+  if (remind !== null) alertConfig.remind_minutes = remind;
+
+  try {
+    await fetch('/api/env-configs?project=' + encodeURIComponent(p), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project: p,
+        env_name: envName,
+        description: cur.description || '',
+        env_vars: cur.env_vars || [],
+        redis_config: cur.redis_config || null,
+        mysql_config: cur.mysql_config || null,
+        alert_config: alertConfig,
+      }),
+    });
+    showToast(enabled ? '告警设置已保存（已开启）' : '告警设置已保存（已关闭）', 'success');
+    closeEnvAlertModal();
     loadEnvConfigTable();
   } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
 }

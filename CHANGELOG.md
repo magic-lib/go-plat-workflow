@@ -1,5 +1,75 @@
 # 更新日志
 
+## 2026-09-30
+
+### feat: Activity 离线告警（按环境开关 + 仅告警已发布的 Activity）
+
+**背景**
+worker 通过 Redis 心跳上报存活状态（每 10s 一次），管理端只在列表里展示心跳比例，
+activity 的 worker 挂掉后**没有任何主动通知**，往往等流程调用失败才发现。
+
+**告警判定（四条同时满足才告警，避免噪声）**
+1. 总开关：`custom.normal.activity_offline_alert_enabled`（默认 true）；
+2. 环境开关：该环境告警配置 `alert_config.enabled = true`（**逐环境开关**，用于屏蔽测试/开发环境）；
+3. 已发布上线：activity 出现在当前生效版本的根链发布快照中（含子链传递引用）；
+4. 曾经在线：收到过心跳，但已超过阈值时间未再收到 ——
+   **从未上报过心跳的不告警**（那属于「还没部署 / 已废弃」，不是「运行中掉线」）。
+
+**环境级告警配置（JSON 持久化，页面可配）**
+> 初版只做了 `AlertEnabled` 布尔列，用户反馈两点：① 编辑已配置环境时没有配置告警的入口；
+> ② 告警配置（通道 / 机器人地址 / 阈值 / 提醒间隔）需要能**逐环境配置并存为 JSON**，
+> 巡检时扫描「开启告警的环境」，按各自配置发到对应的飞书群。故改为 JSON 配置。
+
+- 类型：`types.go` 新增 `EnvAlertConfig`（`enabled` / `channel` / `webhook` /
+  `threshold_seconds *int` / `remind_minutes *int`）+ `AlertEnabled()` / `EffectiveChannel()`；
+  `EnvConfigDef.AlertConfig *EnvAlertConfig` 取代布尔列。
+  **指针语义**：阈值/间隔为 nil 表示「回落全局」，显式 0 表示「只提醒一次」，两者必须可区分。
+- 存储：`wf_env_configs.alert_config` **text（JSON 串）**，`models.EnvConfigModel.ToDef/FromDef` 负责序列化；
+  AutoMigrate 自动加列。
+- 查询：`EnvConfigRepo.ListAlertEnvs`（SQL 先过滤 `alert_config` 非空 → 内存判 enabled，
+  因为 JSON 内的 enabled 无法直接 SQL 过滤）→ `WorkflowService.ListAlertEnvs`。
+- 后台巡检：新增 `AlertEnvLister` 可选接口，收集器 `alertEnvs()` 优先用它，否则回退全量列表过滤。
+  `refreshMonitored` 把每个环境配置合并为 `envAlertSetting`（环境值优先、回落全局）；
+  判定阈值与提醒间隔**按环境各自取值**，告警**按 webhook 分组发送**（专属群 or 全局发送器），
+  避免跨环境的告警串群。
+- 发送器缓存：`feishuSenderFor(webhook)` 按地址缓存 `feishuAlertSender`（同群只构造一次）；
+  webhook 为空则走全局 `SendAlert`。
+- 前端：已配置环境表格新增「告警」列（开/关徽标）+ 操作栏「🔔 告警」按钮 → `#env-alert-modal`
+  告警设置弹窗（启用 / 通道 / Webhook / 阈值 / 提醒间隔），保存到 `alert_config`。
+  **注意：环境面板 DOM 在 `index.html` 与 `orch.html` 各一份，弹窗也要两处都加。**
+  `saveEnvConfig` 保存环境表单时**必须带上原 `alert_config`**，否则会被清空。
+- `envConfigRequest.alert_config` 透传；`web/server.go` 同步。
+
+**后端实现**
+- `workflow.TestRedisConnect` 同文件新增：
+  - `PublishedActivityLister` 接口 + `service.ListPublishedActivities(project)`：
+    复用 `buildPublishedRefIndex` 的 activity 键（`ns\x00name`）拆分得到已发布 activity 列表；
+  - `hbLast`（key=`project|env|ns|name` → 最近心跳时间戳，**不随 1 分钟窗口裁剪**）：
+    `hbCache` 会在 2 分钟后丢弃数据，仅靠它无法判断「曾经在线但已掉线」；
+  - `refreshMonitored()`：每 5 分钟重建监控集合 = 开启告警的环境 × 该项目已发布 activity
+    （发布快照是项目级，心跳按 project+env 上报，故需展开为 env 维度）；
+    关闭告警/下线后同步清理对应离线状态；
+  - `checkOfflineActivities()`：每 30s 巡检，状态机 `activityOfflineState`
+    （首次告警 → 按 `remind` 间隔重复提醒 → 恢复通知 → 持续离线超 24h 自动停止提醒防刷屏）；
+  - 汇总成一条告警（最多列 20 条，其余省略），异步发送，不阻塞巡检。
+- **告警通道**：新增 `workflow.SendAlert(ctx,title,content)` + `SetAlertSender`，
+  与既有飞书机器人（`SetFeiShuAlertWebhook`）共用同一个 `commnode.AlertSender`；
+  未配置 webhook 时静默 no-op（仅记日志）。
+- 收集器构造改为 `NewActivityCollectorWithAlert(..., pubLister)`，
+  `web/server.go` 传入 `svc` 启用；`pubLister=nil` 时完全不启用离线告警（旧行为）。
+
+**配置（app.yaml `custom.normal`）**
+- `activity_offline_alert_enabled`（默认 true）、`activity_offline_alert_threshold_seconds`（默认 60）、
+  `activity_offline_alert_remind_minutes`（默认 30，0=只提醒一次）。
+  与引擎池策略一样走 sync.Once，**改配置需重启**。
+
+**测试**
+- 新增 `workflow/activity_collector_offline_test.go`：覆盖首次告警 / 恢复通知 /
+  未开启告警环境不告警 / 从未上报心跳不告警 / 重复提醒间隔 / 关闭开关后清理状态 /
+  环境级阈值与提醒间隔覆盖全局（`TestEnvAlertSettingOverride`）。
+
+---
+
 ## 2026-09-27
 
 ### fix: 节点参数配置列表标题不跟随图上改名，仍显示节点定义旧名

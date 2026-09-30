@@ -95,6 +95,42 @@ func (s *WorkflowService) ActivityPublishedInRootChain(ctx context.Context, proj
 	return ok, nil
 }
 
+// ListPublishedActivities 列出指定项目下所有【已发布到根链（当前生效版本）】的 activity 标识，
+// 含子链传递引用。
+//
+// 用途：管理端收集器据此筛选「线上正在跑」的 activity —— 只有这些 activity 掉线才需要告警，
+// 未加入发布（草稿 / 未被任何已发布根链引用）的即使没有心跳也不告警。
+// 会重建发布引用索引（遍历当前生效快照 DSL），因此调用方应控制调用频率（如分钟级）并缓存结果。
+func (s *WorkflowService) ListPublishedActivities(ctx context.Context, project string) ([]*workflow.PublishedActivityRef, error) {
+	if project == "" {
+		return nil, nil
+	}
+	idx, err := s.buildPublishedRefIndex(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*workflow.PublishedActivityRef, 0, len(idx.activities))
+	for k := range idx.activities {
+		// activity 键格式：act_namespace + "\x00" + act_name
+		parts := strings.SplitN(k, "\x00", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			continue
+		}
+		out = append(out, &workflow.PublishedActivityRef{
+			Project:      project,
+			ActNamespace: parts[0],
+			ActName:      parts[1],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ActNamespace != out[j].ActNamespace {
+			return out[i].ActNamespace < out[j].ActNamespace
+		}
+		return out[i].ActName < out[j].ActName
+	})
+	return out, nil
+}
+
 // buildPublishedRefIndex 构建指定项目下「当前生效发布引用集合」：
 // 仅遍历 is_current=true（当前生产生效）的发布快照 DSL，收集直接引用的节点与 activity，
 // 并对快照中引用的子链做深度遍历（生产执行时子链 DSL 实时加载，同样计入线上内容）。

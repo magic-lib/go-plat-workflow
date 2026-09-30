@@ -1050,7 +1050,7 @@ function copyDslContent() {
       <h4 style="font-size:.85rem;margin:12px 0 8px">已配置环境</h4>
       <div class="table-wrap" style="max-height:220px;overflow-y:auto">
         <table id="env-configs-table">
-          <thead><tr><th>环境名</th><th>描述</th><th>Redis</th><th>MySQL</th><th>变量数</th><th>操作</th></tr></thead>
+          <thead><tr><th>环境名</th><th>描述</th><th>Redis</th><th>MySQL</th><th>变量数</th><th>告警</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1060,6 +1060,49 @@ function copyDslContent() {
 
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeProjectModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 环境告警设置弹窗 -->
+<div class="modal-overlay" id="env-alert-modal-overlay" onclick="if(event.target===this)closeEnvAlertModal()">
+  <div class="modal" id="env-alert-modal" style="width:640px;max-width:96vw">
+    <h2>环境告警设置<button class="modal-close" onclick="closeEnvAlertModal()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="env-alert-env-name">
+    <div id="env-alert-env-tip" style="margin:-4px 0 12px;color:var(--primary);font-size:.9rem;font-weight:600"></div>
+    <p style="margin:0 0 10px;font-size:.76rem;color:var(--text-muted);line-height:1.6">
+      仅对该环境下【已发布上线】的 Activity 生效：worker 停止上报心跳（掉线）时按下面配置发送告警。<br>
+      测试环境建议保持关闭，避免噪声。
+    </p>
+    <div class="form-row" style="align-items:center;gap:6px;margin-bottom:8px">
+      <input type="checkbox" id="env-alert-enabled" style="width:auto;margin:0">
+      <label for="env-alert-enabled" style="margin:0;font-size:.82rem;cursor:pointer;font-weight:600">开启告警</label>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>告警通道</label>
+        <select id="env-alert-channel">
+          <option value="feishu">飞书机器人</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>机器人 Webhook（留空用全局配置）</label>
+        <input id="env-alert-webhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>离线判定阈值（秒，留空用全局）</label>
+        <input id="env-alert-threshold" type="number" min="1" placeholder="60">
+      </div>
+      <div class="form-group">
+        <label>重复提醒间隔（分钟，0=只提醒一次）</label>
+        <input id="env-alert-remind" type="number" min="0" placeholder="30">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeEnvAlertModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveEnvAlertConfig()">保存告警设置</button>
     </div>
   </div>
 </div>

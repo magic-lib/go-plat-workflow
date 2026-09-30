@@ -910,6 +910,12 @@ func (s *WorkflowService) ListAllEnvConfigs(ctx context.Context) ([]*workflow.En
 	return s.envConfigRepo.ListAll(ctx)
 }
 
+// ListAlertEnvs 列出所有【开启了告警】的环境配置，供离线巡检扫描告警目标。
+// 逐环境的告警配置（通道 / 机器人地址 / 阈值 / 提醒间隔）以 JSON 存在 alert_config，按各自配置发送。
+func (s *WorkflowService) ListAlertEnvs(ctx context.Context) ([]*workflow.EnvConfigDef, error) {
+	return s.envConfigRepo.ListAlertEnvs(ctx)
+}
+
 // EnvConfigRepo 返回环境配置仓储实例（供 web 层收集器发现 Redis 配置复用）。
 func (s *WorkflowService) EnvConfigRepo() *repo.EnvConfigRepo {
 	return s.envConfigRepo

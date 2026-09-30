@@ -37,6 +37,15 @@ const (
 	// rootChainBroadcastEnabledKey 配置文件中 custom.normal 下
 	// 「是否启用跨副本根链失效广播（Redis pub/sub）」的 key 名。
 	rootChainBroadcastEnabledKey = "root_chain_broadcast_enabled"
+	// activityOfflineAlertEnabledKey 配置文件中 custom.normal 下
+	// 「是否启用 Activity 离线告警」的 key 名（总开关）。
+	activityOfflineAlertEnabledKey = "activity_offline_alert_enabled"
+	// activityOfflineAlertThresholdSecKey 配置文件中 custom.normal 下
+	// 「判定 Activity 离线所需的心跳中断时长（秒）」的 key 名。
+	activityOfflineAlertThresholdSecKey = "activity_offline_alert_threshold_seconds"
+	// activityOfflineAlertRemindMinutesKey 配置文件中 custom.normal 下
+	// 「持续离线时的重复提醒间隔（分钟，0 表示只提醒一次）」的 key 名。
+	activityOfflineAlertRemindMinutesKey = "activity_offline_alert_remind_minutes"
 
 	DefaultTimeout = 60 * time.Second
 
@@ -50,6 +59,14 @@ const (
 	// 默认 true 以保证多副本部署下发布能即时全量生效；
 	// 单机部署可显式设为 false，避免创建无谓的 Redis 订阅与后台协程。
 	DefaultRootChainBroadcastEnabled = true
+	// DefaultActivityOfflineAlertEnabled 是否默认启用 Activity 离线告警（总开关）。
+	DefaultActivityOfflineAlertEnabled = true
+	// DefaultActivityOfflineAlertThresholdSec 判定 Activity 离线所需的心跳中断时长（秒）。
+	// worker 每 10s 上报一次心跳，默认 60s（连续 6 次没收到即判定离线）。
+	DefaultActivityOfflineAlertThresholdSec = 60
+	// DefaultActivityOfflineAlertRemindMinutes 持续离线时的重复提醒间隔（分钟）。
+	// 0 表示只在首次判定时提醒一次。
+	DefaultActivityOfflineAlertRemindMinutes = 30
 )
 
 type ReturnValue struct {
@@ -115,6 +132,15 @@ type AppConfig struct {
 	// 多副本部署需开启，否则只有收到发布请求的副本会切到新版本；
 	// 单机部署可关闭以省去订阅开销。缺省 DefaultRootChainBroadcastEnabled。
 	RootChainBroadcastEnabled bool
+	// ActivityOfflineAlertEnabled 是否启用 Activity 离线告警（总开关）。
+	// 关闭后即使环境开启了告警也不再发送。缺省 DefaultActivityOfflineAlertEnabled。
+	ActivityOfflineAlertEnabled bool
+	// ActivityOfflineAlertThresholdSec 判定 Activity 离线所需的心跳中断时长（秒）。
+	// 缺省 DefaultActivityOfflineAlertThresholdSec。
+	ActivityOfflineAlertThresholdSec int
+	// ActivityOfflineAlertRemindMinutes 持续离线时的重复提醒间隔（分钟），0 = 只提醒一次。
+	// 缺省 DefaultActivityOfflineAlertRemindMinutes。
+	ActivityOfflineAlertRemindMinutes int
 }
 
 // rootChainCachePolicy 根链缓存相关策略（进程内只加载一次）。
@@ -128,12 +154,32 @@ var (
 	broadcastEnabled = DefaultRootChainBroadcastEnabled
 )
 
+// Activity 离线告警策略（进程内只加载一次）。
+var (
+	offlineAlertOnce sync.Once
+	// offlineAlertEnabled 是否启用离线告警（总开关）。
+	offlineAlertEnabled = DefaultActivityOfflineAlertEnabled
+	// offlineAlertThresholdSec 判定离线所需的心跳中断时长（秒）。
+	offlineAlertThresholdSec = DefaultActivityOfflineAlertThresholdSec
+	// offlineAlertRemindMinutes 持续离线的重复提醒间隔（分钟）。
+	offlineAlertRemindMinutes = DefaultActivityOfflineAlertRemindMinutes
+)
+
 // loadRootChainCachePolicy 加载根链缓存相关策略（只执行一次）。
 func loadRootChainCachePolicy() {
 	if cfg, err := Load(); err == nil && cfg != nil {
 		poolMaxVersions = cfg.RootChainPoolMaxVersions
 		poolTTLMinutes = cfg.RootChainPoolTTLMinutes
 		broadcastEnabled = cfg.RootChainBroadcastEnabled
+	}
+}
+
+// loadOfflineAlertPolicy 加载 Activity 离线告警策略（只执行一次）。
+func loadOfflineAlertPolicy() {
+	if cfg, err := Load(); err == nil && cfg != nil {
+		offlineAlertEnabled = cfg.ActivityOfflineAlertEnabled
+		offlineAlertThresholdSec = cfg.ActivityOfflineAlertThresholdSec
+		offlineAlertRemindMinutes = cfg.ActivityOfflineAlertRemindMinutes
 	}
 }
 
@@ -155,6 +201,18 @@ func GetRootChainPoolPolicy() (maxVersions int, ttlMinutes int) {
 func GetRootChainBroadcastEnabled() bool {
 	rootChainCacheOnce.Do(loadRootChainCachePolicy)
 	return broadcastEnabled
+}
+
+// GetActivityOfflineAlertPolicy 返回 Activity 离线告警策略：
+//   - enabled：总开关，关闭后即使环境开启了告警也不发送；
+//   - thresholdSec：心跳中断超过该秒数判定为离线；
+//   - remindMinutes：持续离线时的重复提醒间隔（分钟，0 = 只提醒一次）。
+//
+// 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
+// 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
+func GetActivityOfflineAlertPolicy() (enabled bool, thresholdSec int, remindMinutes int) {
+	offlineAlertOnce.Do(loadOfflineAlertPolicy)
+	return offlineAlertEnabled, offlineAlertThresholdSec, offlineAlertRemindMinutes
 }
 
 // Load 通过 startupcfg 从配置文件加载应用配置。
@@ -205,6 +263,11 @@ func Load(path ...string) (*AppConfig, error) {
 	cfg.RootChainPoolMaxVersions = customNormalIntAllowZero(startCfg.Custom, rootChainPoolMaxVersionsKey, DefaultRootChainPoolMaxVersions)
 	cfg.RootChainPoolTTLMinutes = customNormalIntAllowZero(startCfg.Custom, rootChainPoolTTLMinutesKey, DefaultRootChainPoolTTLMinutes)
 	cfg.RootChainBroadcastEnabled = customNormalBool(startCfg.Custom, rootChainBroadcastEnabledKey, DefaultRootChainBroadcastEnabled)
+	// Activity 离线告警
+	cfg.ActivityOfflineAlertEnabled = customNormalBool(startCfg.Custom, activityOfflineAlertEnabledKey, DefaultActivityOfflineAlertEnabled)
+	cfg.ActivityOfflineAlertThresholdSec = customNormalInt(startCfg.Custom, activityOfflineAlertThresholdSecKey, DefaultActivityOfflineAlertThresholdSec)
+	// 此处 0 是【有效语义】（只提醒一次），用允许 0 的读取方式
+	cfg.ActivityOfflineAlertRemindMinutes = customNormalIntAllowZero(startCfg.Custom, activityOfflineAlertRemindMinutesKey, DefaultActivityOfflineAlertRemindMinutes)
 
 	return cfg, nil
 }

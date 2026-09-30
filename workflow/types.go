@@ -434,6 +434,40 @@ type MySQLConfig struct {
 	Params string `json:"params,omitempty"`
 }
 
+// AlertChannelFeishu 飞书自定义机器人告警通道。
+const AlertChannelFeishu = "feishu"
+
+// EnvAlertConfig 环境级告警配置。
+// 后台以 JSON 字符串存库（wf_env_configs.alert_config），在环境配置页面的「告警设置」中维护。
+// 每次巡检先扫描开启了告警的环境，再按各自配置（通道 / 机器人地址 / 阈值 / 提醒间隔）发送告警，
+// 未配置的项回落到全局配置（custom.normal.activity_offline_alert_*）。
+type EnvAlertConfig struct {
+	// Enabled 该环境是否开启告警。false 时不做任何离线判定与发送（测试环境应保持关闭）。
+	Enabled bool `json:"enabled"`
+	// Channel 告警通道，目前支持 AlertChannelFeishu（飞书自定义机器人）；为空按 feishu 处理。
+	Channel string `json:"channel,omitempty"`
+	// Webhook 该环境专属的机器人 Webhook 地址。
+	// 为空时回落到全局配置 custom.normal.feishu_alert_webhook（即所有环境共用同一个群）。
+	Webhook string `json:"webhook,omitempty"`
+	// ThresholdSec 心跳中断超过该秒数判定离线；nil 或 <=0 用全局阈值。
+	ThresholdSec *int `json:"threshold_seconds,omitempty"`
+	// RemindMinutes 持续离线时的重复提醒间隔（分钟）；nil 用全局配置，显式 0 表示只提醒一次。
+	RemindMinutes *int `json:"remind_minutes,omitempty"`
+}
+
+// AlertEnabled 返回该环境是否开启告警（配置为空时视为关闭）。
+func (c *EnvAlertConfig) AlertEnabled() bool {
+	return c != nil && c.Enabled
+}
+
+// EffectiveChannel 返回生效的告警通道（未指定时按飞书处理）。
+func (c *EnvAlertConfig) EffectiveChannel() string {
+	if c == nil || c.Channel == "" {
+		return AlertChannelFeishu
+	}
+	return c.Channel
+}
+
 // EnvConfigDef 环境配置定义。
 // 挂在某个 project 下，按 EnvName 区分多个环境（如 dev/test/prod）。
 // 每个环境可配置环境变量、Redis、MySQL 连接信息，供后续使用。
@@ -450,6 +484,10 @@ type EnvConfigDef struct {
 	RedisConfig *RedisConfig `json:"redis_config,omitempty"`
 	// MySQLConfig MySQL 连接配置
 	MySQLConfig *MySQLConfig `json:"mysql_config,omitempty"`
+	// AlertConfig 该环境的告警配置（后台以 JSON 存库，页面上可配置）。
+	// 逐环境开关，用于屏蔽测试/开发环境：只有开启的环境才会对其下 activity 做离线判定并告警。
+	// nil 或 Enabled=false 表示不告警（缺省关闭，需人工开启）。
+	AlertConfig *EnvAlertConfig `json:"alert_config,omitempty"`
 	// CreatedAt 创建时间
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt 更新时间
@@ -911,6 +949,18 @@ type ActivityHeartbeatInfo struct {
 	Ratio float64 `json:"ratio"`
 	// Count 最近 1 分钟实际心跳次数
 	Count int `json:"count"`
+}
+
+// PublishedActivityRef 标识一个「已被发布到根链（当前生效版本）」的 activity，
+// 供管理端离线告警等场景筛选「线上正在跑」的 activity：
+// 未加入发布（仅草稿 / 未被任何已发布根链引用）的 activity 不在其中，因此不会触发离线告警。
+type PublishedActivityRef struct {
+	// Project 项目名
+	Project string `json:"project"`
+	// ActNamespace 活动命名空间
+	ActNamespace string `json:"act_namespace"`
+	// ActName 活动名称
+	ActName string `json:"act_name"`
 }
 
 // ActivityLogDef activity 执行日志定义。

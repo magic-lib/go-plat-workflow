@@ -56,8 +56,10 @@ func NewWebServer(db *gorm.DB) (*WebServer, error) {
 
 	ws := &WebServer{svc: svc, mux: http.NewServeMux()}
 
-	// 启动活动日志/心跳收集器（自动发现各环境 Redis 配置）
-	ws.collector = workflow.NewActivityCollector(svc.ActivityLogRepo(), svc.NodeLogRepo(), svc)
+	// 启动活动日志/心跳收集器（自动发现各环境 Redis 配置）。
+	// 同时传入 svc 作为「已发布 activity」查询器，启用 Activity 离线告警：
+	// 仅对【已发布上线】且【所在环境开启了告警】的 activity 做离线判定。
+	ws.collector = workflow.NewActivityCollectorWithAlert(svc.ActivityLogRepo(), svc.NodeLogRepo(), svc, svc)
 	ws.collector.Start()
 
 	ws.registerRoutes()
@@ -1687,6 +1689,9 @@ type envConfigRequest struct {
 	EnvVars     []workflow.EnvVar     `json:"env_vars,omitempty"`
 	RedisConfig *workflow.RedisConfig `json:"redis_config,omitempty"`
 	MySQLConfig *workflow.MySQLConfig `json:"mysql_config,omitempty"`
+	// AlertConfig 该环境的告警配置（JSON 对象，页面「告警设置」里维护）。
+	// nil 或 enabled=false 表示不告警，测试环境应保持关闭。
+	AlertConfig *workflow.EnvAlertConfig `json:"alert_config,omitempty"`
 }
 
 func (r *envConfigRequest) toDef(project string) *workflow.EnvConfigDef {
@@ -1697,6 +1702,7 @@ func (r *envConfigRequest) toDef(project string) *workflow.EnvConfigDef {
 		EnvVars:     r.EnvVars,
 		RedisConfig: r.RedisConfig,
 		MySQLConfig: r.MySQLConfig,
+		AlertConfig: r.AlertConfig,
 	}
 }
 
