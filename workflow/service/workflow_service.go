@@ -949,21 +949,21 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		return nil, err
 	}
 	release := &workflow.RootChainReleaseDef{
-		Project:             draft.Project,
-		ChainID:             draft.ChainID,
-		Version:             maxVer + 1,
-		Name:                draft.Name,
-		Description:         draft.Description,
-		DSLJSON:             draft.DSLJSON,
-		NodeIDs:             draft.NodeIDs,
-		SubChainIDs:         draft.SubChainIDs,
-		ConnectionsData:     draft.ConnectionsData,
-		NodeParamOverrides:  draft.NodeParamOverrides,
-		NodeSwitchOverrides: draft.NodeSwitchOverrides,
-		NodeNameOverrides:   draft.NodeNameOverrides,
+		Project:               draft.Project,
+		ChainID:               draft.ChainID,
+		Version:               maxVer + 1,
+		Name:                  draft.Name,
+		Description:           draft.Description,
+		DSLJSON:               draft.DSLJSON,
+		NodeIDs:               draft.NodeIDs,
+		SubChainIDs:           draft.SubChainIDs,
+		ConnectionsData:       draft.ConnectionsData,
+		NodeParamOverrides:    draft.NodeParamOverrides,
+		NodeSwitchOverrides:   draft.NodeSwitchOverrides,
+		NodeNameOverrides:     draft.NodeNameOverrides,
 		NodeCollapseOverrides: draft.NodeCollapseOverrides,
-		IsCurrent:           true,
-		PublishedAt:         time.Now(),
+		IsCurrent:             true,
+		PublishedAt:           time.Now(),
 	}
 
 	if err := s.releaseRepo.Create(ctx, release); err != nil {
@@ -1223,6 +1223,8 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		if resultParam == nil {
 			return nil, fmt.Errorf("execute root chain %s: empty result", rootChainID)
 		}
+		// 需要将返回数据提供给responses里
+
 		return resultParam, nil
 	case <-execCtx.Done():
 		return nil, fmt.Errorf("execute root chain %s: timeout after %s: %w", rootChainID, executeRootChainByIDTimeout, execCtx.Err())
