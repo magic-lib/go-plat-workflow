@@ -91,15 +91,18 @@ func (l *WfLogic) getWfWorker(ctx context.Context) (*WfWorker, error) {
 }
 
 // InvokeWorkerFlowAPI 调用 workflow 活动 API
-func (l *WfLogic) InvokeWorkerFlowAPI(ctx context.Context, chainKey string, traceId string, payload map[string]any, isAsync bool) (any, error) {
-	data, err := InvokeWorkerFlowAPI(ctx, l.Project, l.Env, l.DomainName, l.ApiToken, &InvokeRequest{
-		ChainKey: chainKey,
-		Payload:  payload,
-		Metadata: InvokeMetadata{
-			TraceID: traceId,
-			IsAsync: isAsync,
-		},
-	})
+func (l *WfLogic) InvokeWorkerFlowAPI(ctx context.Context, invokeReq *InvokeRequest) (any, error) {
+	if invokeReq == nil {
+		return nil, fmt.Errorf("invokeReq is nil")
+	}
+	if invokeReq.ChainKey == "" {
+		return nil, fmt.Errorf("chain_key is empty")
+	}
+	if invokeReq.Payload == nil {
+		invokeReq.Payload = make(map[string]any)
+	}
+
+	data, err := InvokeWorkerFlowAPI(ctx, l.Project, l.Env, l.DomainName, l.ApiToken, invokeReq)
 	if err != nil {
 		return nil, err
 	}

@@ -362,7 +362,7 @@ type AlertSender = commnode.AlertSender
 
 // 包级告警发送器：由 SetFeiShuAlertWebhook / SetAlertSender 注入。
 // 与 commnode 内的 defaultAlertSender 分开保存，使 workflow 包自身
-//（如 Activity 离线巡检）也能主动发送告警。
+// （如 Activity 离线巡检）也能主动发送告警。
 var (
 	alertSender   commnode.AlertSender
 	alertSenderMu sync.RWMutex
@@ -730,6 +730,7 @@ type InvokeRequest struct {
 	ChainKey string         `json:"chain_key"`
 	Metadata InvokeMetadata `json:"metadata"`
 	Payload  map[string]any `json:"payload"`
+	Result   any            `json:"-"`
 }
 
 type InvokeMetadata struct {
@@ -785,6 +786,16 @@ func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string
 	}
 	if respData.Code != 0 {
 		return nil, fmt.Errorf("%s", respData.Message)
+	}
+	// 若调用方提供了 Result 出参指针，则把返回值填充进去（调用方可直接读取，无需再用返回值类型断言）。
+	if invokeRequest.Result != nil {
+		if m, ok := respData.Data.(map[string]any); ok {
+			if resp2, ok := m["responses"]; ok {
+				if resp2 != nil {
+					_ = conv.Unmarshal(resp2, invokeRequest.Result)
+				}
+			}
+		}
 	}
 	return respData.Data, nil
 }

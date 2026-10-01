@@ -41,13 +41,14 @@ func TestInvokeWorkerFlowAPI_SuccessWithResult(t *testing.T) {
 	l := &WfLogic{DomainName: ts.URL, Project: "proj", Env: "env", ApiToken: "tok"}
 
 	resultMap := map[string]any{}
-	req := &InvokeRequest{Result: &resultMap}
+	req := &InvokeRequest{
+		ChainKey: "chain1",
+		Payload:  map[string]any{"a": 1},
+		Metadata: InvokeMetadata{TraceID: "trace-1", IsAsync: false},
+		Result:   &resultMap,
+	}
 	data, err := l.InvokeWorkerFlowAPI(
-		context.Background(),
-		"chain1", "trace-1",
-		map[string]any{"a": 1},
-		false,
-		req,
+		context.Background(), req,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -85,12 +86,14 @@ func TestInvokeWorkerFlowAPI_SuccessWithoutResult(t *testing.T) {
 
 	l := &WfLogic{DomainName: ts.URL, Project: "proj", Env: "env", ApiToken: "tok"}
 
+	req := &InvokeRequest{
+		ChainKey: "chain1",
+		Payload:  map[string]any{"a": 1},
+		Metadata: InvokeMetadata{TraceID: "trace-1", IsAsync: true},
+	}
+
 	data, err := l.InvokeWorkerFlowAPI(
-		context.Background(),
-		"chain1", "trace-1",
-		map[string]any{"a": 1},
-		true, // 异步标记也走同一调用路径，仅写入 metadata
-	)
+		context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,14 +114,17 @@ func TestInvokeWorkerFlowAPI_ErrorResponse(t *testing.T) {
 
 	l := &WfLogic{DomainName: ts.URL, Project: "proj", Env: "env", ApiToken: "tok"}
 
+	req := &InvokeRequest{
+		ChainKey: "missing-chain",
+		Payload:  map[string]any{},
+		Metadata: InvokeMetadata{TraceID: "trace-1", IsAsync: false},
+	}
+
 	_, err := l.InvokeWorkerFlowAPI(
-		context.Background(),
-		"missing-chain", "trace-1",
-		map[string]any{},
-		false,
+		context.Background(), req,
 	)
 	if err == nil {
-		t.Fatalf("expected error for code != 0, got nil")
+		t.Fatalf("expected error for code != 0, got nil111")
 	}
 	if err.Error() != "chain not found" {
 		t.Errorf("err = %q, want %q", err.Error(), "chain not found")
