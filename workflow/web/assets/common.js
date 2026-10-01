@@ -6516,7 +6516,9 @@ function orchConnOptionsHtml() {
   const items = [];
   nodeIds.forEach(id => {
     const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
-    items.push({ id: id, name: inst ? (inst.name || id) : id, prefix: '⚙' });
+    const ov = (window._orchNameOverrides || {})[id];
+    const name = (ov && ov.trim()) ? ov.trim() : (inst ? (inst.name || id) : id);
+    items.push({ id: id, name: name, prefix: '⚙' });
   });
   subIds.forEach(id => {
     const s = _orchSubChains.find(x => x.chain_id === id);
@@ -6863,7 +6865,9 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     const nodeId = inst ? inst.nodeId : id.split('__')[0];
     const n = nodes.find(x => x.node_id === nodeId);
     const baseId = nodeId;
-    const cnName = (inst && inst.name) ? inst.name : (n && n.name ? n.name : id);
+    // 优先使用本链实例名称覆盖(_orchNameOverrides)，与节点列表/参数区标题显示一致；
+    // 不能只看 inst.name（实例缓存重建时会被重置回定义名，导致预览图还原成原名）。
+    const cnName = orchInstanceDisplayName(inst, n);
     const k = (n && n.kind) || 'action';
     const routing = !!(n && (typeof n.has_switch_condition === 'boolean'
       ? n.has_switch_condition : nodeSwitchConditionText(n) !== ''));
