@@ -143,3 +143,18 @@ func (l *WfLogic) RegisterActivities(ctx context.Context, allActivities []*RegAc
 	}
 	return nil
 }
+
+func (l *WfLogic) RegisterNamespaceActivities(ctx context.Context, activityNamespace string, actionMap map[string]utils.ContextAnyHandler) error {
+	if len(actionMap) == 0 {
+		return nil
+	}
+	allMethodList := make([]*RegActivityInfo, 0)
+	for k, v := range actionMap {
+		allMethodList = append(allMethodList, &RegActivityInfo{
+			Namespace:       activityNamespace,
+			ActivityName:    k,
+			ActivityHandler: v,
+		})
+	}
+	return l.RegisterActivities(ctx, allMethodList)
+}
