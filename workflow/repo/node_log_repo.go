@@ -153,3 +153,9 @@ func (r *NodeLogRepo) ListByFilter(ctx context.Context, project string, f *workf
 	}
 	return defs, total, nil
 }
+
+// DeleteOlderThan 删除 created_at 早于 before 的运行日志（用于按保留天数清理）。
+func (r *NodeLogRepo) DeleteOlderThan(ctx context.Context, before time.Time) (int64, error) {
+	result := r.db.WithContext(ctx).Where("created_at < ?", before).Delete(&models.NodeLogModel{})
+	return result.RowsAffected, result.Error
+}

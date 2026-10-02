@@ -1,5 +1,23 @@
 # 更新日志
 
+## 2026-10-02
+
+### feat: 运行日志保留天数配置 + 每日自动清理
+
+为避免 `wf_activity_logs` / `wf_node_logs` 日志无限增长，新增配置项
+`custom.normal.workflow_log_retention_days`：
+
+- 未配置：默认保留半年（180 天）；
+- 配置 < 10 天：按 10 天处理（最小值）；
+- 配置 >= 10 天：按配置值生效。
+
+管理端（`WebServer`）启动时启动一个每日清理任务（启动后延迟 1 分钟首跑，之后每 24h
+执行一次），按保留天数删除两张表中 `created_at` 早于截止时间的日志；进程退出
+（`Shutdown`）时通过 context 取消停止。repo 层新增 `ActivityLogRepo.DeleteOlderThan` /
+`NodeLogRepo.DeleteOlderThan`。
+
+配置在进程内只读取一次，修改 app.yaml 需重启生效（与根链引擎池等策略一致）。
+
 ## 2026-10-01
 
 ### feat: 根节点返回值定义（Root Chain 返回结构 + 转换类型）

@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -131,4 +132,10 @@ func (r *ActivityLogRepo) DeleteByActivity(ctx context.Context, project, actName
 		return errors.New("activity log not found")
 	}
 	return nil
+}
+
+// DeleteOlderThan 删除 created_at 早于 before 的运行日志（用于按保留天数清理）。
+func (r *ActivityLogRepo) DeleteOlderThan(ctx context.Context, before time.Time) (int64, error) {
+	result := r.db.WithContext(ctx).Where("created_at < ?", before).Delete(&models.ActivityLogModel{})
+	return result.RowsAffected, result.Error
 }

@@ -35,9 +35,10 @@ var webAssets embed.FS
 
 // WebServer 工作流管理 Web 服务。
 type WebServer struct {
-	svc       *service.WorkflowService
-	collector *workflow.ActivityCollector
-	mux       *http.ServeMux
+	svc              *service.WorkflowService
+	collector        *workflow.ActivityCollector
+	mux              *http.ServeMux
+	logCleanupCancel context.CancelFunc
 }
 
 type signRequest struct {
@@ -62,6 +63,9 @@ func NewWebServer(db *gorm.DB) (*WebServer, error) {
 	ws.collector = workflow.NewActivityCollectorWithAlert(svc.ActivityLogRepo(), svc.NodeLogRepo(), svc, svc)
 	ws.collector.Start()
 
+	// 启动每日运行日志清理（按保留天数删除过期日志）
+	ws.startLogCleanup()
+
 	ws.registerRoutes()
 	return ws, nil
 }
@@ -76,7 +80,65 @@ func (ws *WebServer) Shutdown(ctx context.Context) error {
 	if ws.collector != nil {
 		ws.collector.Stop()
 	}
+	if ws.logCleanupCancel != nil {
+		ws.logCleanupCancel()
+	}
 	return ws.svc.Shutdown(ctx)
+}
+
+// startLogCleanup 启动每日运行日志清理任务：按配置的保留天数删除 wf_activity_logs /
+// wf_node_logs 中过期的运行日志，避免日志表无限增长。任务在启动后延迟 1 分钟执行一次，
+// 之后每天执行一次；进程退出（Shutdown）时通过 context 取消停止。
+func (ws *WebServer) startLogCleanup() {
+	ctx, cancel := context.WithCancel(context.Background())
+	ws.logCleanupCancel = cancel
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Msgf("log cleanup goroutine panic recovered: %v", r)
+			}
+		}()
+		// 启动后稍延迟执行一次，避免与启动期其他任务争用资源
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Minute):
+		}
+		ws.runLogCleanupOnce(ctx)
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ws.runLogCleanupOnce(ctx)
+			}
+		}
+	}()
+}
+
+// runLogCleanupOnce 执行一次日志清理：读取保留天数，删除两表早于 cutoff 的行。
+func (ws *WebServer) runLogCleanupOnce(ctx context.Context) {
+	days := config.GetWorkflowLogRetentionDays()
+	if days <= 0 {
+		days = config.DefaultWorkflowLogRetentionDays
+	}
+	before := time.Now().AddDate(0, 0, -days)
+	if ws.svc != nil && ws.svc.ActivityLogRepo() != nil {
+		if n, err := ws.svc.ActivityLogRepo().DeleteOlderThan(ctx, before); err != nil {
+			log.Error().Msgf("cleanup wf_activity_logs failed: %v", err)
+		} else if n > 0 {
+			log.Info().Msgf("cleanup wf_activity_logs deleted %d rows older than %d days", n, days)
+		}
+	}
+	if ws.svc != nil && ws.svc.NodeLogRepo() != nil {
+		if n, err := ws.svc.NodeLogRepo().DeleteOlderThan(ctx, before); err != nil {
+			log.Error().Msgf("cleanup wf_node_logs failed: %v", err)
+		} else if n > 0 {
+			log.Info().Msgf("cleanup wf_node_logs deleted %d rows older than %d days", n, days)
+		}
+	}
 }
 
 func (ws *WebServer) registerRoutes() {

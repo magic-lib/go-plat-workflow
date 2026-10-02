@@ -46,6 +46,9 @@ const (
 	// activityOfflineAlertRemindMinutesKey 配置文件中 custom.normal 下
 	// 「持续离线时的重复提醒间隔（分钟，0 表示只提醒一次）」的 key 名。
 	activityOfflineAlertRemindMinutesKey = "activity_offline_alert_remind_minutes"
+	// workflowLogRetentionDaysKey 配置文件中 custom.normal 下
+	// 「wf_activity_logs / wf_node_logs 运行日志保留天数」的 key 名。
+	workflowLogRetentionDaysKey = "workflow_log_retention_days"
 
 	DefaultTimeout = 60 * time.Second
 
@@ -67,6 +70,10 @@ const (
 	// DefaultActivityOfflineAlertRemindMinutes 持续离线时的重复提醒间隔（分钟）。
 	// 0 表示只在首次判定时提醒一次。
 	DefaultActivityOfflineAlertRemindMinutes = 30
+	// DefaultWorkflowLogRetentionDays 未配置日志保留天数时的默认值（半年）。
+	DefaultWorkflowLogRetentionDays = 180
+	// MinWorkflowLogRetentionDays 日志保留天数的下限（小于该值按 10 天处理）。
+	MinWorkflowLogRetentionDays = 10
 )
 
 type ReturnValue struct {
@@ -141,6 +148,9 @@ type AppConfig struct {
 	// ActivityOfflineAlertRemindMinutes 持续离线时的重复提醒间隔（分钟），0 = 只提醒一次。
 	// 缺省 DefaultActivityOfflineAlertRemindMinutes。
 	ActivityOfflineAlertRemindMinutes int
+	// WorkflowLogRetentionDays wf_activity_logs / wf_node_logs 运行日志保留天数（天）。
+	// 未配置默认 180（半年），配置 < 10 按 10 处理。
+	WorkflowLogRetentionDays int
 }
 
 // rootChainCachePolicy 根链缓存相关策略（进程内只加载一次）。
@@ -215,6 +225,35 @@ func GetActivityOfflineAlertPolicy() (enabled bool, thresholdSec int, remindMinu
 	return offlineAlertEnabled, offlineAlertThresholdSec, offlineAlertRemindMinutes
 }
 
+// 日志保留天数策略（进程内只加载一次）。
+var (
+	logRetentionOnce sync.Once
+	logRetentionDays = DefaultWorkflowLogRetentionDays
+)
+
+// loadLogRetentionPolicy 加载日志保留天数（只执行一次）。
+func loadLogRetentionPolicy() {
+	if cfg, err := Load(); err == nil && cfg != nil {
+		d := cfg.WorkflowLogRetentionDays
+		if d < MinWorkflowLogRetentionDays {
+			d = MinWorkflowLogRetentionDays
+		}
+		logRetentionDays = d
+	}
+}
+
+// GetWorkflowLogRetentionDays 返回 activity/node 运行日志的保留天数：
+//   - 未配置：默认半年（DefaultWorkflowLogRetentionDays = 180）
+//   - 配置 < 10：按 10 天处理（MinWorkflowLogRetentionDays）
+//   - 配置 >= 10：按配置值
+//
+// 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
+// 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
+func GetWorkflowLogRetentionDays() int {
+	logRetentionOnce.Do(loadLogRetentionPolicy)
+	return logRetentionDays
+}
+
 // Load 通过 startupcfg 从配置文件加载应用配置。
 // 未指定 path 时，依次尝试 CONFIG_PATH 环境变量、可执行文件同级的 config/app.yaml，
 // 以及当前工作目录下的 config/app.yaml。文件不存在返回错误。
@@ -268,6 +307,10 @@ func Load(path ...string) (*AppConfig, error) {
 	cfg.ActivityOfflineAlertThresholdSec = customNormalInt(startCfg.Custom, activityOfflineAlertThresholdSecKey, DefaultActivityOfflineAlertThresholdSec)
 	// 此处 0 是【有效语义】（只提醒一次），用允许 0 的读取方式
 	cfg.ActivityOfflineAlertRemindMinutes = customNormalIntAllowZero(startCfg.Custom, activityOfflineAlertRemindMinutesKey, DefaultActivityOfflineAlertRemindMinutes)
+
+	// 日志保留天数：未配置默认半年；此处 0 是有意义的显式值（用户可显式配 0，但最终会被
+	// GetWorkflowLogRetentionDays 兜底为最小值 10），故用允许 0 的读取方式。
+	cfg.WorkflowLogRetentionDays = customNormalIntAllowZero(startCfg.Custom, workflowLogRetentionDaysKey, DefaultWorkflowLogRetentionDays)
 
 	return cfg, nil
 }
