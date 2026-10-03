@@ -6541,8 +6541,10 @@ function orchConnOptionsHtml() {
   const items = [];
   nodeIds.forEach(id => {
     const inst = (window._orchNodeInstances || []).find(i => i.instanceId === id);
-    const ov = (window._orchNameOverrides || {})[id];
-    const name = (ov && ov.trim()) ? ov.trim() : (inst ? (inst.name || id) : id);
+    // 与右侧 Live Preview 一致：用实例生效名（优先 _orchNameOverrides 名称覆盖），
+    // 不能用 inst.name（实例缓存重建会被重置回节点定义名）。
+    const def = orchNodeDefById((inst && inst.nodeId) || id);
+    const name = orchInstanceDisplayName(inst, def) || id;
     items.push({ id: id, name: name, prefix: '⚙' });
   });
   subIds.forEach(id => {
