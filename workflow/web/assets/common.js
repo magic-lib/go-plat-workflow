@@ -6895,8 +6895,12 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     // 优先使用本链实例名称覆盖(_orchNameOverrides)，与节点列表/参数区标题显示一致；
     // 不能只看 inst.name（实例缓存重建时会被重置回定义名，导致预览图还原成原名）。
     const cnName = orchInstanceDisplayName(inst, n);
-    const k = (n && n.kind) || 'action';
-    const routing = !!(n && (typeof n.has_switch_condition === 'boolean'
+    // 返回值节点（custom/ReturnValue）固定用 return 配色（浅黄），直接按节点类型判定，
+    // 不依赖 kind 字段值，避免 kind 不一致时退化成 action（红）。
+    const isReturnNode = (n && n.type === 'custom/ReturnValue') || (inst && inst.type === 'custom/ReturnValue');
+    const k = isReturnNode ? 'return' : ((n && n.kind) || 'action');
+    // 返回值节点不参与「路由」着色（保持专属浅黄），其余节点按 has_switch_condition 判定路由（淡蓝）。
+    const routing = !isReturnNode && !!(n && (typeof n.has_switch_condition === 'boolean'
       ? n.has_switch_condition : nodeSwitchConditionText(n) !== ''));
     const clsName = 'nodeKind_' + k.replace(/[^a-zA-Z0-9_]/g, '_') + (routing ? '_route' : '');
     // 标签：第一行路由标记 + 中文名，第二行 node ID，第三行 实例 ID（同一节点多次添加时区分）
@@ -6953,6 +6957,7 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
   const kindPalette = {
     condition: { fill: '#dcfce7', stroke: '#16a34a', color: '#14532d' }, // 查询获取=浅绿
     action:    { fill: '#fee2e2', stroke: '#dc2626', color: '#7f1d1d' }, // 策略执行=淡红
+    return:    { fill: '#fef9c3', stroke: '#ca8a04', color: '#713f12' }, // 返回值节点=浅黄（区别于其它节点）
   };
   const kindFallback = { fill: '#f3f4f6', stroke: '#9ca3af', color: '#374151' }; // 未知 kind 默认灰
   const routeFill = { fill: '#dbeafe', stroke: '#2563eb', color: '#1e3a8a' }; // 路由=淡蓝
