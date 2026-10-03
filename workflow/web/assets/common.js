@@ -8029,8 +8029,10 @@ async function orchOpenNodeSwitchEditor(instanceId) {
   const hasOverride = Object.prototype.hasOwnProperty.call(_orchSwitchOverrides, instanceId);
   const curExpr = hasOverride ? _orchSwitchOverrides[instanceId] : defExpr;
 
+  // 标题用实例生效名（优先名称覆盖 _orchNameOverrides，与 Live Preview 图上一致），
+  // 不能只用 n.name（节点定义名），否则改过名后弹窗标题仍显示旧名。
   document.getElementById('orch-switch-node-name').textContent =
-    ((hasDef ? n.name : (inst ? inst.name : nodeId)) || nodeId) + '（' + instanceId + '）';
+    (orchInstanceDisplayName(inst, n) || nodeId) + '（' + instanceId + '）';
   document.getElementById('orch-switch-override-flag').textContent = hasOverride
     ? '当前为覆盖值（仅本链生效，不影响节点定义）'
     : (hasDef ? '当前为节点默认值（未覆盖）' : '节点定义不在列表中，直接编辑本链中的路由条件');
@@ -8043,10 +8045,11 @@ async function orchOpenNodeSwitchEditor(instanceId) {
   const ta = document.getElementById('orch-switch-text');
   ta.value = isSwitchable ? ((curExpr === undefined || curExpr === null) ? '' : curExpr) : '';
   ta.placeholder = '例如：In(\'K1\', [responses.tag_list])';
-  // 名称输入框：回填当前实例生效名称（已含名称覆盖）；并缓存节点定义默认名用于「用节点默认值」
+  // 名称输入框：回填当前实例生效名称（优先 _orchNameOverrides 名称覆盖，其次 inst.name，最后节点定义名）；
+  // 并缓存节点定义默认名用于「用节点默认值」判定覆盖。
   _orchSwitchDefaultName = hasDef ? (n.name || '') : (inst ? (inst.name || '') : '');
   const nameInput = document.getElementById('orch-switch-name');
-  const curName = (inst && inst.name) ? inst.name : _orchSwitchDefaultName;
+  const curName = orchInstanceDisplayName(inst, n);
   if (nameInput) nameInput.value = curName || '';
   // 先用缓存渲染，再用节点详情接口校准（保证参数/输出列表准确，不受列表接口过滤影响）
   const inBox = document.getElementById('orch-switch-input-vars');
