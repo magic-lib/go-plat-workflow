@@ -1,5 +1,36 @@
 # 更新日志
 
+## 2026-10-03
+
+### feat: 新增内置返回值节点 custom/ReturnValue（多分支动态根返回值）
+
+根链返回值原先只能按静态占位符配置单一取值来源，无法支持「多分支各自返回不同值」。
+新增内置节点类型 `custom/ReturnValue`：
+
+- 该节点作为一条**普通 NodeDef 入库**（`workflow_service.ListNodes` 幂等 seed：
+  `ensureBuiltinReturnNode` 通过 `nodeRepo.ExistsByType` 判断、缺失则 `NextNodeID` 生成
+  `N0000xx` 形式的 node_id、kind=`return`），与其它节点完全一致；
+- 编排页添加时按通用路径生成实例 ID（`nodeId__随机段`），不再显示成类型名
+  `custom/ReturnValue`，节点库也无需前端合成注入（由 DB NodeDef 提供）；
+- 其参数面板**动态取自根链返回值定义**（`_orchRootResponses` 的 key/label/type，
+  `getOrchInstanceParams` 对 `inst.type === 'custom/ReturnValue'` 返回根返回值 key），
+  每个 key 的取值**沿用现有节点参数写法**（`{{steps.<节点ID>.responses.<key>}}` /
+  `{{arguments.<key>}}` / 字面量），存于该实例的 `node_param_overrides`；
+- 运行期 `OnMsg` 复用 `GetActivityParam` / `replaceBindConfig` 解析各 key 取值
+  → 写入 `FlowContext.Responses`；仅被实际执行的分支触达，天然实现
+  「执行分支胜出 / 最后写入者覆盖」；
+- 同步调用方仍从返回值读取，调用方式不变。
+
+**builder 路径**：返回值节点走通用 `buildRuleNodes`（按 `NodeParamOverrides[instanceId].value`
+注入 `arguments`），不再有专门的 `buildReturnNodes` / `overrideValueString`。
+`reconcileNodeParamOverrides` 恢复通用逻辑（查不到 `baseId` 即丢弃），
+因返回值节点已是真实 NodeDef（Params 为空 → `len(defaults)==0` 分支原样保留覆盖），
+无需针对内置节点的特殊分支。
+
+**废弃静态 root_responses 取值**：`workflow_service.go` 中 `fillRootResponses` 及其静态解析链路已移除，
+返回值完全由节点运行期写入，与 DSL 配置强一致。根返回值 Key 定义契约（`RootResponseItem`）保留，
+仍用于编排参数面板与节点读取。
+
 ## 2026-10-02
 
 ### feat: 运行日志保留天数配置 + 每日自动清理

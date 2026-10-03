@@ -163,12 +163,6 @@
               <button class="btn btn-sm btn-outline" onclick="addOrchRootResponseRow()" type="button">+ 添加字段</button>
             </span>
           </h3>
-          <div class="orch-param-help" style="font-size:.76rem;color:var(--text-muted);margin-bottom:8px;line-height:1.6">
-            定义根链执行完成后的<b>返回结构</b>：每个字段可引用链上<b>任意节点</b>的参数(arguments)或返回值(responses)，
-            形如 <code>{{steps.N000004__ab12c.responses.total}}</code>；也可填 <code>{{arguments.参数key}}</code> 取调用入参，或填固定值。
-            <b>转换类型</b>用于把取到的值转成指定格式（string / int64 / float64 / bool / slice / map）。
-            执行结束后按这里的结构生成 <code>responses</code> 返回给调用方。
-          </div>
           <div id="orch-rr-list" style="max-height:300px;overflow-y:auto"></div>
         </div>
 
@@ -228,6 +222,7 @@
         <select id="node-type" onchange="onNodeTypeChange()">
           <option value="custom/Activity">custom/Activity（活动编排）</option>
           <option value="custom/CondSwitch">custom/CondSwitch（条件判断，仅做语法条件判断）</option>
+          <option value="custom/ReturnValue">custom/ReturnValue（返回值节点）</option>
           <option value="end">end（结束节点）</option>
         </select>
       </div>

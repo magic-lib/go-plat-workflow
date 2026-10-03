@@ -51,3 +51,5 @@ func TestNormalizeRootResponses(t *testing.T) {
 		t.Fatalf("字段未正确 trim: %#v", got)
 	}
 }
+
+

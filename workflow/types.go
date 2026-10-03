@@ -561,6 +561,10 @@ type RootResponseItem struct {
 	//     也支持 {{steps.<id>.responses}} 取整个返回值、{{arguments.<key>}} 取出参、{{<key>}} 简写。
 	//   - 固定值：不含占位符时按字面量（再按 Type 转换）。
 	Value string `json:"value,omitempty"`
+	// Required 该字段是否必填（仅定义元信息，运行期按 Type 转换后写入；供编排/调用方校验）
+	Required bool `json:"required,omitempty"`
+	// Description 字段说明（选填）
+	Description string `json:"description,omitempty"`
 }
 
 // BuildRequest 组装根链请求。

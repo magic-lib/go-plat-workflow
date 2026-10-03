@@ -125,21 +125,21 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 
 	// 6. 存储到数据库
 	def := &workflow.RootChainDef{
-		Project:             req.Project,
-		ChainID:             req.ChainID,
-		ChainKey:            req.ChainKey,
-		Name:                req.ChainName,
-		Description:         req.Description,
-		DSLJSON:             dslJSON,
-		Status:              1,
-		NodeIDs:             strings.Join(req.NodeIDs, ","),
-		SubChainIDs:         strings.Join(req.SubChainIDs, ","),
-		ConnectionsData:     string(connectionsJSON),
-		NodeParamOverrides:  string(nodeParamOverridesJSON),
-		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
-		NodeNameOverrides:   string(nodeNameOverridesJSON),
+		Project:               req.Project,
+		ChainID:               req.ChainID,
+		ChainKey:              req.ChainKey,
+		Name:                  req.ChainName,
+		Description:           req.Description,
+		DSLJSON:               dslJSON,
+		Status:                1,
+		NodeIDs:               strings.Join(req.NodeIDs, ","),
+		SubChainIDs:           strings.Join(req.SubChainIDs, ","),
+		ConnectionsData:       string(connectionsJSON),
+		NodeParamOverrides:    string(nodeParamOverridesJSON),
+		NodeSwitchOverrides:   string(nodeSwitchOverridesJSON),
+		NodeNameOverrides:     string(nodeNameOverridesJSON),
 		NodeCollapseOverrides: string(nodeCollapseOverridesJSON),
-		RootResponses:      string(rootResponsesJSON),
+		RootResponses:         string(rootResponsesJSON),
 	}
 	// 先尝试更新（按 project+chain_id），不存在再创建。
 	// 避免每次保存都物理删除重建导致自增主键 id 持续增长。
@@ -261,18 +261,18 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 	nodeCollapseOverridesJSON, _ := json.Marshal(nodeCollapseOverrides)
 
 	return &workflow.SubChainDef{
-		Project:             req.Project,
-		ChainID:             req.ChainID,
-		Name:                req.ChainName,
-		Description:         req.Description,
-		DSLJSON:             string(dslJSON),
-		Status:              1,
-		SubChainIDs:         strings.Join(req.SubChainIDs, ","),
-		NodeIDs:             strings.Join(req.NodeIDs, ","),
-		ConnectionsData:     string(connectionsJSON),
-		NodeParamOverrides:  string(nodeParamOverridesJSON),
-		NodeSwitchOverrides: string(nodeSwitchOverridesJSON),
-		NodeNameOverrides:   string(nodeNameOverridesJSON),
+		Project:               req.Project,
+		ChainID:               req.ChainID,
+		Name:                  req.ChainName,
+		Description:           req.Description,
+		DSLJSON:               string(dslJSON),
+		Status:                1,
+		SubChainIDs:           strings.Join(req.SubChainIDs, ","),
+		NodeIDs:               strings.Join(req.NodeIDs, ","),
+		ConnectionsData:       string(connectionsJSON),
+		NodeParamOverrides:    string(nodeParamOverridesJSON),
+		NodeSwitchOverrides:   string(nodeSwitchOverridesJSON),
+		NodeNameOverrides:     string(nodeNameOverridesJSON),
 		NodeCollapseOverrides: string(nodeCollapseOverridesJSON),
 	}, nil
 }
@@ -384,7 +384,9 @@ func pruneOverrides[V any](m map[string]V, valid map[string]bool) map[string]V {
 }
 
 // reconcileNodeParamOverrides 对 node_param_overrides 中每个节点的参数做与节点定义的同步：
-//   - 若该节点已不存在（被删除），整条覆盖丢弃；
+//   - 若该节点已不存在（被删除）：pruneOverrides 已先行按 validInstances 裁掉，故此处不会进入；
+//   - 覆盖节点为「无节点定义的内置节点」（如 custom/ReturnValue 返回值节点）：无定义即无参数默认值可同步，
+//     整条覆盖原样保留（其参数 key 来自根链返回值定义，不依赖节点定义）；
 //   - 覆盖中某参数在节点定义中存在 → 保留该对象；
 //   - 覆盖中某参数在节点定义中不存在 → 删除（节点已移除该参数）；
 //   - 节点定义中存在但覆盖中缺少的参数 → 以节点默认值补充上来。
@@ -491,11 +493,12 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		// 构建用户传入参数（frontend），override key 使用实例 ID 以区分同一节点的多次添加
 		frontendMap := make(map[string]any)
 		frontendSrc := make(map[string]string) // 记录每个覆盖参数的来源 src，用于设置 DSL 的 policy
+		frontendType := make(map[string]string) // 记录每个覆盖参数的类型 type，用于写入 DSL arguments 的 BindConfig.Type
 		privateKeys := make([]string, 0)       // 私有参数 key 列表（需从入参二级结构取值）
 		if nodeOverrides, ok := overrides[inst.instanceId]; ok {
 			for k, v := range nodeOverrides {
 				// 兼容两种格式：
-				//  - 新格式：{ "src": "fixed/upstream/entry", "value": "<最终值>" }（对象）
+				//  - 新格式：{ "src": "fixed/upstream/entry", "value": "<最终值>", "type": "<类型>" }（对象）
 				//  - 旧格式：直接是字符串值（纯值）
 				// 取其中的 value 作为写入节点 arguments 的最终值。
 				if m, ok := v.(map[string]any); ok {
@@ -505,6 +508,10 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 						}
 						if src, ok := m["src"].(string); ok {
 							frontendSrc[k] = src
+						}
+						// 记录覆盖参数的类型（如返回值节点，无节点定义，type 由前端按根返回值定义带入）
+						if t, ok := m["type"].(string); ok && t != "" {
+							frontendType[k] = t
 						}
 						// 记录私有参数 key，供 DSL 持久化
 						if pv, ok := m["private"].(bool); ok && pv {
@@ -556,6 +563,10 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 					nb.Value = v
 					// 编排里已配置来源：按来源改写 DSL 的 policy，避免调用方传同名参数覆盖配置的来源
 					nb.Policy = resolvePolicy(frontendSrc[bc.Key], v, bc.Policy)
+					// 前端带入的类型优先（如返回值节点无节点定义，type 由前端提供）；否则保留节点定义默认 type
+					if t, ok := frontendType[bc.Key]; ok && t != "" {
+						nb.Type = t
+					}
 					if nb.Key == "" {
 						continue
 					}
@@ -578,7 +589,7 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 				if k == "" {
 					continue
 				}
-				args = append(args, &param.BindConfig{Key: k, Value: v, Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
+				args = append(args, &param.BindConfig{Key: k, Value: v, Type: frontendType[k], Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
 			}
 			sortBindConfigsByKey(args)
 			config["arguments"] = args

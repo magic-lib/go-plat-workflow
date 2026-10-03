@@ -59,6 +59,19 @@ func (r *NodeRepo) BatchUpsert(ctx context.Context, defs []*workflow.NodeDef) er
 	}).Create(&modelsList).Error
 }
 
+// ExistsByType 判断指定项目下是否已存在某类型的节点（用于内置节点幂等探活/自动 Seed）。
+func (r *NodeRepo) ExistsByType(ctx context.Context, project, nodeType string) (bool, error) {
+	var cnt int64
+	err := r.db.WithContext(ctx).
+		Model(&models.NodeModel{}).
+		Where("project = ? AND type = ? AND status = ?", project, nodeType, models.NodeStatusEnabled).
+		Count(&cnt).Error
+	if err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
+}
+
 // GetByID 按项目 + 节点 ID 查询。
 func (r *NodeRepo) GetByID(ctx context.Context, project, nodeID string) (*workflow.NodeDef, error) {
 	var m models.NodeModel
