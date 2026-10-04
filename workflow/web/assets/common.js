@@ -7214,17 +7214,23 @@ function renderOrchParamOverrides() {
     params.forEach(p => {
       const required = p.required ? ' <span class="param-required-star">*</span>' : '';
       const typeTag = p.type ? `<span class="param-type-tag">(${esc(p.type)})</span>` : '';
+      // 类型下拉仅在「固定配置」来源时可编辑；其它来源（引用节点/调用传入）锁定并还原为参数默认类型。
+      const preset = resolveOrchParamPreset(inst.instanceId, p.key);
+      const srcDisp = preset ? (orchParamSrcToDisplay(preset.src) || PARAM_SRC_VALUE) : PARAM_SRC_VALUE;
+      const isFixed = srcDisp === PARAM_SRC_VALUE;
+      const effType = (isFixed && preset && preset.type) ? preset.type : (p.type || 'string');
+      const typeDisabledAttr = isFixed ? '' : 'disabled';
       html += `<div class="override-field param-row" data-node="${esc(inst.instanceId)}" data-key="${esc(p.key)}" style="flex-wrap:wrap">
         <input class="param-key" value="${esc(p.key)}" readonly title="参数英文名" style="flex:0 1 130px;min-width:110px;background:var(--bg-muted)">
         <input class="param-label" value="${esc(p.label || '')}" readonly title="显示名" style="flex:1 1 120px;min-width:90px;background:var(--bg-muted)">
-        <select class="param-type" disabled style="flex:0 1 92px;min-width:80px">
-          <option value="string" ${p.type==='string'?'selected':''}>string</option>
-          <option value="int64" ${p.type==='int64'?'selected':''}>int64</option>
-          <option value="float64" ${p.type==='float64'?'selected':''}>float64</option>
-          <option value="bool" ${p.type==='bool'?'selected':''}>bool</option>
-          <option value="slice" ${p.type==='slice'?'selected':''}>slice</option>
-          <option value="map" ${p.type==='map'?'selected':''}>map</option>
-          <option value="formula" ${p.type==='formula'?'selected':''}>formula</option>
+        <select class="param-type" ${typeDisabledAttr} onchange="onParamTypeChange(this)" style="flex:0 1 92px;min-width:80px">
+          <option value="string" ${effType==='string'?'selected':''}>string</option>
+          <option value="int64" ${effType==='int64'?'selected':''}>int64</option>
+          <option value="float64" ${effType==='float64'?'selected':''}>float64</option>
+          <option value="bool" ${effType==='bool'?'selected':''}>bool</option>
+          <option value="slice" ${effType==='slice'?'selected':''}>slice</option>
+          <option value="map" ${effType==='map'?'selected':''}>map</option>
+          <option value="formula" ${effType==='formula'?'selected':''}>formula</option>
         </select>
         <select class="param-src-select" style="flex:0 1 110px;min-width:96px" onchange="onParamSrcChange(this)">
           <option value="value">固定配置</option>
@@ -7367,13 +7373,41 @@ let _orchParamPreset = {};
 // 节点参数配置区收起状态（key=instanceId, value=true 表示收起），持久化到数据库
 let _orchCollapseState = {};
 
-// 返回值节点（custom/ReturnValue）的参数固定值输入框占位提示：引导用户填写取值表达式
-function orchReturnPlaceholder(instanceId) {
+// 固定配置输入框占位提示：按节点类型与参数类型区分
+function orchParamValuePlaceholder(instanceId, type) {
   const inst = (window._orchNodeInstances || []).find(i => i.instanceId === instanceId);
   if (inst && inst.type === 'custom/ReturnValue') {
     return '填写取值表达式：{{steps.<节点ID>.responses.<key>}} / {{arguments.<key>}} / 字面量';
   }
+  if (type === 'formula') return '公式，如 {{arguments.a}} + {{arguments.b}}';
   return '填写固定值';
+}
+
+// 取得参数定义默认类型：普通节点取节点定义 params 的 type；返回值节点取根链返回值定义的 type
+function orchParamDefType(nodeId, key) {
+  const inst = (window._orchNodeInstances || []).find(i => i.instanceId === nodeId);
+  if (!inst) return 'string';
+  const p = (getOrchInstanceParams(inst) || []).find(x => x.key === key);
+  if (p && p.type) return p.type;
+  if (inst.type === 'custom/ReturnValue') {
+    const rr = (_orchRootResponses || []).find(r => (r.key || '') === key);
+    if (rr && rr.type) return rr.type;
+  }
+  return 'string';
+}
+
+// 固定配置下切换参数类型：刷新输入框占位提示（formula 需 {{...}} 提示），保留已填值，并暂存
+function onParamTypeChange(sel) {
+  const field = sel.closest('.override-field');
+  if (!field) return;
+  const nodeId = field.getAttribute('data-node');
+  const slot = field.querySelector('.param-value-slot');
+  const valEl = field.querySelector('.param-value-input');
+  const curVal = valEl ? valEl.value : '';
+  const newType = sel.value;
+  // 只有「固定配置」来源类型下拉才可编辑，这里仅刷新占位提示，不改动值
+  renderFixedInput(slot, curVal, orchParamValuePlaceholder(nodeId, newType));
+  storeParamPreset();
 }
 
 // 根据来源切换值控件
@@ -7395,7 +7429,17 @@ function onParamSrcChange(sel) {
     renderCallInputHint(slot, key, nodeId, !!preset.private);
   } else {
     preset.src = PARAM_SRC_FIXED;
-    renderFixedInput(slot, preset.value, orchReturnPlaceholder(nodeId));
+    renderFixedInput(slot, preset.value, orchParamValuePlaceholder(nodeId, 'string'));
+  }
+  // 类型下拉：仅「固定配置」可编辑；其它来源锁定并还原为参数定义默认类型（p.type / 返回值定义 type）
+  const typeSel = field.querySelector('.param-type');
+  if (typeSel) {
+    if (src === PARAM_SRC_VALUE) {
+      typeSel.disabled = false;
+    } else {
+      typeSel.disabled = true;
+      typeSel.value = orchParamDefType(nodeId, key);
+    }
   }
   updateParamPrivateVisibility(field);
   storeParamPreset();
@@ -7407,7 +7451,8 @@ function initParamValueControl(field, preset) {
   const nodeId = field.getAttribute('data-node');
   if (!preset) {
     sel.value = PARAM_SRC_VALUE;
-    renderFixedInput(slot, '', orchReturnPlaceholder(nodeId));
+    const tSel = field.querySelector('.param-type');
+    renderFixedInput(slot, '', orchParamValuePlaceholder(nodeId, tSel ? tSel.value : 'string'));
     updateParamPrivateVisibility(field);
     return;
   }
@@ -7417,7 +7462,8 @@ function initParamValueControl(field, preset) {
   } else if (preset.src === PARAM_SRC_ENTRY) {
     renderCallInputHint(slot, field.getAttribute('data-key'), nodeId, !!preset.private);
   } else {
-    renderFixedInput(slot, preset.value, orchReturnPlaceholder(nodeId));
+    const tSel = field.querySelector('.param-type');
+    renderFixedInput(slot, preset.value, orchParamValuePlaceholder(nodeId, tSel ? tSel.value : 'string'));
   }
   updateParamPrivateVisibility(field);
 }
@@ -7774,17 +7820,20 @@ function storeParamPreset() {
     const isPrivate = privEl ? !!privEl.checked : false;
     // type/label/required/description：返回值节点（custom/ReturnValue）无节点定义，
     // 这些字段取自根链返回值定义，需随实例参数一并保存；普通节点由后端按节点定义补充，此处留空不写。
-    let ptype = '';
+    // 类型下拉值始终读取当前 UI（固定配置可为 formula 等；非固定配置已被重置为参数默认类型）
+    const typeSel = field.querySelector('.param-type');
+    let ptype = typeSel ? (typeSel.value || 'string') : 'string';
     let plabel = '';
     let prequired = false;
     let pdesc = '';
     const inst = (window._orchNodeInstances || []).find(i => i.instanceId === nodeId);
     if (inst && inst.type === 'custom/ReturnValue') {
       const rr = (_orchRootResponses || []).find(r => (r.key || '') === key);
-      ptype = rr ? (rr.type || 'string') : 'string';
       plabel = rr ? (rr.label || '') : '';
       prequired = rr ? !!rr.required : false;
       pdesc = rr ? (rr.description || '') : '';
+      // 非固定配置时类型还原为返回值定义默认类型（typeSel 已在此前 onParamSrcChange 中重置）
+      if (src !== PARAM_SRC_FIXED && rr && rr.type) ptype = rr.type;
     }
     if (!_orchParamPreset[nodeId]) _orchParamPreset[nodeId] = {};
     _orchParamPreset[nodeId][key] = {
