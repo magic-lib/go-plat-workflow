@@ -7,6 +7,7 @@ import (
 	"github.com/magic-lib/go-plat-curl/curl"
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
@@ -790,7 +791,7 @@ func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string
 	// 若调用方提供了 Result 出参指针，则把返回值填充进去（调用方可直接读取，无需再用返回值类型断言）。
 	if invokeRequest.Result != nil {
 		if m, ok := respData.Data.(map[string]any); ok {
-			if resp2, ok := m["responses"]; ok {
+			if resp2, ok := m[activity.Responses]; ok {
 				if resp2 != nil {
 					_ = conv.Unmarshal(resp2, invokeRequest.Result)
 				}
