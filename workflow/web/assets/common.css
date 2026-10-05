@@ -49,11 +49,31 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-sm { padding: 6px 12px; font-size: .8rem; }
 .btn-outline { background: none; border: 1px solid var(--border); color: var(--text); }
 .btn-outline:hover { background: var(--bg); }
+.stage-move-up:disabled, .stage-move-down:disabled { opacity: .35; cursor: not-allowed; }
+.stage-move-up, .stage-move-down { min-width: 30px; padding: 6px 8px; }
 
 /* Table */
 .table-wrap { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 #tab-activities .table-wrap > table { min-width: 1100px; max-width: 100%; }
+/* Nodes 列表：分配列宽，避免内容折成两行（描述/分类/状态/版本列已隐藏） */
+#nodes-table { min-width: 1400px; table-layout: fixed; }
+#nodes-table th, #nodes-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 注意：本表为 table-layout:fixed 且按列序号硬编码宽度，
+   增删列时必须同步调整下列 nth-child 序号，否则表头与数据行会错位。 */
+/* Node ID 由 fmt.Sprintf("N%06d") 生成，固定 7 个字符（如 N000001），
+   故用固定像素宽（mono 字号 .8rem，7 字符约 60px + 单元格内边距 32px），
+   避免百分比在宽屏下空出大片留白。 */
+#nodes-table th:nth-child(1), #nodes-table td:nth-child(1) { width: 110px; } /* Node ID */
+#nodes-table th:nth-child(2), #nodes-table td:nth-child(2) { width: 20%; }  /* 名称 */
+#nodes-table th:nth-child(3), #nodes-table td:nth-child(3) { width: 11%; } /* 类型 */
+#nodes-table th:nth-child(4), #nodes-table td:nth-child(4) { width: 7%; }  /* 大类 */
+#nodes-table th:nth-child(5), #nodes-table td:nth-child(5) { width: 10%; } /* 标签 */
+#nodes-table th:nth-child(6), #nodes-table td:nth-child(6) { width: 8%; }  /* 命名空间 */
+#nodes-table th:nth-child(7), #nodes-table td:nth-child(7) { width: 6%; }  /* 已发布引用 */
+/* 操作列用固定像素宽而非百分比：容纳 4 个按钮（编辑/测试/日志/删除约 270px），
+   取 300px 留余量；用百分比会在窄屏被压缩导致按钮显示不全。 */
+#nodes-table th:nth-child(8), #nodes-table td:nth-child(8) { width: 300px; overflow: visible; } /* 操作 */
 th, td { padding: 12px 16px; text-align: left; font-size: .875rem; }
 th { background: #f9fafb; font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; border-bottom: 2px solid var(--border); }
 td { border-bottom: 1px solid var(--border); }
@@ -194,8 +214,16 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 /* Override section */
 .override-node-block { margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.override-node-header { background: #f3f4f6; padding: 8px 14px; font-size: .82rem; font-weight: 700; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.override-node-header { background: #f3f4f6; padding: 8px 14px; font-size: .82rem; font-weight: 700; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; flex-wrap: wrap; }
 .override-node-header:hover { background: #e5e7eb; }
+/* instanceId 必须完整显示：不收缩、不换行、不截断 */
+.override-node-header .ov-inst-id { font-family: 'SF Mono', 'Fira Code', monospace; font-size: .8rem; color: var(--primary); white-space: nowrap; flex: 0 0 auto; overflow: visible; }
+/* 节点标题：字符过多时换行，占满剩余空间 */
+.override-node-header .ov-inst-name { font-weight: 400; white-space: normal; word-break: break-word; flex: 1 1 auto; min-width: 80px; }
+/* 名称与 instanceId 需要能被选中复制：header 整体是 user-select:none，这里单独放开 */
+.override-node-header .ov-copyable { user-select: text; -webkit-user-select: text; cursor: text; }
+.override-node-header .ov-copyable::selection { background: #bfdbfe; }
+.override-node-header .ov-inst-count { margin-left: auto; font-weight: 400; color: var(--text-muted); font-size: .72rem; flex: 0 0 auto; white-space: nowrap; }
 .override-node-header .toggle-icon { transition: transform .2s; font-size: .7rem; }
 .override-node-header.collapsed .toggle-icon { transform: rotate(-90deg); }
 .override-node-body { padding: 10px 14px; display: block; }
@@ -209,6 +237,11 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .override-field input.changed { border-color: var(--warning); background: #fffbeb; }
 .override-empty { text-align: center; padding: 16px; color: var(--text-muted); font-size: .85rem; }
 .param-call-hint { display: inline-flex; align-items: center; height: 30px; padding: 0 10px; color: var(--text-muted); font-size: .78rem; background: var(--bg-muted); border: 1px dashed var(--border); border-radius: 4px; }
+/* 引用节点已失效（上游被删除/移出链路）：整行标红并给出提示，要求重新选择来源 */
+.override-field.param-ref-broken { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 4px; padding: 6px; margin: 2px 0; }
+.override-field.param-ref-broken .param-src-select { border-color: #fca5a5; }
+.param-src-need-reselect { box-shadow: 0 0 0 2px rgba(239,68,68,.15); }
+.param-ref-broken-warn { flex: 1 1 100%; color: #b91c1c; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px; font-size: .72rem; padding: 4px 8px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Activity 标签选择 chips */
 .tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 2px; }
@@ -246,6 +279,12 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .orch-pager-info { font-size: .72rem; color: var(--text-muted); white-space: nowrap; }
 /* 编排页 root/sub 模式内容区分：默认隐藏，由 setOrchTarget 控制显隐 */
 .root-only, .sub-only { display: none; }
+/* 流程图只读预览模式：隐藏左侧编辑面板，Live Preview 全宽展示 */
+body.orch-viewonly .orch-layout { grid-template-columns: 1fr; }
+body.orch-viewonly .orch-left { display: none; }
+body.orch-viewonly .orch-right { position: static; max-width: none; }
+body.orch-viewonly .orch-preview-area { min-height: 70vh; }
+body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-target-hint { font-size: .76rem; color: var(--text-muted); margin: 4px 0 0; line-height: 1.5; }
 .orch-chain-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .orch-chain-info .form-group { margin-bottom: 0; }
@@ -265,11 +304,34 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .orch-conn-row input.conn-type-sel:focus { border-color: var(--primary); }
 .orch-conn-row .btn-remove { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1.1rem; padding: 0 2px; line-height: 1; flex-shrink: 0; }
 .orch-conn-row .btn-remove:hover { color: #dc2626; }
+.orch-conn-row .btn-move { background: none; border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; font-size: .8rem; padding: 0 5px; line-height: 1; border-radius: 4px; flex-shrink: 0; }
+.orch-conn-row .btn-move:hover { color: var(--primary); border-color: var(--primary); }
+.orch-conn-row .btn-move:disabled { opacity: .35; cursor: not-allowed; }
 .orch-conn-row .conn-arrow { color: var(--text-muted); font-weight: 700; font-size: .85rem; flex-shrink: 0; }
+/* 根节点返回值定义：引用节点已不在链上时标红 */
+.rr-value.rr-broken { border-color: #fca5a5 !important; background: #fef2f2; }
+.rr-row { align-items: center; }
+
+/* Redis 测试连接结果 */
+.redis-test-result { font-size: .75rem; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.redis-test-ok { color: #15803d; background: #dcfce7; border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; }
+.redis-test-fail { color: #b91c1c; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px; padding: 2px 8px; }
+
+/* 自定义关系缺少 switch_condition 的行内警告 */
+.orch-conn-row .orch-cond-warn { display: inline-flex; align-items: center; background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; border-radius: 4px; font-size: .7rem; padding: 3px 6px; cursor: pointer; flex-shrink: 0; white-space: nowrap; line-height: 1.4; font-family: inherit; }
+.orch-conn-row .orch-cond-warn[data-level="warn"], .orch-conn-row .orch-cond-warn[data-level="conflict"] { background: #fffbeb; border-color: #fcd34d; color: #b45309; }
+.orch-conn-row .orch-cond-warn:hover { filter: brightness(.95); }
+.orch-conn-row.conn-row-cond-error { background: #fef2f2; border-radius: 4px; padding: 4px; }
+.orch-conn-row.conn-row-cond-warn { background: #fffbeb; border-radius: 4px; padding: 4px; }
+.orch-cond-summary { background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; border-radius: 6px; padding: 7px 10px; margin-bottom: 8px; font-size: .78rem; line-height: 1.5; }
+.orch-cond-summary .orch-cond-summary-conflict { margin-top: 4px; padding-top: 4px; border-top: 1px dashed #fca5a5; color: #b45309; }
 /* Preview in orchestrate */
 .orch-preview-area { border: 1px solid var(--border); border-radius: 6px; flex: 1; min-height: 0; display: block; overflow: auto; background: #fafcfd; position: relative; }
-/* 缩放包裹层：以左上角为原点缩放，配合 overflow:auto 产生滚动条 */
-.orch-preview-scale { transform-origin: top left; transition: transform .15s ease; width: 100%; height: 100%; }
+/* 缩放包裹层：以左上角为原点缩放，配合 .orch-preview-area 的 overflow 产生【横向】滚动条。
+   高度不写死（写 100% 会撑出一屏空白，把横向滚动条顶到远离图片底部的位置），
+   由 JS 写入 mermaid 实际布局高度 + margin-bottom 抵消缩放差；
+   预览区本身不设高度（纵向交给页面滚动），因此不会出现纵向滚动条。 */
+.orch-preview-scale { transform-origin: top left; transition: transform .15s ease; width: 100%; height: auto; }
 .orch-preview-area svg { display: block; }
 /* Live Preview 节点右上角删除叉：纯 X，常显，hover 变红 */
 .orch-node-del { opacity: .7; cursor: pointer; pointer-events: all; transition: opacity .12s ease; }
@@ -277,12 +339,20 @@ g.node:hover > .orch-node-del { opacity: 1; }
 .orch-node-del-x { stroke: #6b7280; stroke-width: 2; stroke-linecap: round; }
 .orch-node-del:hover .orch-node-del-x { stroke: #ef4444; }
 .orch-preview-empty { text-align: center; color: var(--text-muted); padding: 40px; font-size: .9rem; }
+/* 已选节点表中链路中间节点（有父节点也有子节点）的锁定提示，删除按钮被隐藏 */
+.orch-node-locked { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; color: var(--text-muted); white-space: nowrap; }
 .orch-zoom { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
 .orch-zoom-label { min-width: 42px; text-align: center; font-size: .8rem; color: var(--text-muted); }
 .orch-dsl-preview { background: #1e293b; color: #e2e8f0; border-radius: 6px; padding: 14px; font-family: 'SF Mono','Fira Code',monospace; font-size: .75rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 12px; display: none; }
 .orch-dsl-preview.show { display: block; }
 .orch-actions { display: flex; gap: 10px; margin-top: 16px; }
 .orch-actions .btn { flex: 1; }
+
+/* Live Preview 节点悬停弹出的 switch_condition 泡泡层 */
+.orch-switch-popover { position: absolute; z-index: 50; display: none; background: #fffbeb; border: 1px solid #f59e0b; border-radius: 6px; padding: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.18); max-width: 380px; pointer-events: none; }
+.orch-switch-popover .osp-title { font-size: .72rem; color: #92400e; font-weight: 600; margin-bottom: 4px; }
+.orch-switch-popover .osp-text { width: 360px; max-width: 100%; height: 84px; font-family: var(--font-mono); font-size: .74rem; line-height: 1.35; border: 1px solid #fcd34d; border-radius: 4px; background: #fffdf5; color: #92400e; padding: 4px 6px; resize: none; box-sizing: border-box; }
+
 
 /* Responsive */
 @media (max-width: 768px) {
@@ -348,6 +418,10 @@ g.node:hover > .orch-node-del { opacity: 1; }
 .mini-btn:hover { background: var(--primary); color: #fff; }
 .trace-node-acts { margin: 8px 0 4px 12px; padding: 8px 10px; border-left: 3px solid var(--primary); background: #f8fafc; border-radius: 0 6px 6px 0; }
 .trace-node-acts-title { font-size: .74rem; font-weight: 700; color: var(--text-muted); margin-bottom: 6px; }
+
+/* 列表「数量 + 悬停明细」计数列（Nodes 已发布引用 / Activities 已发布引用、引用 Nodes） */
+.pubref-count, .noderef-count { cursor: pointer; position: relative; }
+.pubref-num { color: var(--primary); font-weight: 600; }
 
 /* Activity 参数数泡泡浮层 */
 .arg-count { cursor: pointer; position: relative; color: var(--primary); font-weight: 600; }

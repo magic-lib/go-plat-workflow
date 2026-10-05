@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -12,6 +15,8 @@ import (
 
 	param "github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow"
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
+	confPackage "github.com/magic-lib/go-plat-workflow/workflow/config"
 )
 
 // DSLBuilder 规则链 DSL 组装器，实现 workflow.DSLBuilder 接口。
@@ -71,31 +76,71 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	// 3. 构建 RuleChain DSL
 	ruleChain := b.buildRuleChain(req, nodes, subChains)
 
+	// 3.1 注入根节点返回值定义到 DSL（ruleChain.additionalInfo.root_responses）。
+	// 必须放在序列化之前：运行时（草稿执行 / 发布版本执行）都是从 DSL 里读回该定义，
+	// 因此发布快照只要带上 dsl_json 就自动携带，无需额外传参。
+	injectRootResponses(ruleChain, req.RootResponses)
+
 	// 4. 序列化
-	dslJSON, err := json.Marshal(ruleChain)
-	if err != nil {
-		return nil, fmt.Errorf("%w: marshal dsl: %v", workflow.ErrDSLBuildFailed, err)
-	}
+	dslJSON := conv.String(ruleChain)
 
 	// 5. 序列化 connections 为 JSON 存入独立字段，方便后续查看和修改
 	connectionsJSON, _ := json.Marshal(req.Connections)
 
+	// 计算当前链所有有效实例 ID（节点实例 + 子链 flow 实例），用于裁剪覆盖项
+	validInstances := make(map[string]bool, len(req.NodeIDs)+len(req.SubChainIDs))
+	for _, id := range req.NodeIDs {
+		if id != "" {
+			validInstances[id] = true
+		}
+	}
+	for _, id := range req.SubChainIDs {
+		if id != "" {
+			validInstances[id] = true
+		}
+	}
+
+	// 序列化前先裁剪：删除已被删除节点残留的覆盖配置，避免数据冗余/对应错误；
+	// 再按节点定义同步每个实例的参数覆盖：节点已无的参数删除、节点新增的参数补充（以默认值），
+	// 使 node_param_overrides 与节点实时变化保持一致。
+	nodeParamOverrides := reconcileNodeParamOverrides(pruneOverrides(req.NodeParamOverrides, validInstances), nodes)
+
+	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
+	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
+	nodeCollapseOverrides := pruneOverrides(req.NodeCollapseOverrides, validInstances)
+
 	// 序列化 node_param_overrides 以便保存到根链，后续可恢复
-	nodeParamOverridesJSON, _ := json.Marshal(req.NodeParamOverrides)
+	nodeParamOverridesJSON, _ := json.Marshal(nodeParamOverrides)
+
+	// 序列化 node_switch_overrides 以便保存到根链，后续可恢复
+	nodeSwitchOverridesJSON, _ := json.Marshal(nodeSwitchOverrides)
+
+	// 序列化 node_name_overrides 以便保存到根链，后续可恢复
+	nodeNameOverridesJSON, _ := json.Marshal(nodeNameOverrides)
+
+	// 序列化 node_collapse_overrides 以便保存到根链（参数配置区收起状态），后续可恢复
+	nodeCollapseOverridesJSON, _ := json.Marshal(nodeCollapseOverrides)
+
+	// 序列化 root_responses（根节点返回值定义）以便保存到根链，编排页可直接恢复
+	rootResponsesJSON, _ := json.Marshal(normalizeRootResponses(req.RootResponses))
 
 	// 6. 存储到数据库
 	def := &workflow.RootChainDef{
-		Project:            req.Project,
-		ChainID:            req.ChainID,
-		ChainKey:           req.ChainKey,
-		Name:               req.ChainName,
-		Description:        req.Description,
-		DSLJSON:            string(dslJSON),
-		Status:             1,
-		NodeIDs:            strings.Join(req.NodeIDs, ","),
-		SubChainIDs:        strings.Join(req.SubChainIDs, ","),
-		ConnectionsData:    string(connectionsJSON),
-		NodeParamOverrides: string(nodeParamOverridesJSON),
+		Project:               req.Project,
+		ChainID:               req.ChainID,
+		ChainKey:              req.ChainKey,
+		Name:                  req.ChainName,
+		Description:           req.Description,
+		DSLJSON:               dslJSON,
+		Status:                1,
+		NodeIDs:               strings.Join(req.NodeIDs, ","),
+		SubChainIDs:           strings.Join(req.SubChainIDs, ","),
+		ConnectionsData:       string(connectionsJSON),
+		NodeParamOverrides:    string(nodeParamOverridesJSON),
+		NodeSwitchOverrides:   string(nodeSwitchOverridesJSON),
+		NodeNameOverrides:     string(nodeNameOverridesJSON),
+		NodeCollapseOverrides: string(nodeCollapseOverridesJSON),
+		RootResponses:         string(rootResponsesJSON),
 	}
 	// 先尝试更新（按 project+chain_id），不存在再创建。
 	// 避免每次保存都物理删除重建导致自增主键 id 持续增长。
@@ -167,17 +212,19 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 
 	// 复用根链节点构建逻辑（含 flow 节点生成 + 连接转换 + FirstNodeIndex/Configuration）
 	fullReq := &workflow.BuildRequest{
-		Project:            req.Project,
-		ChainID:            req.ChainID,
-		ChainName:          req.ChainName,
-		Description:        req.Description,
-		NodeIDs:            req.NodeIDs,
-		SubChainIDs:        req.SubChainIDs,
-		Connections:        req.Connections,
-		DebugMode:          req.DebugMode,
-		Configuration:      req.Configuration,
-		FirstNodeIndex:     req.FirstNodeIndex,
-		NodeParamOverrides: req.NodeParamOverrides,
+		Project:             req.Project,
+		ChainID:             req.ChainID,
+		ChainName:           req.ChainName,
+		Description:         req.Description,
+		NodeIDs:             req.NodeIDs,
+		SubChainIDs:         req.SubChainIDs,
+		Connections:         req.Connections,
+		DebugMode:           req.DebugMode,
+		Configuration:       req.Configuration,
+		FirstNodeIndex:      req.FirstNodeIndex,
+		NodeParamOverrides:  req.NodeParamOverrides,
+		NodeSwitchOverrides: req.NodeSwitchOverrides,
+		NodeNameOverrides:   req.NodeNameOverrides,
 	}
 	ruleChain := b.buildRuleChain(fullReq, nodes, subChains)
 	// 子链标记为非 Root
@@ -188,22 +235,96 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		return nil, fmt.Errorf("%w: marshal dsl: %v", workflow.ErrDSLBuildFailed, err)
 	}
 
+	// 计算当前链所有有效实例 ID（节点实例 + 子链 flow 实例），用于裁剪覆盖项
+	validInstances := make(map[string]bool, len(req.NodeIDs)+len(req.SubChainIDs))
+	for _, id := range req.NodeIDs {
+		if id != "" {
+			validInstances[id] = true
+		}
+	}
+	for _, id := range req.SubChainIDs {
+		if id != "" {
+			validInstances[id] = true
+		}
+	}
+
+	// 序列化前先裁剪：删除已被删除节点残留的覆盖配置，避免数据冗余/对应错误
+	nodeParamOverrides := pruneOverrides(req.NodeParamOverrides, validInstances)
+	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
+	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
+	nodeCollapseOverrides := pruneOverrides(req.NodeCollapseOverrides, validInstances)
+
 	// 序列化溯源字段
 	connectionsJSON, _ := json.Marshal(req.Connections)
-	nodeParamOverridesJSON, _ := json.Marshal(req.NodeParamOverrides)
+	nodeParamOverridesJSON, _ := json.Marshal(nodeParamOverrides)
+	nodeSwitchOverridesJSON, _ := json.Marshal(nodeSwitchOverrides)
+	nodeNameOverridesJSON, _ := json.Marshal(nodeNameOverrides)
+	nodeCollapseOverridesJSON, _ := json.Marshal(nodeCollapseOverrides)
 
 	return &workflow.SubChainDef{
-		Project:            req.Project,
-		ChainID:           req.ChainID,
-		Name:               req.ChainName,
-		Description:        req.Description,
-		DSLJSON:            string(dslJSON),
-		Status:             1,
-		SubChainIDs:        strings.Join(req.SubChainIDs, ","),
-		NodeIDs:            strings.Join(req.NodeIDs, ","),
-		ConnectionsData:    string(connectionsJSON),
-		NodeParamOverrides: string(nodeParamOverridesJSON),
+		Project:               req.Project,
+		ChainID:               req.ChainID,
+		Name:                  req.ChainName,
+		Description:           req.Description,
+		DSLJSON:               string(dslJSON),
+		Status:                1,
+		SubChainIDs:           strings.Join(req.SubChainIDs, ","),
+		NodeIDs:               strings.Join(req.NodeIDs, ","),
+		ConnectionsData:       string(connectionsJSON),
+		NodeParamOverrides:    string(nodeParamOverridesJSON),
+		NodeSwitchOverrides:   string(nodeSwitchOverridesJSON),
+		NodeNameOverrides:     string(nodeNameOverridesJSON),
+		NodeCollapseOverrides: string(nodeCollapseOverridesJSON),
 	}, nil
+}
+
+// rootResponsesDSLKey 根节点返回值定义在 DSL 中的存放键。
+// 放在 ruleChain.additionalInfo 下（rulego 的扩展字段，不影响引擎执行），
+// 使草稿与发布快照都只要带 dsl_json 就能读到该定义。
+const rootResponsesDSLKey = "root_responses"
+
+// normalizeRootResponses 清洗根节点返回值定义：去掉空 key，并规范化字段空白。
+// 返回 nil 表示没有有效定义（此时调用方不要写入空数组，避免污染 DSL 与数据库）。
+func normalizeRootResponses(items []workflow.RootResponseItem) []workflow.RootResponseItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]workflow.RootResponseItem, 0, len(items))
+	for _, it := range items {
+		key := strings.TrimSpace(it.Key)
+		if key == "" {
+			continue
+		}
+		out = append(out, workflow.RootResponseItem{
+			Key:   key,
+			Label: strings.TrimSpace(it.Label),
+			Type:  strings.TrimSpace(it.Type),
+			Value: strings.TrimSpace(it.Value),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// injectRootResponses 将根节点返回值定义写入 DSL 的 ruleChain.additionalInfo.root_responses。
+// 无有效定义时不写入（并清掉可能残留的旧值），保证 DSL 干净。
+func injectRootResponses(ruleChain *types.RuleChain, items []workflow.RootResponseItem) {
+	if ruleChain == nil {
+		return
+	}
+	normalized := normalizeRootResponses(items)
+	if len(normalized) == 0 {
+		if ruleChain.RuleChain.AdditionalInfo != nil {
+			delete(ruleChain.RuleChain.AdditionalInfo, rootResponsesDSLKey)
+		}
+		return
+	}
+	if ruleChain.RuleChain.AdditionalInfo == nil {
+		ruleChain.RuleChain.AdditionalInfo = make(map[string]interface{})
+	}
+	ruleChain.RuleChain.AdditionalInfo[rootResponsesDSLKey] = normalized
 }
 
 // instanceRef 描述一个编排中的节点实例：baseId 为节点定义 ID，instanceId 为 DSL 中
@@ -247,10 +368,106 @@ func parseInstanceRefs(ids []string) []instanceRef {
 	return out
 }
 
+// pruneOverrides 仅保留 key 存在于 valid 集合中的覆盖项，删除已不存在节点（如被删除的节点）
+// 对应的覆盖配置，避免 node_param_overrides / node_switch_overrides / node_name_overrides 残留
+// 过期数据造成冗余或对应错误。
+func pruneOverrides[V any](m map[string]V, valid map[string]bool) map[string]V {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]V, len(m))
+	for k, v := range m {
+		if valid[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// reconcileNodeParamOverrides 对 node_param_overrides 中每个节点的参数做与节点定义的同步：
+//   - 若该节点已不存在（被删除）：pruneOverrides 已先行按 validInstances 裁掉，故此处不会进入；
+//   - 覆盖节点为「无节点定义的内置节点」（如 custom/ReturnValue 返回值节点）：无定义即无参数默认值可同步，
+//     整条覆盖原样保留（其参数 key 来自根链返回值定义，不依赖节点定义）；
+//   - 覆盖中某参数在节点定义中存在 → 保留该对象；
+//   - 覆盖中某参数在节点定义中不存在 → 删除（节点已移除该参数）；
+//   - 节点定义中存在但覆盖中缺少的参数 → 以节点默认值补充上来。
+//
+// overrides 以实例 ID（形如 baseId__N）为 key，节点参数 key 为内层 key。
+func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, nodes []*workflow.NodeDef) map[string]map[string]interface{} {
+	// baseId -> 参数默认值（key -> 节点 DB 默认值），用于补充缺失参数
+	paramDefaults := make(map[string]map[string]*confPackage.NodeConfigOverrideArgument, len(nodes))
+	for _, nd := range nodes {
+		defs := make(map[string]*confPackage.NodeConfigOverrideArgument)
+		if len(nd.Params) > 0 {
+			var args []*confPackage.NodeConfigArgument
+			if err := json.Unmarshal(nd.Params, &args); err == nil {
+				for _, a := range args {
+					if a.Key == "" {
+						continue
+					}
+					defs[a.Key] = &confPackage.NodeConfigOverrideArgument{
+						Private: false,
+						Src:     "fixed",
+						Value:   a.Value,
+					}
+				}
+			}
+		}
+		paramDefaults[nd.NodeID] = defs
+	}
+
+	out := make(map[string]map[string]interface{}, len(overrides))
+	for instId, entry := range overrides {
+		baseId := instId
+		if idx := strings.Index(instId, "__"); idx >= 0 {
+			baseId = instId[:idx]
+		}
+		defaults, ok := paramDefaults[baseId]
+		if !ok {
+			// 节点已不存在：丢弃该覆盖项（避免引用过期节点参数）
+			continue
+		}
+		// 若节点定义中解析不出任何参数 key（如 Params 为空或非标准格式），
+		// 无法判断哪些参数有效，则保持该实例原有覆盖不变，避免误删/污染。
+		if len(defaults) == 0 {
+			out[instId] = entry
+			continue
+		}
+		newEntry := make(map[string]interface{})
+		// 保留节点定义中存在、且覆盖中也有的参数
+		for k, v := range entry {
+			if _, exists := defaults[k]; exists {
+				newEntry[k] = v
+			}
+		}
+		// 补充节点定义中有但覆盖中缺失的参数（以节点默认值为准）
+		for k, dv := range defaults {
+			if _, has := entry[k]; !has {
+				newEntry[k] = dv
+			}
+		}
+		out[instId] = newEntry
+	}
+	return out
+}
+
+// sortBindConfigsByKey 按 Key 稳定排序 []*param.BindConfig，使 DSL 中的 arguments / responses
+// 顺序与节点定义保持一致、可读且稳定（更新时不受遍历顺序影响）。
+func sortBindConfigsByKey(bcs []*param.BindConfig) {
+	sort.Slice(bcs, func(i, j int) bool {
+		return bcs[i].Key < bcs[j].Key
+	})
+}
+func sortRespConfigsByKey(bcs []*confPackage.NodeConfigResponse) {
+	sort.Slice(bcs, func(i, j int) bool {
+		return bcs[i].Key < bcs[j].Key
+	})
+}
+
 // buildRuleNodes 将节点实例引用转换为 rulego RuleNode 列表（含参数覆盖策略合并）。
 // 同一节点定义可出现多次，每次使用各自的 instanceId 作为 RuleNode ID，
 // 参数覆盖 override key 也以 instanceId 匹配，从而实现同一节点在编排中添加多次。
-func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]*workflow.NodeDef, overrides map[string]map[string]interface{}) []*types.RuleNode {
+func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]*workflow.NodeDef, overrides map[string]map[string]interface{}, switchOverrides map[string]string, nameOverrides map[string]string) []*types.RuleNode {
 	ruleNodes := make([]*types.RuleNode, 0, len(instances))
 	for _, inst := range instances {
 		node, ok := defById[inst.baseId]
@@ -266,21 +483,37 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		// Params 格式: [{"key":"url","value":"https://default.com","policy":"backend+"}, ...]
 		var bindConfigs []*param.BindConfig
 		if len(node.Params) > 0 {
-			_ = json.Unmarshal(node.Params, &bindConfigs)
+			// 注意：必须用标准 json.Unmarshal，不要用 conv.Unmarshal。
+			// conv.Unmarshal 内部先走 copier 反射（依赖 go-plat-utils 版本/字段名），
+			// 对 []*param.BindConfig 不可靠，可能静默产出空切片；与 reconcileNodeParamOverrides 保持一致。
+			if err := json.Unmarshal(node.Params, &bindConfigs); err != nil {
+				log.Ctx(context.Background()).Warn().Str("node_id", inst.baseId).Err(err).Msg("parse node.Params failed")
+			}
 		}
 
 		// 构建用户传入参数（frontend），override key 使用实例 ID 以区分同一节点的多次添加
 		frontendMap := make(map[string]any)
-		privateKeys := make([]string, 0) // 私有参数 key 列表（需从入参二级结构取值）
+		frontendSrc := make(map[string]string)  // 记录每个覆盖参数的来源 src，用于设置 DSL 的 policy
+		frontendType := make(map[string]string) // 记录每个覆盖参数的类型 type，用于写入 DSL arguments 的 BindConfig.Type
+		privateKeys := make([]string, 0)        // 私有参数 key 列表（需从入参二级结构取值）
 		if nodeOverrides, ok := overrides[inst.instanceId]; ok {
 			for k, v := range nodeOverrides {
 				// 兼容两种格式：
-				//  - 新格式：{ "src": "fixed/upstream/entry", "value": "<最终值>" }（对象）
+				//  - 新格式：{ "src": "fixed/upstream/entry", "value": "<最终值>", "type": "<类型>" }（对象）
 				//  - 旧格式：直接是字符串值（纯值）
 				// 取其中的 value 作为写入节点 arguments 的最终值。
 				if m, ok := v.(map[string]any); ok {
 					if val, exists := m["value"]; exists {
-						frontendMap[k] = val
+						if k != "" {
+							frontendMap[k] = val
+						}
+						if src, ok := m["src"].(string); ok {
+							frontendSrc[k] = src
+						}
+						// 记录覆盖参数的类型（如返回值节点，无节点定义，type 由前端按根返回值定义带入）
+						if t, ok := m["type"].(string); ok && t != "" {
+							frontendType[k] = t
+						}
 						// 记录私有参数 key，供 DSL 持久化
 						if pv, ok := m["private"].(bool); ok && pv {
 							privateKeys = append(privateKeys, k)
@@ -288,41 +521,91 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 						continue
 					}
 				}
-				frontendMap[k] = v
+				if k != "" {
+					frontendMap[k] = v
+				}
+			}
+		}
+
+		// 编排参数来源对应的 DSL policy（不改节点参数定义本身，仅在此处改写 DSL）：
+		//  - ref_node（调用传入）：调用方本身就是来源，保留节点定义默认 policy（调用方优先）
+		//  - ref_act（引用前序）：已配置来源 → 强制后台 PolicyBackendOnly，调用方同名不可覆盖
+		//  - value（固定配置）且值为空：回退到节点参数定义里的默认 policy
+		//  - value（固定配置）且值非空：已配置来源 → 强制后台 PolicyBackendOnly
+		isEmptyValue := func(v any) bool {
+			if v == nil {
+				return true
+			}
+			s, ok := v.(string)
+			return ok && s == ""
+		}
+		resolvePolicy := func(src string, v any, defaultPolicy param.KeySourcePolicy) param.KeySourcePolicy {
+			switch src {
+			case "ref_node":
+				return defaultPolicy // 调用传入：保持调用方优先
+			case "ref_act":
+				return param.KeyPolicyBackendOnly // 引用前序：强制后台
+			default: // value / 无来源
+				if isEmptyValue(v) {
+					return defaultPolicy // 固定配置为空：回退到节点参数定义默认 policy
+				}
+				return param.KeyPolicyBackendOnly // 固定配置非空：强制后台
 			}
 		}
 
 		if len(bindConfigs) > 0 {
 			// 将用户覆盖值合并进 BindConfig 数组（保留 key/value/policy），
 			// 不直接展开为具体值，便于后期执行时按 policy 判断是否需要直接覆盖。
-			args := make([]*param.BindConfig, 0, len(bindConfigs))
+			args := make([]*param.BindConfig, 0)
 			usedKeys := make(map[string]bool, len(bindConfigs))
 			for _, bc := range bindConfigs {
 				if v, ok := frontendMap[bc.Key]; ok {
-					nb := *bc           // 复制，避免修改节点定义缓存
-					nb.Value = v        // 用户覆盖值
+					nb := *bc // 复制，避免修改节点定义缓存
+					nb.Value = v
+					// 编排里已配置来源：按来源改写 DSL 的 policy，避免调用方传同名参数覆盖配置的来源
+					nb.Policy = resolvePolicy(frontendSrc[bc.Key], v, bc.Policy)
+					// 前端带入的类型优先（如返回值节点无节点定义，type 由前端提供）；否则保留节点定义默认 type
+					if t, ok := frontendType[bc.Key]; ok && t != "" {
+						nb.Type = t
+					}
+					if nb.Key == "" {
+						continue
+					}
 					args = append(args, &nb)
 					usedKeys[bc.Key] = true
 				} else {
+					if bc.Key == "" {
+						continue
+					}
 					args = append(args, bc)
 				}
 			}
-			// 用户新增了节点定义中不存在的 key，统一追加（默认直接覆盖策略）
-			for k, v := range frontendMap {
-				if usedKeys[k] {
-					continue
-				}
-				args = append(args, &param.BindConfig{Key: k, Value: v})
-			}
-			// arguments 为 BindConfig 数组 JSON：[{"key":..,"value":..,"policy":..}, ...]
-			config["arguments"] = args
+			// 按 key 自动排序，保证 DSL 稳定可读、与节点参数定义实时一致
+			sortBindConfigsByKey(args)
+			config[activity.Arguments] = args
 		} else if len(frontendMap) > 0 {
 			// 无参数定义时的兜底：仍以 BindConfig 数组格式保存，便于后期判断覆盖策略
-			args := make([]*param.BindConfig, 0, len(frontendMap))
+			args := make([]*param.BindConfig, 0)
 			for k, v := range frontendMap {
-				args = append(args, &param.BindConfig{Key: k, Value: v})
+				if k == "" {
+					continue
+				}
+				args = append(args, &param.BindConfig{Key: k, Value: v, Type: frontendType[k], Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
 			}
-			config["arguments"] = args
+			sortBindConfigsByKey(args)
+			config[activity.Arguments] = args
+		}
+
+		// responses：取节点定义中的返回值配置（config 已实时从 node.Configuration 加载），
+		// 按 key 自动排序，确保与节点实时变化保持一致、顺序稳定。
+		if raw, ok := config[activity.Responses]; ok && raw != nil {
+			var respArr []*confPackage.NodeConfigResponse
+			if b, _ := json.Marshal(raw); len(b) > 0 && string(b) != "null" {
+				if err := json.Unmarshal(b, &respArr); err == nil && len(respArr) > 0 {
+					sortRespConfigsByKey(respArr)
+					config[activity.Responses] = respArr
+				}
+			}
 		}
 
 		addInfo := make(map[string]interface{})
@@ -355,10 +638,30 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			addInfo["node_private_params"] = string(privJSON)
 		}
 
+		// 应用每节点 switch_condition 覆盖（仅本链生效）：写入该 DSL 节点 configuration.node_config.switch_condition，不改节点定义。
+		// 覆盖键为节点实例 instanceId（形如 baseId__random），仅 Activity / CondSwitch 节点有意义。
+		if sw, ok := switchOverrides[inst.instanceId]; ok && strings.TrimSpace(sw) != "" {
+			if node.Type == common.ActivityNodeTypeName || node.Type == common.CondSwitchNodeTypeName {
+				nc, _ := config["node_config"].(map[string]any)
+				if nc == nil {
+					nc = make(map[string]any)
+				}
+				nc["switch_condition"] = strings.TrimSpace(sw)
+				config["node_config"] = nc
+			}
+		}
+
+		// 应用每节点实例名称覆盖（仅本链生效）：写入该 DSL 节点 Name，不改节点定义。
+		// 覆盖键为节点实例 instanceId（形如 baseId__random）。
+		nodeName := node.Name
+		if nm, ok := nameOverrides[inst.instanceId]; ok && strings.TrimSpace(nm) != "" {
+			nodeName = strings.TrimSpace(nm)
+		}
+
 		ruleNodes = append(ruleNodes, &types.RuleNode{
 			Id:             inst.instanceId,
 			Type:           node.Type,
-			Name:           node.Name,
+			Name:           nodeName,
 			DebugMode:      node.DebugMode,
 			Configuration:  config,
 			AdditionalInfo: addInfo,
@@ -379,7 +682,7 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 		defById[nd.NodeID] = nd
 	}
 	instances := parseInstanceRefs(req.NodeIDs)
-	mainNodes := b.buildRuleNodes(instances, defById, req.NodeParamOverrides)
+	mainNodes := b.buildRuleNodes(instances, defById, req.NodeParamOverrides, req.NodeSwitchOverrides, req.NodeNameOverrides)
 	for _, n := range mainNodes {
 		idMap[n.Id] = true
 	}
@@ -444,10 +747,9 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 			Configuration: config,
 		},
 		Metadata: types.RuleMetadata{
-			FirstNodeIndex:  firstNodeIndex,
-			Nodes:           ruleNodes,
-			Connections:     connections,
+			FirstNodeIndex: firstNodeIndex,
+			Nodes:          ruleNodes,
+			Connections:    connections,
 		},
 	}
 }
-

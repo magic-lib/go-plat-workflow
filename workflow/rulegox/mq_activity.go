@@ -2,7 +2,6 @@ package rulegox
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
@@ -10,6 +9,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/samber/lo"
 	"net/http"
 	"strconv"
@@ -185,17 +185,24 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	methodTopic := getActivityTopic(actNamespace, actName)
 	mqHandler := func(ctx context.Context, event *mq.Event) (any, error) {
 		start := time.Now()
-		// 执行前记一条 info 日志
-		//w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), 0, event.Payload, nil, "", nil)
 
 		resp, herr := handler(ctx, event.Payload)
 
 		durationMs := time.Since(start).Milliseconds()
+
+		attributes := map[string]any{
+			"activity_namespace": actNamespace,
+			"activity_name":      actName,
+			"topic":              methodTopic,
+			"event":              event,
+			"desc":               "原子方法，payload和result为原子方法的参数，查看是否正确",
+		}
+
 		if herr != nil {
 			// 执行失败记一条 error 日志
-			w.pushActivityLog(actNamespace, actName, event, "error", start.Unix(), durationMs, event.Payload, nil, herr.Error(), nil)
+			w.pushActivityLog(actNamespace, actName, event, "error", start.Unix(), durationMs, event.Payload, resp, herr.Error(), attributes)
 		} else {
-			w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), durationMs, event.Payload, resp, "", nil)
+			w.pushActivityLog(actNamespace, actName, event, "info", start.Unix(), durationMs, event.Payload, resp, "", attributes)
 		}
 		return resp, herr
 	}
@@ -206,6 +213,13 @@ func (w *MQWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	// 注册成功：加入心跳列表，并（首次）启动统一心跳上报协程
 	w.registerHeartbeat(actNamespace, actName)
 	return nil
+}
+
+// Start 在所有 SubscribeActivity 调用完成后启动消费端 server。
+// 由于每个 activity 现在使用独立的 asynq 队列（namespace:activity/...），
+// 必须等全部注册完、队列集合确定后再启动，才能消费到各自的任务。
+func (w *MQWorker) Start() error {
+	return w.mqClient.Start()
 }
 
 // registerHeartbeat 将 activity 加入心跳注册表，首次注册时启动后台上报协程
@@ -302,7 +316,7 @@ func (w *MQWorker) pushActivityLog(actNamespace, actName string, event *mq.Event
 		TraceID:      metaData.TraceID,
 		SpanID:       metaData.SpanID,
 		NodeSpanID:   metaData.NodeSpanID,
-		Attributes:   attrToJSONString(attributes),
+		Attributes:   conv.String(attributes),
 	}
 	key := ActivityLogKeyPrefix + GetMQNamespace(w.Project, w.Env)
 	pipe := w.redisCli.Pipeline()
@@ -321,22 +335,6 @@ func eventIdOf(event *mq.Event) string {
 		return ""
 	}
 	return event.Id
-}
-
-// attrToJSONString 将任意属性值序列化为 JSON 字符串，便于存入 ActivityLogDef.Attributes（string 类型）。
-// nil 时返回空串；其余按 JSON 序列化。
-func attrToJSONString(v any) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
 }
 func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName string, params any, headers http.Header) (*httputil.CommResponse, error) {
 	methodTopic := getActivityTopic(actNamespace, actName)
@@ -380,11 +378,17 @@ func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, 
 	}
 	resp, err := w.requestOneActivity(ctx, actNamespace, actName, argAny, headers)
 	if err != nil {
+		engine.MysqlLogErrorString("RequestActivity requestOneActivity", "argAny:", argAny, "argTemplate:", argTemplate, " params:", params,
+			"headers:", headers, " returnValues:", returnValues, " activity:", act, "actNamespace:", actNamespace,
+			" actName:", actName)
 		return nil, err
 	}
 
 	data, err := w.execActivityResponse(resp.Data, act.Responses, returnValues)
 	if err != nil {
+		engine.MysqlLogErrorString("RequestActivity execActivityResponse", "argAny:", argAny, "argTemplate:", argTemplate, " params:", params,
+			"headers:", headers, " returnValues:", returnValues, " activity:", act, "actNamespace:", actNamespace,
+			" actName:", actName)
 		return nil, err
 	}
 
@@ -407,28 +411,37 @@ func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any,
 		return data, nil
 	}
 	// 需要处理返回值的类型
-	if cond.IsJsonMap(conv.String(data)) {
+	if cond.IsJsonObject(conv.String(data)) {
 		var argMap map[string]any
 		_ = conv.Unmarshal(data, &argMap)
 		// 字段转换
 		lo.ForEach(returnValues, func(returnValue *config.ReturnValue, index int) {
+			var oneValue any
 			if one, ok := argMap[returnValue.Key]; ok {
-				var oneValue = one
+				oneValue = one
 				if returnValue.Type != "" {
 					one2, ok2 := conv.ConvertForTypeString(returnValue.Type, one)
 					if ok2 {
 						oneValue = one2
 					}
 				}
-				if returnValue.Name != "" {
-					argMap[returnValue.Name] = oneValue
-				} else {
+			} else {
+				if returnValue.Type != "" {
+					oneValue = conv.ZeroForTypeString(returnValue.Type)
+				}
+			}
+
+			if returnValue.Name != "" {
+				argMap[returnValue.Name] = oneValue
+			} else {
+				if returnValue.Key != "" {
 					argMap[returnValue.Key] = oneValue
 				}
 			}
 		})
 		return argMap, nil
 	} else {
+		var newData = data //可能需要转换格式
 		var argMap = make(map[string]any)
 		for _, returnValue := range returnValues {
 			if returnValue.Key == "" {
@@ -437,16 +450,19 @@ func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any,
 					one2, ok2 := conv.ConvertForTypeString(returnValue.Type, data)
 					if ok2 {
 						oneValue = one2
+						newData = one2
 					}
 				}
-				argMap[returnValue.Name] = oneValue
+				if returnValue.Name != "" {
+					argMap[returnValue.Name] = oneValue
+				}
 			}
 		}
 		if len(argMap) > 0 {
 			return argMap, nil
 		}
+		return newData, nil
 	}
-	return data, nil
 }
 
 // Stop 停止消费端，并清理心跳协程与 redis 连接。

@@ -61,6 +61,9 @@ func NewWorkflowLogic(svcCfg *startupcfg.ConfigAPI, wf *WfConfig) (*WfLogic, err
 	}
 
 	svcApi := svcCfg.ServiceAPI(wf.ConfigKey)
+	if svcApi == nil {
+		return nil, fmt.Errorf("ConfigKey not config: %s", wf.ConfigKey)
+	}
 
 	projectName, _ := svcApi.ConfigData(wf.ProjectKey)
 	env, _ := svcApi.ConfigData(wf.EnvKey)
@@ -88,15 +91,18 @@ func (l *WfLogic) getWfWorker(ctx context.Context) (*WfWorker, error) {
 }
 
 // InvokeWorkerFlowAPI 调用 workflow 活动 API
-func (l *WfLogic) InvokeWorkerFlowAPI(ctx context.Context, chainKey string, traceId string, payload map[string]any, isAsync bool) (any, error) {
-	data, err := InvokeWorkerFlowAPI(ctx, l.Project, l.Env, l.DomainName, l.ApiToken, &InvokeRequest{
-		ChainKey: chainKey,
-		Payload:  payload,
-		Metadata: InvokeMetadata{
-			TraceID: traceId,
-			IsAsync: isAsync,
-		},
-	})
+func (l *WfLogic) InvokeWorkerFlowAPI(ctx context.Context, invokeReq *InvokeRequest) (any, error) {
+	if invokeReq == nil {
+		return nil, fmt.Errorf("invokeReq is nil")
+	}
+	if invokeReq.ChainKey == "" {
+		return nil, fmt.Errorf("chain_key is empty")
+	}
+	if invokeReq.Payload == nil {
+		invokeReq.Payload = make(map[string]any)
+	}
+
+	data, err := InvokeWorkerFlowAPI(ctx, l.Project, l.Env, l.DomainName, l.ApiToken, invokeReq)
 	if err != nil {
 		return nil, err
 	}
@@ -114,16 +120,41 @@ func (l *WfLogic) RegisterActivities(ctx context.Context, allActivities []*RegAc
 		return fmt.Errorf("w is nil")
 	}
 
-	lo.ForEachWhile(allActivities, func(method *RegActivityInfo, _ int) bool {
-		err = w.SubscribeActivity(method.Namespace, method.ActivityName, method.ActivityHandler)
-		if err != nil {
-			log.Println("RegisterActivities namespace:", method.Namespace, " name:", method.ActivityName, " error:", err)
-			return false
+	var regErrs []error
+	lo.ForEach(allActivities, func(method *RegActivityInfo, _ int) {
+		if method.ActivityHandler == nil {
+			regErrs = append(regErrs, fmt.Errorf("ActivityHandler is nil: %s/%s", method.Namespace, method.ActivityName))
+			return
 		}
-		return true
+		if e := w.SubscribeActivity(method.Namespace, method.ActivityName, method.ActivityHandler); e != nil {
+			log.Println("RegisterActivities failed namespace:", method.Namespace, " name:", method.ActivityName, " error:", e)
+			regErrs = append(regErrs, e)
+		}
 	})
-	if err != nil {
-		return err
+	// 所有 activity 注册完成后，再启动消费端 server。
+	// 现在每个 activity 使用独立的 asynq 队列（namespace:activity/...），
+	// 必须等全部注册完、队列集合确定后才能启动，否则会漏消费某些队列。
+	if startErr := w.Start(); startErr != nil {
+		log.Println("RegisterActivities start server error:", startErr)
+		regErrs = append(regErrs, startErr)
+	}
+	if len(regErrs) > 0 {
+		return fmt.Errorf("some activities failed to register (%d/%d): %v", len(regErrs), len(allActivities), regErrs)
 	}
 	return nil
+}
+
+func (l *WfLogic) RegisterNamespaceActivities(ctx context.Context, activityNamespace string, actionMap map[string]utils.ContextAnyHandler) error {
+	if len(actionMap) == 0 {
+		return nil
+	}
+	allMethodList := make([]*RegActivityInfo, 0)
+	for k, v := range actionMap {
+		allMethodList = append(allMethodList, &RegActivityInfo{
+			Namespace:       activityNamespace,
+			ActivityName:    k,
+			ActivityHandler: v,
+		})
+	}
+	return l.RegisterActivities(ctx, allMethodList)
 }

@@ -90,6 +90,12 @@ func (w *WfWorker) SubscribeActivity(actNamespace, actName string, handler utils
 	}
 	return w.MQWorker.SubscribeActivity(actNamespace, actName, handler)
 }
+func (w *WfWorker) Start() error {
+	if w.MQWorker == nil {
+		return fmt.Errorf("mq worker is nil")
+	}
+	return w.MQWorker.Start()
+}
 func (w *WfWorker) Stop() {
 	if w.MQWorker == nil {
 		return

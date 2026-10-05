@@ -11,13 +11,15 @@ import (
 // 每个 project 下可配置多个环境（如 dev/test/prod），每个环境可保存
 // 环境变量、Redis、MySQL 连接信息，供后续使用。
 type EnvConfigModel struct {
-	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Project     string    `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_env,priority:1;not null;index" json:"project"`
-	EnvName     string    `gorm:"column:env_name;type:varchar(128);uniqueIndex:uk_project_env,priority:2;not null" json:"env_name"`
-	Description string    `gorm:"type:varchar(512)" json:"description"`
-	EnvVars     string    `gorm:"column:env_vars;type:text" json:"env_vars"`
-	RedisConfig string    `gorm:"column:redis_config;type:text" json:"redis_config"`
-	MySQLConfig string    `gorm:"column:mysql_config;type:text" json:"mysql_config"`
+	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Project     string `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_env,priority:1;not null;index" json:"project"`
+	EnvName     string `gorm:"column:env_name;type:varchar(128);uniqueIndex:uk_project_env,priority:2;not null" json:"env_name"`
+	Description string `gorm:"type:varchar(512)" json:"description"`
+	EnvVars     string `gorm:"column:env_vars;type:text" json:"env_vars"`
+	RedisConfig string `gorm:"column:redis_config;type:text" json:"redis_config"`
+	MySQLConfig string `gorm:"column:mysql_config;type:text" json:"mysql_config"`
+	// AlertConfig 该环境的告警配置（EnvAlertConfig 的 JSON 串）。为空表示未配置（不告警）。
+	AlertConfig string    `gorm:"column:alert_config;type:text" json:"alert_config"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -45,6 +47,12 @@ func (m *EnvConfigModel) ToDef() *workflow.EnvConfigDef {
 	if m.MySQLConfig != "" {
 		_ = json.Unmarshal([]byte(m.MySQLConfig), &def.MySQLConfig)
 	}
+	if m.AlertConfig != "" {
+		var ac workflow.EnvAlertConfig
+		if err := json.Unmarshal([]byte(m.AlertConfig), &ac); err == nil {
+			def.AlertConfig = &ac
+		}
+	}
 	return def
 }
 
@@ -53,6 +61,12 @@ func (m *EnvConfigModel) FromDef(def *workflow.EnvConfigDef) {
 	m.Project = def.Project
 	m.EnvName = def.EnvName
 	m.Description = def.Description
+	m.AlertConfig = ""
+	if def.AlertConfig != nil {
+		if b, err := json.Marshal(def.AlertConfig); err == nil {
+			m.AlertConfig = string(b)
+		}
+	}
 	if def.EnvVars != nil {
 		b, _ := json.Marshal(def.EnvVars)
 		m.EnvVars = string(b)

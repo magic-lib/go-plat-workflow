@@ -3,6 +3,8 @@ package models
 import (
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/magic-lib/go-plat-workflow/workflow"
 )
 
@@ -21,9 +23,16 @@ type RootChainReleaseModel struct {
 	SubChainIDs        string    `gorm:"column:sub_chain_ids;type:text" json:"sub_chain_ids"`
 	ConnectionsData    string    `gorm:"column:connections_data;type:text" json:"connections_data"`
 	NodeParamOverrides string    `gorm:"column:node_param_overrides;type:text" json:"node_param_overrides"`
+	NodeCollapseOverrides string `gorm:"column:node_collapse_overrides;type:text" json:"node_collapse_overrides"`
+	// RootResponses 根节点返回值定义 JSON（[]workflow.RootResponseItem），发布时快照
+	RootResponses      string    `gorm:"column:root_responses;type:text" json:"root_responses"`
 	IsCurrent          bool      `gorm:"column:is_current;default:false;index" json:"is_current"`
 	PublishedAt        time.Time `gorm:"column:published_at;not null" json:"published_at"`
 	CreatedAt          time.Time `json:"created_at"`
+	// DeletedAt GORM 软删除字段：删除发布版本时只置该时间戳，不做物理删除。
+	// 前端/业务查询（ListByChain/GetByVersion/GetCurrent/ListCurrentByProject 等）自动过滤，
+	// 软删除的记录“前端永远查不出来”，但仍在库中、可直接查库查看/恢复。
+	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index" json:"deleted_at,omitempty"`
 }
 
 // TableName 返回表名。
@@ -44,6 +53,8 @@ func (m *RootChainReleaseModel) ToDef() *workflow.RootChainReleaseDef {
 		SubChainIDs:        m.SubChainIDs,
 		ConnectionsData:    m.ConnectionsData,
 		NodeParamOverrides: m.NodeParamOverrides,
+		NodeCollapseOverrides: m.NodeCollapseOverrides,
+		RootResponses:      m.RootResponses,
 		IsCurrent:          m.IsCurrent,
 		PublishedAt:        m.PublishedAt,
 	}
@@ -61,6 +72,8 @@ func (m *RootChainReleaseModel) FromDef(def *workflow.RootChainReleaseDef) {
 	m.SubChainIDs = def.SubChainIDs
 	m.ConnectionsData = def.ConnectionsData
 	m.NodeParamOverrides = def.NodeParamOverrides
+	m.NodeCollapseOverrides = def.NodeCollapseOverrides
+	m.RootResponses = def.RootResponses
 	m.IsCurrent = def.IsCurrent
 	m.PublishedAt = def.PublishedAt
 }

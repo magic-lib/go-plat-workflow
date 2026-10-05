@@ -9,6 +9,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/templates"
+	"github.com/magic-lib/go-plat-utils/utils"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
@@ -209,60 +210,41 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	// 执行前判断条件（enable_condition）：满足才执行该节点，否则跳过（不执行活动），流程继续向下传递。
 	if x.enableCondition != "" {
-		condParams, _ := allParam.ToMaps()
-		for k, v := range stepFlowCtx.Arguments {
-			condParams[k] = v
-		}
-		condRes, cErr := x.ruleObj.RunString(x.enableCondition, condParams)
-		if cErr != nil {
-			ctx.TellFailure(msg, fmt.Errorf("enable_condition 表达式执行错误: %v", cErr))
-			return
-		}
-		ok, bErr := conv.Convert[bool](condRes)
-		if bErr != nil {
-			ctx.TellFailure(msg, fmt.Errorf("enable_condition 表达式结果不是布尔值: %v", condRes))
-			return
-		}
-		if !ok {
-			// 条件不满足：跳过节点执行，直接放行消息，不影响下游流程
-			ctx.TellSuccess(msg)
+		if canEnable := x.onMsgEnableCondition(ctx, msg, allParam, stepFlowCtx); canEnable {
 			return
 		}
 	}
 
-	metaDataAny := msg.GetMetadata()
-	metaDataMap := make(map[string]any)
-	metaDataAny.ForEach(func(key string, value string) bool {
-		metaDataMap[key] = value
-		return true
-	})
-	actMetaData := new(rulegox.ActivityMetaData)
-	_ = conv.Unmarshal(metaDataMap, actMetaData)
-
-	//log.Printf("[activityNode] OnMsg nodeId=%s metaData=%s", x.getNodeId(ctx), conv.String(actMetaData))
+	actMetaData := getActionMeta(msg)
 
 	currNodeId := getNodeId(ctx)
 	nodeStr := string(currNodeId)
-	// 上报 node 入参日志（落库 wf_node_logs，便于前端查看运行情况）
-	//x.pushNodeLog(actMetaData, nodeStr, nodeStr, "request", "info", allParam, stepFlowCtx.Arguments, nil)
-
-	startTime := time.Now().UnixMilli()
 
 	goroutines.GoAsync(func(param ...any) {
-		engine.MysqlLogger.Info("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d", actMetaData.TraceId, nodeStr, 0)
+		engine.MysqlLogger.Info(fmt.Sprintf("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d start", actMetaData.TraceId, nodeStr, 0))
 	})
 
 	nodeSpanId := id.GetUUID(nodeStr)
+	startTime := time.Now().UnixMilli()
 	err = x.execNode(ctx, nodeSpanId, actMetaData, stepFlowCtx)
 	durationMs := time.Now().UnixMilli() - startTime
 
 	goroutines.GoAsync(func(param ...any) {
-		engine.MysqlLogger.Info("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d", actMetaData.TraceId, nodeStr, time.Now().UnixMilli()-startTime)
+		logInfoStr := fmt.Sprintf("[activityNode] OnMsg traceId=%s, nodeId=%s, startTime=%d end", actMetaData.TraceId, nodeStr, durationMs)
+		if err != nil {
+			engine.MysqlLogger.Error(logInfoStr)
+			engine.MysqlLogErrorString("ActivityNode:", "OnMsg allParam:",
+				"allParam:", allParam,
+				"traceId:", actMetaData.TraceId, "allParamStr:", allParamStr,
+				"nodeSpanId:", nodeSpanId, "actMetaData:", actMetaData, "stepFlowCtx:", stepFlowCtx)
+		} else {
+			engine.MysqlLogger.Info(logInfoStr)
+		}
 	})
 
 	nodeStep := &paramx.Step{
 		Arguments:   stepFlowCtx.Arguments,
-		Responses:   nil,
+		Responses:   stepFlowCtx.Responses,
 		Status:      paramx.StepStatusPending,
 		Error:       nil,
 		StartTimeMs: stepFlowCtx.Meta.StartTimeMs,
@@ -270,75 +252,99 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	}
 
 	if err != nil {
-		// 飞书告警：node 执行失败，若已配置机器人地址（由 workflow 包注入 AlertSender）则异步发送到群
-		sendAlert(context.Background(), "[工作流告警] Node 执行失败",
-			fmt.Sprintf("节点名称: %s\n节点ID: %s\n项目: %s\n环境: %s\n错误信息: %s\n时间: %s",
-				x.nodeName, nodeStr, actMetaData.Project, actMetaData.Env, err.Error(), time.Now().Format("2006-01-02 15:04:05")))
-
-		nodeStep.Status = paramx.StepStatusFail
-		nodeStep.Error = &paramx.ErrorInfo{
-			Code:    "500",
-			Message: err.Error(),
-			Stack:   err.Error(),
-		}
-		allParam.SetStep(currNodeId, nodeStep)
-		msg.SetData(conv.String(allParam))
-		log.Printf("[activityNode] node=%s 执行失败 error=%s", currNodeId, err.Error())
-		// 上报 node 失败日志（含入参），error_msg 填充失败原因，payload 为全部入参
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParam, stepFlowCtx.Arguments, stepFlowCtx.Responses, err)
-		if cliErr == nil && x.nodeLogCli == nil {
-			x.nodeLogCli = nodeCli
-		}
-		ctx.TellFailure(msg, err)
+		x.onMsgFailureEndExec(ctx, msg, allParam, currNodeId, actMetaData, durationMs,
+			stepFlowCtx, nodeStep, err)
 		return
 	}
+
+	x.onMsgSuccessEndExec(ctx, msg, allParam, currNodeId, actMetaData, durationMs,
+		stepFlowCtx, nodeStep, err)
+	return
+}
+
+func (x *ActivityNode) onMsgEnableCondition(ctx types.RuleContext, msg types.RuleMsg,
+	allParam *paramx.FlowContext, stepFlowCtx *paramx.FlowContext) bool {
+
+	condParams, _ := allParam.ToMaps()
+	for k, v := range stepFlowCtx.Arguments {
+		condParams[k] = v
+	}
+	condRes, cErr := x.ruleObj.RunString(x.enableCondition, condParams)
+	if cErr != nil {
+		ctx.TellFailure(msg, fmt.Errorf("enable_condition 表达式执行错误: %v", cErr))
+		return true
+	}
+	ok, bErr := conv.Convert[bool](condRes)
+	if bErr != nil {
+		ctx.TellFailure(msg, fmt.Errorf("enable_condition 表达式结果不是布尔值: %v", condRes))
+		return true
+	}
+	if !ok {
+		// 条件不满足：跳过节点执行，直接放行消息，不影响下游流程
+		ctx.TellSuccess(msg)
+		return true
+	}
+	return false
+}
+func (x *ActivityNode) onMsgFailureEndExec(ctx types.RuleContext, msg types.RuleMsg,
+	allParam *paramx.FlowContext, currNodeId paramx.StepId,
+	actMetaData *rulegox.ActivityMetaData, durationMs int64,
+	stepFlowCtx *paramx.FlowContext, nodeStep *paramx.Step, err error) {
+
+	nodeStr := string(currNodeId)
+	nodeSpanId := id.GetUUID(nodeStr)
+	// 飞书告警：node 执行失败，若已配置机器人地址（由 workflow 包注入 AlertSender）则异步发送到群
+	sendAlert(context.Background(), "[工作流告警] Node 执行失败",
+		fmt.Sprintf("节点名称: %s\n节点ID: %s\n项目: %s\n环境: %s\n错误信息: %s\n时间: %s",
+			x.nodeName, nodeStr, actMetaData.Project, actMetaData.Env, err.Error(), time.Now().Format("2006-01-02 15:04:05")))
+
+	nodeStep.Status = paramx.StepStatusFail
+	nodeStep.Error = &paramx.ErrorInfo{
+		Code:    "500",
+		Message: err.Error(),
+		Stack:   err.Error(),
+	}
+	allParam.SetStep(currNodeId, nodeStep)
+	msg.SetData(conv.String(allParam))
+	log.Printf("[activityNode] node=%s 执行失败 error=%s", currNodeId, err.Error())
+	// 上报 node 失败日志（含入参），error_msg 填充失败原因，payload 为全部入参
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "fail", "error", types.Failure, allParam,
+		stepFlowCtx.Arguments, stepFlowCtx.Responses, err)
+	if cliErr == nil && x.nodeLogCli == nil {
+		x.nodeLogCli = nodeCli
+	}
+	ctx.TellFailure(msg, err)
+	return
+}
+
+func (x *ActivityNode) onMsgSuccessEndExec(ctx types.RuleContext, msg types.RuleMsg,
+	allParam *paramx.FlowContext, currNodeId paramx.StepId,
+	actMetaData *rulegox.ActivityMetaData, durationMs int64,
+	stepFlowCtx *paramx.FlowContext, nodeStep *paramx.Step, err error) {
+
+	nodeStr := string(currNodeId)
+	nodeSpanId := id.GetUUID(nodeStr)
 
 	allDataMap, err := stepFlowCtx.ToMaps()
-	if err == nil {
-		dataMap := x.getActivityParam(allDataMap, x.Configuration.Responses)
-		if len(dataMap) == 0 {
-			// 如果没有定义，就将所有activity的返回值进行合并输出
-			newDataMap := make(map[string]any)
-			for _, oneStep := range stepFlowCtx.Steps {
-				if cond.IsJsonMap(conv.String(oneStep.Responses)) {
-					newDataMap2 := make(map[string]any)
-					_ = conv.Unmarshal(conv.String(oneStep.Responses), &newDataMap2)
-					for k, v := range newDataMap2 {
-						newDataMap[k] = v
-					}
-				}
-			}
-			nodeStep.Responses = newDataMap
-		} else {
-			nodeStep.Responses = dataMap
-		}
-
-		nodeStep.Status = paramx.StepStatusSuccess
-		allParam.SetStep(currNodeId, nodeStep)
-		msg.SetData(conv.String(allParam))
-		if x.switchCondition != "" {
-			nodeStepMap, _ := allParam.StepMaps(currNodeId)
-			// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
-			relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam,
-				stepFlowCtx.Arguments, stepFlowCtx.Responses, nodeStepMap)
-			if err != nil {
-				ctx.TellFailure(msg, err)
-				return
-			}
-			ctx.TellNext(msg, relationType)
-			return
-		}
-		// 上报 node 返回值日志（落库 wf_node_logs）
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "success", "info", types.Success, allParam, stepFlowCtx.Arguments, nodeStep.Responses, nil)
-		if cliErr == nil && x.nodeLogCli == nil {
-			x.nodeLogCli = nodeCli
-		}
-		ctx.TellSuccess(msg)
-		return
-	}
 
 	dataMap := x.getActivityParam(allDataMap, x.Configuration.Responses)
-	nodeStep.Responses = dataMap
+	if len(dataMap) == 0 {
+		// 如果没有定义，就将所有activity的返回值进行合并输出
+		newDataMap := make(map[string]any)
+		for _, oneStep := range stepFlowCtx.Steps {
+			if cond.IsJsonObject(conv.String(oneStep.Responses)) {
+				newDataMap2 := make(map[string]any)
+				_ = conv.Unmarshal(conv.String(oneStep.Responses), &newDataMap2)
+				for k, v := range newDataMap2 {
+					newDataMap[k] = v
+				}
+			}
+		}
+		nodeStep.Responses = newDataMap
+	} else {
+		nodeStep.Responses = dataMap
+	}
+
 	nodeStep.Status = paramx.StepStatusSuccess
 	allParam.SetStep(currNodeId, nodeStep)
 	msg.SetData(conv.String(allParam))
@@ -347,7 +353,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		// 配置了执行后路由条件：按本节点返回值分支路由（替代固定 TellSuccess）
 		nodeStepMap, _ := allParam.StepMaps(currNodeId)
 		relationType, err := x.routeBySwitchCondition(actMetaData, nodeSpanId, durationMs, nodeStr, allParam,
-			stepFlowCtx.Arguments, stepFlowCtx.Responses, nodeStepMap)
+			stepFlowCtx.Arguments, nodeStep.Responses, nodeStepMap)
 		if err != nil {
 			ctx.TellFailure(msg, err)
 			return
@@ -356,11 +362,21 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
-	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, "response", "error", types.Success, allParam, stepFlowCtx.Arguments, dataMap, err)
+	level := "info"
+	eventId := "success"
+	if err != nil {
+		level = "error"
+		eventId = "response"
+	}
+
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName,
+		eventId, level, types.Success,
+		allParam, stepFlowCtx.Arguments, nodeStep.Responses, err)
 	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli
 	}
 	ctx.TellSuccess(msg)
+	return
 }
 
 type NodeLogDef struct {
@@ -386,7 +402,9 @@ type NodeLogDef struct {
 	// TraceID 本次执行的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
 	TraceID     string `json:"trace_id"`
 	RootChainID string `json:"root_chain_id"`
-	SpanID      string `json:"span_id"`
+	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3）。
+	RootChainReleaseID string `json:"root_chain_release_id"`
+	SpanID             string `json:"span_id"`
 	// RelationType 该 node 执行完成后往下传递的连接类型（relationType），
 	// 对应 rulego 的 TellSuccess/TellFailure/TellNext 等，取值如 Success/Failure/True/False 或自定义字符串。
 	// 用于回查本次 node 走了哪条分支链路。
@@ -417,8 +435,9 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 		Result:       conv.String(result),
 		TraceID:      metaData.TraceId,
 		RootChainID:  metaData.RootChainID,
+		RootChainReleaseID: metaData.RootChainReleaseID,
 		SpanID:       nodeSpanId,
-		RelationType: relationType,
+		RelationType: utils.SubStrMaxLen(relationType, 30),
 		CreatedAt:    now,
 	}
 	if runErr != nil {
@@ -473,6 +492,7 @@ func (x *ActivityNode) getNodeFlowContext(ctx types.RuleContext, allParam *param
 	if err != nil {
 		return nil, err
 	}
+	engine.MysqlLogger.Info("NodeArguments end:", currNodeId, "arg:", conv.String(nodeParams))
 	allParam.SetStepArguments(currNodeId, nodeParams) // 设置当前节点参数
 
 	stepFlowCtx := paramx.NewFlowContext(string(currNodeId), id.NewUUID(), nodeParams)
@@ -579,6 +599,12 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 				_ = conv.Unmarshal(string(actDef.ReturnValues), &returnValues)
 			}
 		}
+		engine.MysqlLogger.Info("execOneActivity traceId:", metaData.TraceId, " NodeSpanID:", nodeSpanId,
+			" param:", conv.String(dataMap),
+			" arguments:", conv.String(newAct.Arguments),
+			" allDataMap:", conv.String(allDataMap), map[string]any{
+				"trace_id": metaData.TraceId,
+			})
 		// 执行Activity方法
 		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil), returnValues)
 		if err != nil {
@@ -598,7 +624,7 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 }
 
 func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
-	return GetActivityParam(x.ruleObj, allParam, bindConfig)
+	return replaceBindConfig(x.ruleObj, allParam, bindConfig)
 }
 
 // routeBySwitchCondition 当该节点配置了 switch_condition 时，在活动成功执行后
@@ -610,7 +636,8 @@ func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaD
 	allParam *paramx.FlowContext, arguments map[string]any, result any, stepDataMap map[string]any) (string, error) {
 	relationType, conResult, err := routeByCondition(x.ruleObj, x.switchCondition, stepDataMap)
 	if err != nil {
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, conv.String(conResult), "error", types.Failure,
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs,
+			nodeStr, x.nodeName, conv.String(conResult), "error", types.Failure,
 			allParam, arguments, result, err)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
@@ -618,7 +645,8 @@ func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaD
 		return "", err
 	}
 
-	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs, nodeStr, x.nodeName, conv.String(conResult), "info", relationType,
+	nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, durationMs,
+		nodeStr, x.nodeName, conv.String(conResult), "info", relationType,
 		allParam, arguments, result, nil)
 	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli
@@ -626,7 +654,7 @@ func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaD
 	return relationType, nil
 }
 
-func GetActivityParam(ruleEngine *templates.RuleExprEngine, allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
+func replaceBindConfig(ruleEngine *templates.RuleExprEngine, allParam map[string]any, bindConfig []*param.BindConfig) map[string]any {
 	actParam := make(map[string]any)
 	for _, item := range bindConfig {
 		exp := conv.String(item.Value)
@@ -652,6 +680,17 @@ func getNodeId(ctx types.RuleContext) paramx.StepId {
 		return paramx.StepId(idTemp)
 	}
 	return ""
+}
+func getActionMeta(msg types.RuleMsg) *rulegox.ActivityMetaData {
+	metaDataAny := msg.GetMetadata()
+	metaDataMap := make(map[string]any)
+	metaDataAny.ForEach(func(key string, value string) bool {
+		metaDataMap[key] = value
+		return true
+	})
+	actMetaData := new(rulegox.ActivityMetaData)
+	_ = conv.Unmarshal(metaDataMap, actMetaData)
+	return actMetaData
 }
 
 // setActionMeta 将 Action 的元数据写入 msg.Metadata

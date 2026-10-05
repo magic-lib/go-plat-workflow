@@ -16,13 +16,16 @@ func TestInvokeWorkerFlowAPI_Success(t *testing.T) {
 		apiTok  = "8e421035-705e-be79-f9e8-81f46426a5ef"
 	)
 
+	ret := struct {
+		UserId int64 `json:"user_id"`
+	}{}
+
 	req := &workflow.InvokeRequest{
-		ChainKey: "R000048-3wbb6",
+		ChainKey: "R000004-67p1a",
 		Payload: map[string]any{
-			"group_code":     "M3",
-			"audit_order_id": 555,
-			"mobile":         "12345",
+			"mobile": "0778450780",
 		},
+		Result: &ret,
 	}
 
 	data, err := workflow.InvokeWorkerFlowAPI(context.Background(), project, env, domain, apiTok, req)

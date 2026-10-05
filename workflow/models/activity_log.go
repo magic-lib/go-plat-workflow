@@ -1,7 +1,6 @@
 package models
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/magic-lib/go-plat-workflow/workflow"
@@ -47,8 +46,8 @@ func (m *ActivityLogModel) ToDef() *workflow.ActivityLogDef {
 		Level:        m.Level,
 		Timestamp:    m.Timestamp,
 		DurationMs:   m.DurationMs,
-		Payload:      json.RawMessage(m.Payload),
-		Result:       json.RawMessage(m.Result),
+		Payload:      safeRawMessage(m.Payload),
+		Result:       safeRawMessage(m.Result),
 		ErrorMsg:     m.ErrorMsg,
 		RootChainID:  m.RootChainID,
 		TraceID:      m.TraceID,

@@ -134,6 +134,7 @@
             Connections
             <button class="btn btn-sm btn-outline" onclick="addOrchConnRow()" type="button">+ 添加连接</button>
           </h3>
+          <div id="orch-conn-cond-summary" class="orch-cond-summary" style="display:none"></div>
           <div class="orch-conn-rows" id="orch-conn-container">
             <div id="orch-conn-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.82rem">选择节点/子链后添加连接</div>
           </div>
@@ -151,6 +152,18 @@
           <div id="orch-param-list" style="max-height:380px;overflow-y:auto">
             <div id="orch-param-empty" style="text-align:center;padding:14px;color:var(--text-muted);font-size:.82rem">选择节点并添加连接后，这里会列出各节点的参数供指定值来源</div>
           </div>
+        </div>
+
+        <!-- 根节点返回值定义（仅 Root Chain） -->
+        <div class="orch-section root-only" id="orch-rr-section" style="margin-top:12px">
+          <h3 style="display:flex;justify-content:space-between;align-items:center">
+            根节点返回值定义
+            <span style="display:flex;align-items:center;gap:6px">
+              <span class="count" id="orch-rr-count" style="font-weight:400;color:var(--text-muted);font-size:.78rem">0 个字段</span>
+              <button class="btn btn-sm btn-outline" onclick="addOrchRootResponseRow()" type="button">+ 添加字段</button>
+            </span>
+          </h3>
+          <div id="orch-rr-list" style="max-height:300px;overflow-y:auto"></div>
         </div>
 
         <!-- Actions -->
@@ -180,7 +193,10 @@
         <div class="orch-section" style="margin-bottom:0">
           <h3 style="display:flex;justify-content:space-between;align-items:center">
             DSL Preview
-            <button class="btn btn-sm btn-outline" onclick="toggleOrchDsl()" type="button" id="orch-dsl-toggle">展开</button>
+            <span style="display:inline-flex;gap:8px">
+              <button class="btn btn-sm btn-outline" onclick="copyOrchDsl()" type="button" id="orch-dsl-copy">复制</button>
+              <button class="btn btn-sm btn-outline" onclick="toggleOrchDsl()" type="button" id="orch-dsl-toggle">展开</button>
+            </span>
           </h3>
           <div class="orch-dsl-preview" id="orch-dsl-preview"></div>
         </div>
@@ -206,6 +222,7 @@
         <select id="node-type" onchange="onNodeTypeChange()">
           <option value="custom/Activity">custom/Activity（活动编排）</option>
           <option value="custom/CondSwitch">custom/CondSwitch（条件判断，仅做语法条件判断）</option>
+          <option value="custom/ReturnValue">custom/ReturnValue（返回值节点）</option>
           <option value="end">end（结束节点）</option>
         </select>
       </div>
@@ -578,6 +595,31 @@
   </div>
 </div>
 
+<!-- 编排节点路由条件（switch_condition）编辑器：仅修改本 DSL 中该节点实例，不改节点定义本身 -->
+<div class="modal-overlay" id="orch-switch-modal" style="display:none">
+  <div class="modal" style="width:720px;max-width:96vw">
+    <h2>编辑节点<button class="modal-close" onclick="document.getElementById('orch-switch-modal').style.display='none';_orchSwitchEditId='';" title="关闭">&times;</button></h2>
+    <p style="margin:0 0 8px;color:var(--text-muted);font-size:.82rem">该设置<b>仅对当前链生效</b>，只修改本 DSL 中该节点实例的<b>名称</b>与 <code>node_config.switch_condition</code>，不会修改节点定义本身，也不影响其它节点。</p>
+    <div style="margin:-4px 0 10px;color:var(--primary);font-size:.92rem;font-weight:600" id="orch-switch-node-name"></div>
+    <div style="margin:0 0 8px;font-size:.78rem;color:#92400e" id="orch-switch-override-flag"></div>
+    <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">节点名称（仅本链实例生效，不影响节点定义）</label>
+    <input id="orch-switch-name" type="text" style="width:100%;font-size:.85rem;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:10px" placeholder="节点显示名称" />
+    <div id="orch-switch-cond-wrap">
+      <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">路由条件（switch_condition，仅 Activity / CondSwitch 适用）</label>
+      <textarea id="orch-switch-text" rows="5" style="width:100%;font-family:var(--font-mono);font-size:.82rem;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical" placeholder="例如：In('K1', [responses.tag_list])"></textarea>
+      <div style="margin-top:12px;border-top:1px dashed var(--border);padding-top:10px">
+        <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">输入参数（点击复制）：</div>
+        <div id="orch-switch-input-vars" style="display:flex;flex-wrap:wrap;min-height:18px;margin-bottom:10px"></div>
+        <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">输出返回值（点击复制）：</div>
+        <div id="orch-switch-output-vars" style="display:flex;flex-wrap:wrap;min-height:18px"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn btn-sm btn-primary" onclick="saveOrchSwitchOverride()">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- 已选 Nodes Modal -->
 <div class="modal-overlay" id="orch-selected-modal-overlay" onclick="if(event.target===this)closeOrchSelectedModal()">
   <div class="modal" id="orch-selected-modal" style="width:760px;max-width:96vw">
@@ -667,6 +709,7 @@
         </div>
       </div>
 
+
       <div class="exec-card" style="margin-bottom:12px">
         <h4 style="font-size:.85rem;margin-bottom:8px">环境变量（key-value，可多行）</h4>
         <div id="env-vars-list"></div>
@@ -683,6 +726,10 @@
           <div class="form-row">
             <div class="form-group"><label>DB</label><input id="env-redis-db" type="number" value="0"></div>
             <div class="form-group"><label>Username</label><input id="env-redis-user" placeholder="可选"></div>
+          </div>
+          <div class="form-row" style="align-items:center;gap:8px;margin-top:2px">
+            <button type="button" class="btn btn-sm btn-outline" id="env-redis-test-btn" onclick="testEnvRedisConn()">🔌 测试连接</button>
+            <span id="env-redis-test-result" class="redis-test-result" style="display:none"></span>
           </div>
         </div>
         <div class="exec-card" style="flex:1;margin-bottom:12px">
@@ -708,7 +755,7 @@
       <h4 style="font-size:.85rem;margin:12px 0 8px">已配置环境</h4>
       <div class="table-wrap" style="max-height:220px;overflow-y:auto">
         <table id="env-configs-table">
-          <thead><tr><th>环境名</th><th>描述</th><th>Redis</th><th>MySQL</th><th>变量数</th><th>操作</th></tr></thead>
+          <thead><tr><th>环境名</th><th>描述</th><th>Redis</th><th>MySQL</th><th>变量数</th><th>告警</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -718,6 +765,49 @@
 
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeProjectModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 环境告警设置弹窗 -->
+<div class="modal-overlay" id="env-alert-modal-overlay" onclick="if(event.target===this)closeEnvAlertModal()">
+  <div class="modal" id="env-alert-modal" style="width:640px;max-width:96vw">
+    <h2>环境告警设置<button class="modal-close" onclick="closeEnvAlertModal()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="env-alert-env-name">
+    <div id="env-alert-env-tip" style="margin:-4px 0 12px;color:var(--primary);font-size:.9rem;font-weight:600"></div>
+    <p style="margin:0 0 10px;font-size:.76rem;color:var(--text-muted);line-height:1.6">
+      仅对该环境下【已发布上线】的 Activity 生效：worker 停止上报心跳（掉线）时按下面配置发送告警。<br>
+      测试环境建议保持关闭，避免噪声。
+    </p>
+    <div class="form-row" style="align-items:center;gap:6px;margin-bottom:8px">
+      <input type="checkbox" id="env-alert-enabled" style="width:auto;margin:0">
+      <label for="env-alert-enabled" style="margin:0;font-size:.82rem;cursor:pointer;font-weight:600">开启告警</label>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>告警通道</label>
+        <select id="env-alert-channel">
+          <option value="feishu">飞书机器人</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>机器人 Webhook（留空用全局配置）</label>
+        <input id="env-alert-webhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>离线判定阈值（秒，留空用全局）</label>
+        <input id="env-alert-threshold" type="number" min="1" placeholder="60">
+      </div>
+      <div class="form-group">
+        <label>重复提醒间隔（分钟，0=只提醒一次）</label>
+        <input id="env-alert-remind" type="number" min="0" placeholder="30">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeEnvAlertModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveEnvAlertConfig()">保存告警设置</button>
     </div>
   </div>
 </div>
@@ -758,6 +848,8 @@ window.addEventListener('DOMContentLoaded', async function () {
   }
   const target = params.get('target') || 'root';
   const chainId = params.get('chain_id') || '';
+  // 只读预览模式（流程图按钮入口）：隐藏左侧编辑面板，Live Preview 全宽展示
+  if (params.get('view') === '1') document.body.classList.add('orch-viewonly');
   setOrchTarget(target);
   try {
     if (chainId) {

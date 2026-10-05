@@ -8,6 +8,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,10 +28,52 @@ const (
 	mysqlLogRetentionDaysKey = "mysql_log_retention_days"
 	// normalKey 配置文件中 custom.normal 段的 key 名。
 	normalKey = "normal"
+	// rootChainPoolMaxVersionsKey 配置文件中 custom.normal 下
+	// 「每条根链在 rulego 引擎池中最多保留的版本实例数量」的 key 名。
+	rootChainPoolMaxVersionsKey = "root_chain_pool_max_versions"
+	// rootChainPoolTTLMinutesKey 配置文件中 custom.normal 下
+	// 「非在线版本在引擎池中的最长存活时间（分钟）」的 key 名。
+	rootChainPoolTTLMinutesKey = "root_chain_pool_ttl_minutes"
+	// rootChainBroadcastEnabledKey 配置文件中 custom.normal 下
+	// 「是否启用跨副本根链失效广播（Redis pub/sub）」的 key 名。
+	rootChainBroadcastEnabledKey = "root_chain_broadcast_enabled"
+	// activityOfflineAlertEnabledKey 配置文件中 custom.normal 下
+	// 「是否启用 Activity 离线告警」的 key 名（总开关）。
+	activityOfflineAlertEnabledKey = "activity_offline_alert_enabled"
+	// activityOfflineAlertThresholdSecKey 配置文件中 custom.normal 下
+	// 「判定 Activity 离线所需的心跳中断时长（秒）」的 key 名。
+	activityOfflineAlertThresholdSecKey = "activity_offline_alert_threshold_seconds"
+	// activityOfflineAlertRemindMinutesKey 配置文件中 custom.normal 下
+	// 「持续离线时的重复提醒间隔（分钟，0 表示只提醒一次）」的 key 名。
+	activityOfflineAlertRemindMinutesKey = "activity_offline_alert_remind_minutes"
+	// workflowLogRetentionDaysKey 配置文件中 custom.normal 下
+	// 「wf_activity_logs / wf_node_logs 运行日志保留天数」的 key 名。
+	workflowLogRetentionDaysKey = "workflow_log_retention_days"
 
 	DefaultTimeout = 60 * time.Second
 
 	DefaultListenAddr = ":8686"
+
+	// DefaultRootChainPoolMaxVersions 每条根链默认保留的最大版本实例数。
+	DefaultRootChainPoolMaxVersions = 5
+	// DefaultRootChainPoolTTLMinutes 非在线版本默认最长存活时间（分钟）。
+	DefaultRootChainPoolTTLMinutes = 30
+	// DefaultRootChainBroadcastEnabled 是否默认启用跨副本根链失效广播。
+	// 默认 true 以保证多副本部署下发布能即时全量生效；
+	// 单机部署可显式设为 false，避免创建无谓的 Redis 订阅与后台协程。
+	DefaultRootChainBroadcastEnabled = true
+	// DefaultActivityOfflineAlertEnabled 是否默认启用 Activity 离线告警（总开关）。
+	DefaultActivityOfflineAlertEnabled = true
+	// DefaultActivityOfflineAlertThresholdSec 判定 Activity 离线所需的心跳中断时长（秒）。
+	// worker 每 10s 上报一次心跳，默认 60s（连续 6 次没收到即判定离线）。
+	DefaultActivityOfflineAlertThresholdSec = 60
+	// DefaultActivityOfflineAlertRemindMinutes 持续离线时的重复提醒间隔（分钟）。
+	// 0 表示只在首次判定时提醒一次。
+	DefaultActivityOfflineAlertRemindMinutes = 30
+	// DefaultWorkflowLogRetentionDays 未配置日志保留天数时的默认值（半年）。
+	DefaultWorkflowLogRetentionDays = 180
+	// MinWorkflowLogRetentionDays 日志保留天数的下限（小于该值按 10 天处理）。
+	MinWorkflowLogRetentionDays = 10
 )
 
 type ReturnValue struct {
@@ -38,6 +81,29 @@ type ReturnValue struct {
 	Label string `json:"label,omitempty"`
 	Key   string `json:"key,omitempty"`
 	Type  string `json:"type,omitempty"`
+}
+type NodeConfigArgument struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Type        string `json:"type"`
+	Value       string `json:"value"`
+	Required    bool   `json:"required"`
+	Policy      string `json:"policy"`
+	Description string `json:"description"`
+}
+type NodeConfigOverrideArgument struct {
+	Private bool   `json:"private"`
+	Src     string `json:"src"`
+	Value   string `json:"value"`
+}
+
+type NodeConfigResponse struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Type   string `json:"type"`
+	Source string `json:"source"`
+	Ref    string `json:"ref"`
+	Value  string `json:"value"`
 }
 
 // candidateConfigPaths 默认配置文件候选路径（按顺序尝试，存在即用）。
@@ -60,6 +126,132 @@ type AppConfig struct {
 	FeishuAlertWebhook string
 	// MysqlLogRetentionDays 数据保留天数（由 custom.normal.retention_days 读取，缺省默认 7）
 	MysqlLogRetentionDays int
+	// RootChainPoolMaxVersions 每条根链在 rulego 引擎池中最多保留的版本实例数量。
+	// 0 表示不按数量限制，仅按存活时间清理（最终只剩在线版本）。
+	// 缺省 DefaultRootChainPoolMaxVersions。
+	RootChainPoolMaxVersions int
+	// RootChainPoolTTLMinutes 非在线版本在引擎池中的最长存活时间（分钟），
+	// 多出的版本按发布时间先后顺序错峰清理（每间隔该时长清理一个）。
+	// 0 表示不按时间限制，仅按数量维持（超出即立即清理）。
+	// 缺省 DefaultRootChainPoolTTLMinutes。
+	RootChainPoolTTLMinutes int
+	// RootChainBroadcastEnabled 是否启用跨副本根链失效广播（Redis pub/sub）。
+	// 多副本部署需开启，否则只有收到发布请求的副本会切到新版本；
+	// 单机部署可关闭以省去订阅开销。缺省 DefaultRootChainBroadcastEnabled。
+	RootChainBroadcastEnabled bool
+	// ActivityOfflineAlertEnabled 是否启用 Activity 离线告警（总开关）。
+	// 关闭后即使环境开启了告警也不再发送。缺省 DefaultActivityOfflineAlertEnabled。
+	ActivityOfflineAlertEnabled bool
+	// ActivityOfflineAlertThresholdSec 判定 Activity 离线所需的心跳中断时长（秒）。
+	// 缺省 DefaultActivityOfflineAlertThresholdSec。
+	ActivityOfflineAlertThresholdSec int
+	// ActivityOfflineAlertRemindMinutes 持续离线时的重复提醒间隔（分钟），0 = 只提醒一次。
+	// 缺省 DefaultActivityOfflineAlertRemindMinutes。
+	ActivityOfflineAlertRemindMinutes int
+	// WorkflowLogRetentionDays wf_activity_logs / wf_node_logs 运行日志保留天数（天）。
+	// 未配置默认 180（半年），配置 < 10 按 10 处理。
+	WorkflowLogRetentionDays int
+}
+
+// rootChainCachePolicy 根链缓存相关策略（进程内只加载一次）。
+var (
+	rootChainCacheOnce sync.Once
+	// poolMaxVersions 每条根链最多保留的版本实例数量。
+	poolMaxVersions = DefaultRootChainPoolMaxVersions
+	// poolTTLMinutes 非在线版本最长存活时间（分钟）。
+	poolTTLMinutes = DefaultRootChainPoolTTLMinutes
+	// broadcastEnabled 是否启用跨副本失效广播。
+	broadcastEnabled = DefaultRootChainBroadcastEnabled
+)
+
+// Activity 离线告警策略（进程内只加载一次）。
+var (
+	offlineAlertOnce sync.Once
+	// offlineAlertEnabled 是否启用离线告警（总开关）。
+	offlineAlertEnabled = DefaultActivityOfflineAlertEnabled
+	// offlineAlertThresholdSec 判定离线所需的心跳中断时长（秒）。
+	offlineAlertThresholdSec = DefaultActivityOfflineAlertThresholdSec
+	// offlineAlertRemindMinutes 持续离线的重复提醒间隔（分钟）。
+	offlineAlertRemindMinutes = DefaultActivityOfflineAlertRemindMinutes
+)
+
+// loadRootChainCachePolicy 加载根链缓存相关策略（只执行一次）。
+func loadRootChainCachePolicy() {
+	if cfg, err := Load(); err == nil && cfg != nil {
+		poolMaxVersions = cfg.RootChainPoolMaxVersions
+		poolTTLMinutes = cfg.RootChainPoolTTLMinutes
+		broadcastEnabled = cfg.RootChainBroadcastEnabled
+	}
+}
+
+// loadOfflineAlertPolicy 加载 Activity 离线告警策略（只执行一次）。
+func loadOfflineAlertPolicy() {
+	if cfg, err := Load(); err == nil && cfg != nil {
+		offlineAlertEnabled = cfg.ActivityOfflineAlertEnabled
+		offlineAlertThresholdSec = cfg.ActivityOfflineAlertThresholdSec
+		offlineAlertRemindMinutes = cfg.ActivityOfflineAlertRemindMinutes
+	}
+}
+
+// GetRootChainPoolPolicy 返回根链 rulego 引擎池的清理策略：
+//   - maxVersions：每条根链最多保留的版本实例数量（0=不限制数量，仅按时间清理）；
+//   - ttlMinutes：非在线版本最长存活时间（分钟，0=不限制时间，仅按数量清理）。
+//
+// 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
+// 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
+func GetRootChainPoolPolicy() (maxVersions int, ttlMinutes int) {
+	rootChainCacheOnce.Do(loadRootChainCachePolicy)
+	return poolMaxVersions, poolTTLMinutes
+}
+
+// GetRootChainBroadcastEnabled 返回是否启用跨副本根链失效广播（Redis pub/sub）。
+// 多副本部署需开启；单机部署可关闭（false）以避免创建无谓的 Redis 订阅与后台协程。
+// 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
+// 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
+func GetRootChainBroadcastEnabled() bool {
+	rootChainCacheOnce.Do(loadRootChainCachePolicy)
+	return broadcastEnabled
+}
+
+// GetActivityOfflineAlertPolicy 返回 Activity 离线告警策略：
+//   - enabled：总开关，关闭后即使环境开启了告警也不发送；
+//   - thresholdSec：心跳中断超过该秒数判定为离线；
+//   - remindMinutes：持续离线时的重复提醒间隔（分钟，0 = 只提醒一次）。
+//
+// 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
+// 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
+func GetActivityOfflineAlertPolicy() (enabled bool, thresholdSec int, remindMinutes int) {
+	offlineAlertOnce.Do(loadOfflineAlertPolicy)
+	return offlineAlertEnabled, offlineAlertThresholdSec, offlineAlertRemindMinutes
+}
+
+// 日志保留天数策略（进程内只加载一次）。
+var (
+	logRetentionOnce sync.Once
+	logRetentionDays = DefaultWorkflowLogRetentionDays
+)
+
+// loadLogRetentionPolicy 加载日志保留天数（只执行一次）。
+func loadLogRetentionPolicy() {
+	if cfg, err := Load(); err == nil && cfg != nil {
+		d := cfg.WorkflowLogRetentionDays
+		if d < MinWorkflowLogRetentionDays {
+			d = MinWorkflowLogRetentionDays
+		}
+		logRetentionDays = d
+	}
+}
+
+// GetWorkflowLogRetentionDays 返回 activity/node 运行日志的保留天数：
+//   - 未配置：默认半年（DefaultWorkflowLogRetentionDays = 180）
+//   - 配置 < 10：按 10 天处理（MinWorkflowLogRetentionDays）
+//   - 配置 >= 10：按配置值
+//
+// 首次调用时加载配置文件并缓存结果；加载失败则使用默认值。
+// 注意：配置在进程内只读取一次，修改 app.yaml 需重启进程生效。
+func GetWorkflowLogRetentionDays() int {
+	logRetentionOnce.Do(loadLogRetentionPolicy)
+	return logRetentionDays
 }
 
 // Load 通过 startupcfg 从配置文件加载应用配置。
@@ -105,6 +297,20 @@ func Load(path ...string) (*AppConfig, error) {
 
 	// 从 custom.normal.retention_days 读取数据保留天数，缺省默认 7
 	cfg.MysqlLogRetentionDays = customNormalInt(startCfg.Custom, mysqlLogRetentionDaysKey, 7)
+	// 引擎池清理策略：此处 0 是【有意义的显式取值】（数量0=仅按时间清理，时间0=仅按数量清理），
+	// 因此用允许 0 的读取方式，不能复用 customNormalInt（它会把 0 当成无效值回退默认）。
+	cfg.RootChainPoolMaxVersions = customNormalIntAllowZero(startCfg.Custom, rootChainPoolMaxVersionsKey, DefaultRootChainPoolMaxVersions)
+	cfg.RootChainPoolTTLMinutes = customNormalIntAllowZero(startCfg.Custom, rootChainPoolTTLMinutesKey, DefaultRootChainPoolTTLMinutes)
+	cfg.RootChainBroadcastEnabled = customNormalBool(startCfg.Custom, rootChainBroadcastEnabledKey, DefaultRootChainBroadcastEnabled)
+	// Activity 离线告警
+	cfg.ActivityOfflineAlertEnabled = customNormalBool(startCfg.Custom, activityOfflineAlertEnabledKey, DefaultActivityOfflineAlertEnabled)
+	cfg.ActivityOfflineAlertThresholdSec = customNormalInt(startCfg.Custom, activityOfflineAlertThresholdSecKey, DefaultActivityOfflineAlertThresholdSec)
+	// 此处 0 是【有效语义】（只提醒一次），用允许 0 的读取方式
+	cfg.ActivityOfflineAlertRemindMinutes = customNormalIntAllowZero(startCfg.Custom, activityOfflineAlertRemindMinutesKey, DefaultActivityOfflineAlertRemindMinutes)
+
+	// 日志保留天数：未配置默认半年；此处 0 是有意义的显式值（用户可显式配 0，但最终会被
+	// GetWorkflowLogRetentionDays 兜底为最小值 10），故用允许 0 的读取方式。
+	cfg.WorkflowLogRetentionDays = customNormalIntAllowZero(startCfg.Custom, workflowLogRetentionDaysKey, DefaultWorkflowLogRetentionDays)
 
 	return cfg, nil
 }
@@ -127,6 +333,65 @@ func customNormalString(custom map[string]interface{}, key string) string {
 	return ""
 }
 
+// customNormalIntAllowZero 与 customNormalInt 类似，但允许显式配置 0：
+// 仅当 key 不存在或值无法转换为整数时才返回 def；
+// 显式配置为 0（或负数按 0 计）时返回 0。
+// 用于「0 本身是有效语义」的配置项（如不限制数量 / 不限制时间）。
+func customNormalIntAllowZero(custom map[string]interface{}, key string, def int) int {
+	normal, ok := custom[normalKey]
+	if !ok {
+		return def
+	}
+	nm, ok := normal.(map[string]interface{})
+	if !ok {
+		return def
+	}
+	v, ok := nm[key]
+	if !ok {
+		return def
+	}
+	n, err := conv.Convert[int64](v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return int(n)
+}
+
+// customNormalBool 从 custom.normal 段读取布尔配置项。
+// 支持 bool、整数（非 0 为真）及常见字符串写法（true/1/yes/y/on）。
+// 仅当 key 不存在或值无法识别时才返回 def。
+func customNormalBool(custom map[string]interface{}, key string, def bool) bool {
+	normal, ok := custom[normalKey]
+	if !ok {
+		return def
+	}
+	nm, ok := normal.(map[string]interface{})
+	if !ok {
+		return def
+	}
+	v, ok := nm[key]
+	if !ok {
+		return def
+	}
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		switch strings.ToLower(strings.TrimSpace(val)) {
+		case "true", "1", "yes", "y", "on":
+			return true
+		case "false", "0", "no", "n", "off":
+			return false
+		}
+		return def
+	default:
+		if n, ok2 := conv.Int64(v); ok2 {
+			return n != 0
+		}
+		return def
+	}
+}
+
 // customNormalInt 从 custom.normal 段读取整数配置项。
 // 找不到、类型不符或值 <= 0 时返回默认值 def。
 func customNormalInt(custom map[string]interface{}, key string, def int) int {
@@ -142,8 +407,8 @@ func customNormalInt(custom map[string]interface{}, key string, def int) int {
 	if !ok {
 		return def
 	}
-	n, ok := conv.Int64(v)
-	if !ok || n <= 0 {
+	n, err := conv.Convert[int64](v)
+	if err != nil || n <= 0 {
 		return def
 	}
 	return int(n)

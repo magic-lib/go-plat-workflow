@@ -29,14 +29,24 @@ type ActivityFlowConfig struct {
 	// false：每次都基于最新 DSL 通过 rulego.New 覆盖重建，配置更新可立即生效（适合 node 测试/开发环境）。
 	// 默认 false（避免缓存导致配置修改不生效）。
 	UseCache bool
+	// PoolKey 可选：rulego 引擎池的注册 key。为空时回退到 RootChainID。
+	// 用于「发布/invoke」路径：以确定性 UUID 作为池 key 与草稿链实例隔离，
+	// 但节点日志 root_chain_id 仍写入真实根链 id（如 R000005），避免被污染成 UUID。
+	PoolKey string
+	// RootChainReleaseID 可选：本次执行对应的根链发布版本标识（形如 R000005@3），
+	// 透传给 ActivityMetaData 后写入节点日志，用于追溯当时执行的是哪个发布版本。
+	RootChainReleaseID string
 }
 
 type ActivityMetaData struct {
 	RootChainID string        `json:"root_chain_id,omitempty"`
+	PoolKey     string        `json:"pool_key,omitempty"`
 	TraceId     string        `json:"trace_id,omitempty"`
 	Env         string        `json:"env,omitempty"`
 	Project     string        `json:"project,omitempty"`
 	RedisConfig *conn.Connect `json:"redis_config,omitempty"`
+	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），写入 wf_node_logs.root_chain_release_id。
+	RootChainReleaseID string `json:"root_chain_release_id,omitempty"`
 }
 
 func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData *ActivityMetaData) error {
@@ -113,8 +123,14 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 
 	var engineIns types.RuleEngine
 
+	// 引擎池 key：优先用 PoolKey（发布/invoke 路径的确定性 UUID，隔离草稿实例），否则回退 RootChainID。
+	poolKey := metaData.RootChainID
+	if metaData.PoolKey != "" {
+		poolKey = metaData.PoolKey
+	}
+
 	if actConfig.UseCache {
-		if engineTemp, ok := rulego.Get(metaData.RootChainID); ok {
+		if engineTemp, ok := rulego.Get(poolKey); ok {
 			engineIns = engineTemp
 		}
 	} else {
@@ -129,7 +145,7 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 
 	if engineIns == nil {
 		var err error
-		engineIns, err = rulego.New(metaData.RootChainID, rootChainDSL, rulego.WithConfig(config))
+		engineIns, err = rulego.New(poolKey, rootChainDSL, rulego.WithConfig(config))
 		if err != nil {
 			return err
 		}
@@ -143,7 +159,7 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 	if !actConfig.UseCache &&
 		!cond.IsSameJson(string(engineIns.DSL()), string(rootChainDSL)) {
 		if err := engineIns.ReloadSelf(rootChainDSL); err != nil {
-			return fmt.Errorf("reload rule chain %s failed: %w", metaData.RootChainID, err)
+			return fmt.Errorf("reload rule chain %s failed: %w", poolKey, err)
 		}
 	}
 

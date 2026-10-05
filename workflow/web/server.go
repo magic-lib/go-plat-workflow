@@ -35,9 +35,10 @@ var webAssets embed.FS
 
 // WebServer 工作流管理 Web 服务。
 type WebServer struct {
-	svc       *service.WorkflowService
-	collector *workflow.ActivityCollector
-	mux       *http.ServeMux
+	svc              *service.WorkflowService
+	collector        *workflow.ActivityCollector
+	mux              *http.ServeMux
+	logCleanupCancel context.CancelFunc
 }
 
 type signRequest struct {
@@ -56,9 +57,14 @@ func NewWebServer(db *gorm.DB) (*WebServer, error) {
 
 	ws := &WebServer{svc: svc, mux: http.NewServeMux()}
 
-	// 启动活动日志/心跳收集器（自动发现各环境 Redis 配置）
-	ws.collector = workflow.NewActivityCollector(svc.ActivityLogRepo(), svc.NodeLogRepo(), svc)
+	// 启动活动日志/心跳收集器（自动发现各环境 Redis 配置）。
+	// 同时传入 svc 作为「已发布 activity」查询器，启用 Activity 离线告警：
+	// 仅对【已发布上线】且【所在环境开启了告警】的 activity 做离线判定。
+	ws.collector = workflow.NewActivityCollectorWithAlert(svc.ActivityLogRepo(), svc.NodeLogRepo(), svc, svc)
 	ws.collector.Start()
+
+	// 启动每日运行日志清理（按保留天数删除过期日志）
+	ws.startLogCleanup()
 
 	ws.registerRoutes()
 	return ws, nil
@@ -74,7 +80,65 @@ func (ws *WebServer) Shutdown(ctx context.Context) error {
 	if ws.collector != nil {
 		ws.collector.Stop()
 	}
+	if ws.logCleanupCancel != nil {
+		ws.logCleanupCancel()
+	}
 	return ws.svc.Shutdown(ctx)
+}
+
+// startLogCleanup 启动每日运行日志清理任务：按配置的保留天数删除 wf_activity_logs /
+// wf_node_logs 中过期的运行日志，避免日志表无限增长。任务在启动后延迟 1 分钟执行一次，
+// 之后每天执行一次；进程退出（Shutdown）时通过 context 取消停止。
+func (ws *WebServer) startLogCleanup() {
+	ctx, cancel := context.WithCancel(context.Background())
+	ws.logCleanupCancel = cancel
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Msgf("log cleanup goroutine panic recovered: %v", r)
+			}
+		}()
+		// 启动后稍延迟执行一次，避免与启动期其他任务争用资源
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Minute):
+		}
+		ws.runLogCleanupOnce(ctx)
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ws.runLogCleanupOnce(ctx)
+			}
+		}
+	}()
+}
+
+// runLogCleanupOnce 执行一次日志清理：读取保留天数，删除两表早于 cutoff 的行。
+func (ws *WebServer) runLogCleanupOnce(ctx context.Context) {
+	days := config.GetWorkflowLogRetentionDays()
+	if days <= 0 {
+		days = config.DefaultWorkflowLogRetentionDays
+	}
+	before := time.Now().AddDate(0, 0, -days)
+	if ws.svc != nil && ws.svc.ActivityLogRepo() != nil {
+		if n, err := ws.svc.ActivityLogRepo().DeleteOlderThan(ctx, before); err != nil {
+			log.Error().Msgf("cleanup wf_activity_logs failed: %v", err)
+		} else if n > 0 {
+			log.Info().Msgf("cleanup wf_activity_logs deleted %d rows older than %d days", n, days)
+		}
+	}
+	if ws.svc != nil && ws.svc.NodeLogRepo() != nil {
+		if n, err := ws.svc.NodeLogRepo().DeleteOlderThan(ctx, before); err != nil {
+			log.Error().Msgf("cleanup wf_node_logs failed: %v", err)
+		} else if n > 0 {
+			log.Info().Msgf("cleanup wf_node_logs deleted %d rows older than %d days", n, days)
+		}
+	}
 }
 
 func (ws *WebServer) registerRoutes() {
@@ -173,6 +237,10 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("POST /api/env-configs", ws.handleSaveEnvConfig)
 	ws.mux.HandleFunc("GET /api/env-configs/{env_name}", ws.handleGetEnvConfig)
 	ws.mux.HandleFunc("DELETE /api/env-configs/{env_name}", ws.handleDeleteEnvConfig)
+	// Redis 连通性探测（用页面上填写/保存的配置试连一下，不落库）
+	ws.mux.HandleFunc("POST /api/env-configs/test-redis", ws.handleTestEnvRedis)
+	// Activity 离线告警诊断（排查「为什么没告警」：监控集合 / 心跳数据是否为空）
+	ws.mux.HandleFunc("GET /api/offline-alert/status", ws.handleOfflineAlertStatus)
 
 	// Activity API（activity 模板管理，project 通过 ?project= 传入）
 	ws.mux.HandleFunc("GET /api/activities", ws.handleListActivities)
@@ -952,16 +1020,20 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 	}
 
 	buildReq := &workflow.BuildRequest{
-		Project:            req.Project,
-		ChainID:            req.ChainID,
-		ChainKey:           req.ChainKey,
-		ChainName:          req.ChainName,
-		Description:        req.Description,
-		NodeIDs:            req.NodeIDs,
-		SubChainIDs:        req.SubChainIDs,
-		Connections:        req.Connections,
-		DebugMode:          req.DebugMode,
-		NodeParamOverrides: req.NodeParamOverrides,
+		Project:               req.Project,
+		ChainID:               req.ChainID,
+		ChainKey:              req.ChainKey,
+		ChainName:             req.ChainName,
+		Description:           req.Description,
+		NodeIDs:               req.NodeIDs,
+		SubChainIDs:           req.SubChainIDs,
+		Connections:           req.Connections,
+		DebugMode:             req.DebugMode,
+		NodeParamOverrides:    req.NodeParamOverrides,
+		NodeSwitchOverrides:   req.NodeSwitchOverrides,
+		NodeNameOverrides:     req.NodeNameOverrides,
+		NodeCollapseOverrides: req.NodeCollapseOverrides,
+		RootResponses:         req.RootResponses,
 	}
 
 	def, err := ws.svc.SaveRootChain(r.Context(), buildReq)
@@ -1018,28 +1090,34 @@ func (ws *WebServer) handleCreateRootChain(w http.ResponseWriter, r *http.Reques
 // ============================================================
 
 type buildSubChainRequest struct {
-	Project            string                            `json:"project"`
-	ChainID            string                            `json:"chain_id"`
-	ChainName          string                            `json:"chain_name"`
-	Description        string                            `json:"description"`
-	NodeIDs            []string                          `json:"node_ids"`
-	SubChainIDs        []string                          `json:"sub_chain_ids"`
-	Connections        []workflow.ConnectionDef          `json:"connections"`
-	DebugMode          bool                              `json:"debug_mode"`
-	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
+	Project               string                            `json:"project"`
+	ChainID               string                            `json:"chain_id"`
+	ChainName             string                            `json:"chain_name"`
+	Description           string                            `json:"description"`
+	NodeIDs               []string                          `json:"node_ids"`
+	SubChainIDs           []string                          `json:"sub_chain_ids"`
+	Connections           []workflow.ConnectionDef          `json:"connections"`
+	DebugMode             bool                              `json:"debug_mode"`
+	NodeParamOverrides    map[string]map[string]interface{} `json:"node_param_overrides"`
+	NodeSwitchOverrides   map[string]string                 `json:"node_switch_overrides"`
+	NodeNameOverrides     map[string]string                 `json:"node_name_overrides"`
+	NodeCollapseOverrides map[string]bool                   `json:"node_collapse_overrides"`
 }
 
 func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSubChainRequest {
 	return &workflow.BuildSubChainRequest{
-		Project:            project,
-		ChainID:            r.ChainID,
-		ChainName:          r.ChainName,
-		Description:        r.Description,
-		NodeIDs:            r.NodeIDs,
-		SubChainIDs:        r.SubChainIDs,
-		Connections:        r.Connections,
-		DebugMode:          r.DebugMode,
-		NodeParamOverrides: r.NodeParamOverrides,
+		Project:               project,
+		ChainID:               r.ChainID,
+		ChainName:             r.ChainName,
+		Description:           r.Description,
+		NodeIDs:               r.NodeIDs,
+		SubChainIDs:           r.SubChainIDs,
+		Connections:           r.Connections,
+		DebugMode:             r.DebugMode,
+		NodeParamOverrides:    r.NodeParamOverrides,
+		NodeSwitchOverrides:   r.NodeSwitchOverrides,
+		NodeNameOverrides:     r.NodeNameOverrides,
+		NodeCollapseOverrides: r.NodeCollapseOverrides,
 	}
 }
 
@@ -1122,7 +1200,9 @@ func (ws *WebServer) handlePublishRootChain(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	ws.svc.ClearChainRootByKey(project, oneRoot.ChainKey)
+	// 发布成功需要失效 DSL 缓存，否则线上仍走老版本。
+	// 走 NotifyRootChainChanged：本地失效 + Redis pub/sub 广播，使多副本全部立即切换。
+	ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "publish")
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", release.Version).Msg("root chain published via web")
 	writeJSON(w, http.StatusOK, release)
 }
@@ -1170,6 +1250,12 @@ func (ws *WebServer) handleRollbackRootChain(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 回滚成功需要失效 InvokeRootChain 的 DSL 缓存，否则线上仍走老版本。
+	// 走 NotifyRootChainChanged：本地失效 + Redis pub/sub 广播，使多副本全部立即切换。
+	// 注意：这里不直接清理引擎实例，由错峰回收策略（数量 + 存活时间）优雅移除。
+	if oneRoot, gerr := ws.svc.GetRootChain(r.Context(), chainID); gerr == nil {
+		ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "rollback")
+	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", req.Version).Msg("root chain rolled back via web")
 	writeJSON(w, http.StatusOK, release)
 }
@@ -1212,6 +1298,11 @@ func (ws *WebServer) handleSetCurrentRelease(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 设为生效成功后同样需要失效 InvokeRootChain 的 DSL 缓存。
+	// 走 NotifyRootChainChanged：本地失效 + Redis pub/sub 广播，使多副本全部立即切换。
+	if oneRoot, gerr := ws.svc.GetRootChain(r.Context(), chainID); gerr == nil {
+		ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "set_current")
+	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", req.Version).Msg("root chain current release set via web")
 	writeJSON(w, http.StatusOK, release)
 }
@@ -1242,20 +1333,25 @@ func (ws *WebServer) handleDeleteRootChainRelease(w http.ResponseWriter, r *http
 // ============================================================
 
 type executeRequest struct {
-	Project            string                            `json:"project"`
-	ChainID            string                            `json:"chain_id"`
-	ChainKey           string                            `json:"chain_key"`
-	ChainName          string                            `json:"chain_name"`
-	Description        string                            `json:"description"`
-	NodeIDs            []string                          `json:"node_ids"`
-	TraceId            string                            `json:"trace_id"`
-	SubChainIDs        []string                          `json:"sub_chain_ids"`
-	Connections        []workflow.ConnectionDef          `json:"connections"`
-	Payload            json.RawMessage                   `json:"payload"`
-	DebugMode          bool                              `json:"debug_mode"`
-	UseRelease         bool                              `json:"use_release"`
-	EnvName            string                            `json:"env_name"`
-	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
+	Project               string                            `json:"project"`
+	ChainID               string                            `json:"chain_id"`
+	ChainKey              string                            `json:"chain_key"`
+	ChainName             string                            `json:"chain_name"`
+	Description           string                            `json:"description"`
+	NodeIDs               []string                          `json:"node_ids"`
+	TraceId               string                            `json:"trace_id"`
+	SubChainIDs           []string                          `json:"sub_chain_ids"`
+	Connections           []workflow.ConnectionDef          `json:"connections"`
+	Payload               json.RawMessage                   `json:"payload"`
+	DebugMode             bool                              `json:"debug_mode"`
+	UseRelease            bool                              `json:"use_release"`
+	EnvName               string                            `json:"env_name"`
+	NodeParamOverrides    map[string]map[string]interface{} `json:"node_param_overrides"`
+	NodeSwitchOverrides   map[string]string                 `json:"node_switch_overrides"`
+	NodeNameOverrides     map[string]string                 `json:"node_name_overrides"`
+	NodeCollapseOverrides map[string]bool                   `json:"node_collapse_overrides"`
+	// RootResponses 根节点返回值定义（保存根链时提交，执行结束后据此生成返回结构）
+	RootResponses []workflow.RootResponseItem `json:"root_responses"`
 }
 
 // parsePayload 将请求中的 payload 解析为 map。
@@ -1660,6 +1756,9 @@ type envConfigRequest struct {
 	EnvVars     []workflow.EnvVar     `json:"env_vars,omitempty"`
 	RedisConfig *workflow.RedisConfig `json:"redis_config,omitempty"`
 	MySQLConfig *workflow.MySQLConfig `json:"mysql_config,omitempty"`
+	// AlertConfig 该环境的告警配置（JSON 对象，页面「告警设置」里维护）。
+	// nil 或 enabled=false 表示不告警，测试环境应保持关闭。
+	AlertConfig *workflow.EnvAlertConfig `json:"alert_config,omitempty"`
 }
 
 func (r *envConfigRequest) toDef(project string) *workflow.EnvConfigDef {
@@ -1670,6 +1769,7 @@ func (r *envConfigRequest) toDef(project string) *workflow.EnvConfigDef {
 		EnvVars:     r.EnvVars,
 		RedisConfig: r.RedisConfig,
 		MySQLConfig: r.MySQLConfig,
+		AlertConfig: r.AlertConfig,
 	}
 }
 
@@ -1729,6 +1829,59 @@ func (ws *WebServer) handleSaveEnvConfig(w http.ResponseWriter, r *http.Request)
 	}
 	log.Info().Str("project", def.Project).Str("env_name", def.EnvName).Msg("env config saved via web")
 	writeJSON(w, http.StatusOK, def)
+}
+
+// redisTestTimeout 一次 Redis 连通性探测的整体超时（含拨号、鉴权、PING、INFO）。
+const redisTestTimeout = 8 * time.Second
+
+// handleTestEnvRedis 根据请求体中的 Redis 配置试连（PING），返回连通结论与简要服务端信息。
+// 目的：环境配置页填完 Redis 后先验证是否连得上，避免保存后才发现不可用。该接口不写入任何数据。
+func (ws *WebServer) handleTestEnvRedis(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Project     string                `json:"project"`
+		EnvName     string                `json:"env_name"`
+		RedisConfig *workflow.RedisConfig `json:"redis_config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	if req.RedisConfig == nil || req.RedisConfig.Addr == "" {
+		writeError(w, http.StatusBadRequest, "redis_config.addr is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), redisTestTimeout)
+	defer cancel()
+	out, err := workflow.TestRedisConnect(ctx, req.RedisConfig)
+	if err != nil {
+		// 连通失败按 200 返回，前端据此展示错误原因（这类失败是用户输入的预期结果，不是服务端异常）
+		log.Warn().Str("project", req.Project).Str("env", req.EnvName).
+			Str("addr", req.RedisConfig.Addr).Int("db", req.RedisConfig.DB).
+			Err(err).Msg("redis connection test failed")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "addr": req.RedisConfig.Addr, "db": req.RedisConfig.DB,
+		})
+		return
+	}
+	out["addr"] = req.RedisConfig.Addr
+	out["db"] = req.RedisConfig.DB
+	log.Info().Str("project", req.Project).Str("env", req.EnvName).
+		Str("addr", req.RedisConfig.Addr).Msg("redis connection test ok")
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleOfflineAlertStatus 返回 Activity 离线告警的诊断快照，用于排查「配置了却不告警」。
+// 仅管理员可访问（告警配置含环境信息）。
+func (ws *WebServer) handleOfflineAlertStatus(w http.ResponseWriter, r *http.Request) {
+	if !ws.currentUserIsAdmin(r) {
+		writeError(w, http.StatusForbidden, "admin only")
+		return
+	}
+	if ws.collector == nil {
+		writeError(w, http.StatusNotFound, "collector not started")
+		return
+	}
+	writeJSON(w, http.StatusOK, ws.collector.OfflineAlertStatus())
 }
 
 func (ws *WebServer) handleDeleteEnvConfig(w http.ResponseWriter, r *http.Request) {
@@ -2213,14 +2366,15 @@ func (ws *WebServer) handleListNodeLogsGlobal(w http.ResponseWriter, r *http.Req
 		pageSize = 200
 	}
 	filter := &workflow.NodeLogFilter{
-		Level:    q.Get("level"),
-		NodeID:   q.Get("node_id"),
-		NodeName: q.Get("node_name"),
-		Env:      q.Get("env"),
-		TraceID:  strings.TrimSpace(q.Get("trace_id")),
-		Keyword:  q.Get("keyword"),
-		Limit:    pageSize,
-		Offset:   (page - 1) * pageSize,
+		Level:       q.Get("level"),
+		NodeID:      q.Get("node_id"),
+		NodeName:    q.Get("node_name"),
+		Env:         q.Get("env"),
+		TraceID:     strings.TrimSpace(q.Get("trace_id")),
+		RootChainID: strings.TrimSpace(q.Get("root_chain_id")),
+		Keyword:     q.Get("keyword"),
+		Limit:       pageSize,
+		Offset:      (page - 1) * pageSize,
 	}
 	logs, total, err := ws.svc.ListNodeLogsGlobal(r.Context(), project, filter)
 	if err != nil {
@@ -2275,10 +2429,16 @@ func (ws *WebServer) handleNodeLogStats(w http.ResponseWriter, r *http.Request) 
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Error().Err(err).Msg("failed to encode json response")
+	// 先编码到缓冲区：避免 Encode 中途失败导致响应体残缺（空 body → 客户端解析 "Unexpected end of JSON input"）
+	buf, err := json.Marshal(data)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to marshal json response")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"internal error: failed to marshal response"}`))
+		return
 	}
+	w.WriteHeader(status)
+	_, _ = w.Write(buf)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

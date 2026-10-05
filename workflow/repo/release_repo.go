@@ -104,9 +104,12 @@ func (r *RootChainReleaseRepo) HasReleases(ctx context.Context, project, chainID
 }
 
 // MaxVersion 查询指定根链的最大发布版本号（无记录返回 0）。
+// 注意：必须使用 Unscoped 统计“包含软删除”的所有行，否则删除最大版本号后会复用该版本号，
+// 与 uk_project_chain_version 唯一索引冲突导致新发布插入失败。
 func (r *RootChainReleaseRepo) MaxVersion(ctx context.Context, project, chainID string) (int, error) {
 	var maxVer int
 	err := r.db.WithContext(ctx).
+		Unscoped().
 		Model(&models.RootChainReleaseModel{}).
 		Where("project = ? AND chain_id = ?", project, chainID).
 		Select("COALESCE(MAX(version), 0)").

@@ -72,9 +72,9 @@
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>Activity ID</th><th>名称</th><th>标签</th><th>命名空间</th><th>活动名称</th><th>参数数</th><th>创建时间</th><th>操作</th>
+          <th>Activity ID</th><th>名称</th><th>标签</th><th>命名空间</th><th>活动名称</th><th>参数数</th><th>已发布引用</th><th>引用 Nodes</th><th>创建时间</th><th>操作</th>
         </tr></thead>
-        <tbody id="act-table"><tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr></tbody>
+        <tbody id="act-table"><tr><td colspan="10" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr></tbody>
       </table>
       <div class="log-pager" id="act-pager" style="display:none">
         <button class="btn btn-sm btn-outline" id="act-prev" onclick="changeActivityPage(-1)">上一页</button>
@@ -161,6 +161,10 @@
         </div>
       </div>
       <div class="form-group">
+        <label>参数模板（如果方法参数不是对象，而是值，则用此语法） (ArgTemplate，可选) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">支持 {{field}} 语法, field 为输入参数的key</span></label>
+        <input id="act-arg-template" placeholder='{{name}}'>
+      </div>
+      <div class="form-group">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <label>返回值设置 (ReturnValues) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（从活动返回值 map 中提取指定 key 重命名输出；key 留空表示返回全部内容）</span></label>
           <button class="btn btn-sm btn-outline" onclick="addReturnValueRow()" type="button">+ 添加返回值</button>
@@ -169,11 +173,7 @@
           <div id="act-return-values-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无返回值设置</div>
         </div>
       </div>
-      <div class="form-group">
-        <label>参数模板 (ArgTemplate，可选) <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">支持 {{steps.id.responses.field}} 语法</span></label>
-        <input id="act-arg-template" placeholder='{"name": "{{$.responses.name}}"}'>
-      </div>
-      <div class="form-group">
+      <div class="form-group" style="display: none;">
         <label>返回值模版 (Responses JSON，可选)</label>
         <textarea id="act-responses" placeholder='{"user_id": "id"}'></textarea>
       </div>
@@ -265,7 +265,7 @@
     </div>
     <div class="table-wrap">
       <table id="nodes-table">
-        <thead><tr><th>Node ID</th><th>名称</th><th>类型</th><th>大类</th><th>分类</th><th>标签</th><th>命名空间</th><th>状态</th><th>版本</th><th>描述</th><th>操作</th></tr></thead>
+        <thead><tr><th>Node ID</th><th>名称</th><th>类型</th><th>大类</th><th>标签</th><th>命名空间</th><th>已发布引用</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -295,7 +295,7 @@
     </div>
     <div class="table-wrap">
       <table id="root-table">
-        <thead><tr><th>Chain ID</th><th>Chain Key</th><th>名称</th><th>描述</th><th>状态</th><th>引用 Nodes</th><th>引用 Sub Chains</th><th>Connections</th><th>线上版本</th><th>操作</th></tr></thead>
+        <thead><tr><th>Chain ID</th><th>Chain Key</th><th>名称</th><th>描述</th><th>状态</th><th>引用 Nodes</th><th>引用 Sub Chains</th><th>Connections</th><th>线上版本</th><th>必需参数</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -316,7 +316,11 @@
         <option value="info">info</option>
         <option value="error">error</option>
       </select>
-      <input id="all-log-trace-id" placeholder="trace_id" style="width:280px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+      <select id="all-log-root-chain-id" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem;max-width:260px">
+        <option value="">全部 Root Chain</option>
+      </select>
+      <input id="all-log-trace-id" placeholder="trace_id" style="width:240px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+      <input id="all-log-payload" placeholder="payload 内容（模糊匹配，留空忽略）" style="width:260px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
       <button class="btn btn-primary" onclick="loadAllLogs()">搜索</button>
       <button class="btn btn-outline" onclick="clearAllLogFilters()">重置</button>
     </div>
@@ -475,6 +479,7 @@
         <select id="node-type" onchange="onNodeTypeChange()">
           <option value="custom/Activity">custom/Activity（活动编排）</option>
           <option value="custom/CondSwitch">custom/CondSwitch（条件判断，仅做语法条件判断）</option>
+          <option value="custom/ReturnValue">custom/ReturnValue（返回值节点）</option>
           <option value="end">end（结束节点）</option>
         </select>
       </div>
@@ -880,6 +885,31 @@
   </div>
 </div>
 
+<!-- 编排节点路由条件（switch_condition）编辑器：仅修改本 DSL 中该节点实例，不改节点定义本身 -->
+<div class="modal-overlay" id="orch-switch-modal" style="display:none">
+  <div class="modal" style="width:720px;max-width:96vw">
+    <h2>编辑节点<button class="modal-close" onclick="document.getElementById('orch-switch-modal').style.display='none';_orchSwitchEditId='';" title="关闭">&times;</button></h2>
+    <p style="margin:0 0 8px;color:var(--text-muted);font-size:.82rem">该设置<b>仅对当前链生效</b>，只修改本 DSL 中该节点实例的<b>名称</b>与 <code>node_config.switch_condition</code>，不会修改节点定义本身，也不影响其它节点。</p>
+    <div style="margin:-4px 0 10px;color:var(--primary);font-size:.92rem;font-weight:600" id="orch-switch-node-name"></div>
+    <div style="margin:0 0 8px;font-size:.78rem;color:#92400e" id="orch-switch-override-flag"></div>
+    <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">节点名称（仅本链实例生效，不影响节点定义）</label>
+    <input id="orch-switch-name" type="text" style="width:100%;font-size:.85rem;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:10px" placeholder="节点显示名称" />
+    <div id="orch-switch-cond-wrap">
+      <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">路由条件（switch_condition，仅 Activity / CondSwitch 适用）</label>
+      <textarea id="orch-switch-text" rows="5" style="width:100%;font-family:var(--font-mono);font-size:.82rem;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical" placeholder="例如：In('K1', [responses.tag_list])"></textarea>
+      <div style="margin-top:12px;border-top:1px dashed var(--border);padding-top:10px">
+        <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">输入参数（点击复制）：</div>
+        <div id="orch-switch-input-vars" style="display:flex;flex-wrap:wrap;min-height:18px;margin-bottom:10px"></div>
+        <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">输出返回值（点击复制）：</div>
+        <div id="orch-switch-output-vars" style="display:flex;flex-wrap:wrap;min-height:18px"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn btn-sm btn-primary" onclick="saveOrchSwitchOverride()">保存</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function openDslModal(title, content) {
   document.getElementById('dsl-modal-title').innerHTML = esc(title) + '<button class="modal-close" onclick="closeDslModal()" title="关闭">&times;</button>';
@@ -992,6 +1022,10 @@ function copyDslContent() {
             <div class="form-group"><label>DB</label><input id="env-redis-db" type="number" value="0"></div>
             <div class="form-group"><label>Username</label><input id="env-redis-user" placeholder="可选"></div>
           </div>
+          <div class="form-row" style="align-items:center;gap:8px;margin-top:2px">
+            <button type="button" class="btn btn-sm btn-outline" id="env-redis-test-btn" onclick="testEnvRedisConn()">🔌 测试连接</button>
+            <span id="env-redis-test-result" class="redis-test-result" style="display:none"></span>
+          </div>
         </div>
         <div class="exec-card" style="flex:1;margin-bottom:12px">
           <h4 style="font-size:.85rem;margin-bottom:8px">MySQL 配置</h4>
@@ -1016,7 +1050,7 @@ function copyDslContent() {
       <h4 style="font-size:.85rem;margin:12px 0 8px">已配置环境</h4>
       <div class="table-wrap" style="max-height:220px;overflow-y:auto">
         <table id="env-configs-table">
-          <thead><tr><th>环境名</th><th>描述</th><th>Redis</th><th>MySQL</th><th>变量数</th><th>操作</th></tr></thead>
+          <thead><tr><th>环境名</th><th>描述</th><th>Redis</th><th>MySQL</th><th>变量数</th><th>告警</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1026,6 +1060,49 @@ function copyDslContent() {
 
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeProjectModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 环境告警设置弹窗 -->
+<div class="modal-overlay" id="env-alert-modal-overlay" onclick="if(event.target===this)closeEnvAlertModal()">
+  <div class="modal" id="env-alert-modal" style="width:640px;max-width:96vw">
+    <h2>环境告警设置<button class="modal-close" onclick="closeEnvAlertModal()" title="关闭">&times;</button></h2>
+    <input type="hidden" id="env-alert-env-name">
+    <div id="env-alert-env-tip" style="margin:-4px 0 12px;color:var(--primary);font-size:.9rem;font-weight:600"></div>
+    <p style="margin:0 0 10px;font-size:.76rem;color:var(--text-muted);line-height:1.6">
+      仅对该环境下【已发布上线】的 Activity 生效：worker 停止上报心跳（掉线）时按下面配置发送告警。<br>
+      测试环境建议保持关闭，避免噪声。
+    </p>
+    <div class="form-row" style="align-items:center;gap:6px;margin-bottom:8px">
+      <input type="checkbox" id="env-alert-enabled" style="width:auto;margin:0">
+      <label for="env-alert-enabled" style="margin:0;font-size:.82rem;cursor:pointer;font-weight:600">开启告警</label>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>告警通道</label>
+        <select id="env-alert-channel">
+          <option value="feishu">飞书机器人</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>机器人 Webhook（留空用全局配置）</label>
+        <input id="env-alert-webhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>离线判定阈值（秒，留空用全局）</label>
+        <input id="env-alert-threshold" type="number" min="1" placeholder="60">
+      </div>
+      <div class="form-group">
+        <label>重复提醒间隔（分钟，0=只提醒一次）</label>
+        <input id="env-alert-remind" type="number" min="0" placeholder="30">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeEnvAlertModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveEnvAlertConfig()">保存告警设置</button>
     </div>
   </div>
 </div>

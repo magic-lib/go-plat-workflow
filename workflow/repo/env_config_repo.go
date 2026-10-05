@@ -43,6 +43,28 @@ func (r *EnvConfigRepo) GetByName(ctx context.Context, project, envName string) 
 	return m.ToDef(), nil
 }
 
+// ListAlertEnvs 列出所有【开启了告警】的环境配置（供离线巡检扫描告警目标）。
+// 告警配置以 JSON 存在 alert_config 列，SQL 层无法直接过滤 enabled，
+// 故全量取出后在内存中筛选（环境数量很小，成本可忽略）。
+func (r *EnvConfigRepo) ListAlertEnvs(ctx context.Context) ([]*workflow.EnvConfigDef, error) {
+	var modelsList []models.EnvConfigModel
+	err := r.db.WithContext(ctx).
+		Where("alert_config IS NOT NULL AND alert_config <> ''").
+		Order("project ASC, env_name ASC").
+		Find(&modelsList).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*workflow.EnvConfigDef, 0, len(modelsList))
+	for i := range modelsList {
+		def := modelsList[i].ToDef()
+		if def.AlertConfig.AlertEnabled() {
+			out = append(out, def)
+		}
+	}
+	return out, nil
+}
+
 // ListByProject 列出指定项目下所有环境配置，按环境名排序。
 // 按 env_name 去重（保留首个），避免数据库中存在重复环境名时前端展示重复项。
 func (r *EnvConfigRepo) ListByProject(ctx context.Context, project string) ([]*workflow.EnvConfigDef, error) {

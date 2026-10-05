@@ -1,7 +1,6 @@
 package models
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/magic-lib/go-plat-workflow/workflow"
@@ -16,7 +15,7 @@ type NodeLogModel struct {
 	Env          string    `gorm:"column:env;type:varchar(128);not null" json:"env"`
 	NodeID       string    `gorm:"column:node_id;type:varchar(255);not null;index:idx_node_proj" json:"node_id"`
 	NodeName     string    `gorm:"column:node_name;type:varchar(255);not null" json:"node_name"`
-	EventID      string    `gorm:"column:event_id;type:varchar(128);index" json:"event_id"`
+	EventID      string    `gorm:"column:event_id;type:varchar(500)" json:"event_id"`
 	Level        string    `gorm:"column:level;type:varchar(16);not null;index" json:"level"`
 	Timestamp    int64     `gorm:"column:ts;not null;index" json:"timestamp"`
 	DurationMs   int64     `gorm:"column:duration_ms" json:"duration_ms"`
@@ -26,8 +25,10 @@ type NodeLogModel struct {
 	ErrorMsg     string    `gorm:"column:error_msg;type:text" json:"error_msg"`
 	TraceID      string    `gorm:"column:trace_id;type:varchar(128);index;default:''" json:"trace_id"`
 	RootChainID  string    `gorm:"column:root_chain_id;type:varchar(128);index;default:''" json:"root_chain_id"`
+	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），用于追溯当时执行的是哪个发布版本。
+	RootChainReleaseID string `gorm:"column:root_chain_release_id;type:varchar(128);index;default:''" json:"root_chain_release_id"`
 	SpanID       string    `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
-	RelationType string    `gorm:"column:relation_type;type:varchar(64);index;default:''" json:"relation_type"`
+	RelationType string    `gorm:"column:relation_type;type:varchar(500);default:''" json:"relation_type"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -48,12 +49,13 @@ func (m *NodeLogModel) ToDef() *workflow.NodeLogDef {
 		Level:        m.Level,
 		Timestamp:    m.Timestamp,
 		DurationMs:   m.DurationMs,
-		Payload:      json.RawMessage(m.Payload),
-		Arguments:    json.RawMessage(m.Arguments),
+		Payload:      safeRawMessage(m.Payload),
+		Arguments:    safeRawMessage(m.Arguments),
 		Result:       m.Result,
 		ErrorMsg:     m.ErrorMsg,
 		TraceID:      m.TraceID,
 		RootChainID:  m.RootChainID,
+		RootChainReleaseID: m.RootChainReleaseID,
 		SpanID:       m.SpanID,
 		RelationType: m.RelationType,
 		CreatedAt:    m.CreatedAt,
@@ -76,6 +78,7 @@ func (m *NodeLogModel) FromDef(def *workflow.NodeLogDef) {
 	m.ErrorMsg = def.ErrorMsg
 	m.TraceID = def.TraceID
 	m.RootChainID = def.RootChainID
+	m.RootChainReleaseID = def.RootChainReleaseID
 	m.SpanID = def.SpanID
 	m.RelationType = def.RelationType
 }

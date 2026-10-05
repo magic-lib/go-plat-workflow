@@ -7,6 +7,7 @@ import (
 	"github.com/magic-lib/go-plat-curl/curl"
 	"github.com/magic-lib/go-plat-utils/goroutines"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
@@ -15,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
@@ -245,6 +247,8 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 		headers = metaData.ToHeader(headers)
 	}
 
+	oldParam := conv.String(params)
+
 	resp, params, err := wfWorker.RequestActivity(ctx, actDef, params, headers)
 	durationMs := time.Since(start).Milliseconds()
 
@@ -265,7 +269,7 @@ func (e *MQExecutor) RequestActivity(ctx context.Context, worker *rulegox.MQWork
 		attributes = logInfo.Attributes
 	}
 	e.asyncPushLog(worker.Project, worker.Env, actDef.ActNamespace, actDef.ActName,
-		level, start.Unix(), durationMs, params, resp, errMsg, rootChainID, traceID, spanID, attributes)
+		level, start.Unix(), durationMs, oldParam, resp, errMsg, rootChainID, traceID, spanID, attributes)
 
 	if err != nil {
 		return nil, params, err
@@ -296,7 +300,7 @@ func (e *MQExecutor) asyncPushLog(project, env, actNamespace, actName, level str
 			RootChainID:  rootChainID,
 			TraceID:      traceID,
 			SpanID:       spanID,
-			Attributes:   toLogString(attributes),
+			Attributes:   conv.String(attributes),
 		}
 		if err := store.Create(context.Background(), def); err != nil {
 			log.Printf("mq_executor: save activity log failed, err: %v", err)
@@ -313,27 +317,8 @@ func toLogRawMessage(v any) json.RawMessage {
 	if raw, ok := v.(json.RawMessage); ok {
 		return raw
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	return b
-}
-
-// toLogString 将任意值转为 JSON 字符串，便于直接存入 ActivityLogDef.Attributes（string 类型）。
-// nil 时返回空串；其余按 JSON 序列化。
-func toLogString(v any) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
+	b := conv.String(v)
+	return []byte(b)
 }
 
 // feishuAlertSender 飞书自定义机器人告警发送器，实现 commnode.AlertSender。
@@ -372,13 +357,58 @@ func (s *feishuAlertSender) SendAlert(ctx context.Context, title, content string
 	}
 }
 
+// AlertSender 告警发送能力抽象（与 commnode.AlertSender 同一契约）。
+// 在 workflow 包内声明别名，便于包内（如 Activity 离线巡检）按 webhook 构造发送器。
+type AlertSender = commnode.AlertSender
+
+// 包级告警发送器：由 SetFeiShuAlertWebhook / SetAlertSender 注入。
+// 与 commnode 内的 defaultAlertSender 分开保存，使 workflow 包自身
+// （如 Activity 离线巡检）也能主动发送告警。
+var (
+	alertSender   commnode.AlertSender
+	alertSenderMu sync.RWMutex
+)
+
+// SetAlertSender 注入告警发送器，供 workflow 包与 commnode 组件共用。
+// 传入 nil 表示清除（回退为静默跳过告警）。
+func SetAlertSender(sender commnode.AlertSender) {
+	alertSenderMu.Lock()
+	alertSender = sender
+	alertSenderMu.Unlock()
+	commnode.SetAlertSender(sender)
+}
+
+// CurrentAlertSender 返回当前注入的告警发送器（未注入返回 nil）。
+func CurrentAlertSender() commnode.AlertSender {
+	alertSenderMu.RLock()
+	defer alertSenderMu.RUnlock()
+	return alertSender
+}
+
+// SendAlert 异步发送一条告警：未注入发送器时静默跳过（即"配置了机器人地址才发"）。
+// 异步执行避免阻塞巡检/业务主流程；内部 recover 防止告警逻辑异常影响业务。
+func SendAlert(ctx context.Context, title, content string) {
+	s := CurrentAlertSender()
+	if s == nil {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("workflow alert: panic when sending alert, title=%s, err=%v", title, r)
+			}
+		}()
+		s.SendAlert(ctx, title, content)
+	}()
+}
+
 // SetFeiShuAlertWebhook 设置飞书自定义机器人 webhook 地址并注入 commnode 告警发送器。
 // webhook 为空时注入的发送器会静默 no-op（即"配置了机器人地址才发"）。
 func SetFeiShuAlertWebhook(webhook string) {
 	if webhook == "" {
 		return
 	}
-	commnode.SetAlertSender(&feishuAlertSender{webhook: webhook})
+	SetAlertSender(&feishuAlertSender{webhook: webhook})
 }
 
 func (e *MQExecutor) BuildWorker(env string, projectName string, redisCfg *RedisConfig) (*rulegox.MQWorker, error) {
@@ -701,6 +731,7 @@ type InvokeRequest struct {
 	ChainKey string         `json:"chain_key"`
 	Metadata InvokeMetadata `json:"metadata"`
 	Payload  map[string]any `json:"payload"`
+	Result   any            `json:"-"`
 }
 
 type InvokeMetadata struct {
@@ -718,6 +749,9 @@ func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string
 	}
 	if invokeRequest == nil {
 		return nil, fmt.Errorf("invokeRequest is nil")
+	}
+	if invokeRequest.Result != nil {
+		invokeRequest.Metadata.IsAsync = false // 如果需要返回值，这里就必须为false，才能准确拿到返回
 	}
 
 	jsonMapTemp := templates.NewJsonMapTemplate("{", "}")
@@ -756,6 +790,16 @@ func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string
 	}
 	if respData.Code != 0 {
 		return nil, fmt.Errorf("%s", respData.Message)
+	}
+	// 若调用方提供了 Result 出参指针，则把返回值填充进去（调用方可直接读取，无需再用返回值类型断言）。
+	if invokeRequest.Result != nil {
+		if m, ok := respData.Data.(map[string]any); ok {
+			if resp2, ok := m[activity.Responses]; ok {
+				if resp2 != nil {
+					_ = conv.Unmarshal(resp2, invokeRequest.Result)
+				}
+			}
+		}
 	}
 	return respData.Data, nil
 }

@@ -6,16 +6,20 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/utils/httputil"
 	"github.com/magic-lib/go-plat-workflow/workflow/config"
 	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 	"io"
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/conn"
@@ -28,10 +32,12 @@ import (
 	param "github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/builder"
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/magic-lib/go-plat-workflow/workflow/models"
 	"github.com/magic-lib/go-plat-workflow/workflow/repo"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
+	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 )
 
@@ -56,9 +62,37 @@ type WorkflowService struct {
 	dslBuilder             *builder.DSLBuilder
 	engine                 *engine.WorkflowEngine
 
-	// invokeRootChainMapCache 缓存「发布在线」的根链 DSL（key = 确定性 ID，value = 解析后的 RuleChain）。
+	// invokeRootChainMapCache 缓存「发布在线」的根链 DSL（key = 确定性 ID，value = 解析后的 RuleChain 及其发布版本标识）。
 	// key 由 project + chain_key 经 id.GetUUID 确定性生成，相同入参直接命中缓存，避免重复查库。
-	invokeRootChainMapCache cmap.ConcurrentMap[string, *types.RuleChain]
+	// invokeRootChainMapCache 「发布在线」根链 DSL 缓存，key 为 id.GetUUID(project+"-"+chainKey)。
+	invokeRootChainMapCache cmap.ConcurrentMap[string, *invokeCacheEntry]
+	// chainPoolVersions 每条根链在 rulego 引擎池中已加载版本的登记表，用于错峰回收。
+	// key 同上为 cacheKey，与引擎池实际 key（cacheKey@version）区分。
+	chainPoolVersions cmap.ConcurrentMap[string, *chainPoolEntry]
+	// invalidateBus 根链版本变更的跨副本广播（Redis pub/sub）。
+	// 多副本部署时用于通知其他副本失效本地缓存，使其立即切到新版本。
+	invalidateBus *invalidatePubSub
+}
+
+// cacheKeyOf 计算根链的进程内缓存 key（与 InvokeRootChain 中保持一致）。
+func cacheKeyOf(project, chainKey string) string {
+	return id.GetUUID(project + "-" + chainKey)
+}
+
+// NotifyRootChainChanged 根链版本发生变更（发布/回滚/设为生效/删除）时调用：
+//  1. 失效本进程内的 DSL 缓存（并标记在线版本未知，下次调用重新解析到新版本）；
+//  2. 通过 Redis pub/sub 广播失效事件，让其他副本同步失效 → 全副本立即切到新版本。
+//
+// 广播是异步的且失败仅记录日志，不影响本地变更结果；
+// Redis 未配置时自动降级为仅本地失效（等同单机部署行为）。
+func (s *WorkflowService) NotifyRootChainChanged(project, chainKey, reason string) {
+	// 1) 本地失效
+	s.ClearChainRootByKey(project, chainKey)
+	// 2) 广播给其他副本
+	if s.invalidateBus == nil {
+		return
+	}
+	go s.invalidateBus.broadcast(project, chainKey, reason)
 }
 
 // NewWorkflowService 创建工作流服务实例，自动建表。
@@ -91,6 +125,44 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		"ALTER TABLE wf_activity_logs MODIFY COLUMN result text",
 	).Error; err != nil {
 		return nil, err
+	}
+
+	// wf_node_logs 的 event_id / relation_type 加长至 varchar(1000)，以支持更大数据（如完整链路上下文）。
+	// 注意：模型已移除 `;index`，否则 AutoMigrate 会尝试在 varchar(1000) 上建全列索引，
+	// 触发 MySQL 5.7「Specified key was too long; max key length is 3072 bytes」（utf8mb4 下 1000 字符≈4000 字节超限）。
+	// 因此索引完全由下方显式 SQL 管理：先删旧索引 → 改长度（保留 relation_type 默认值）
+	// → 以列名为名重建前缀(191)索引（191*4=764 字节 < 3072，安全且支持等值检索）。
+	for _, col := range []string{"event_id", "relation_type"} {
+		var idxs []string
+		db.Raw("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_NAME = 'wf_node_logs' AND COLUMN_NAME = ?", col).Scan(&idxs)
+		// 回退：GORM 对 `;index`（无显式名）生成的索引名即列名
+		idxs = append(idxs, col)
+		for _, ix := range idxs {
+			if ix == "" {
+				continue
+			}
+			// 删除该列上的索引；忽略「索引不存在」类错误（可能已在上一步删掉或回退名不匹配）
+			if err := db.Exec("ALTER TABLE wf_node_logs DROP INDEX `" + ix + "`").Error; err != nil {
+				if !strings.Contains(err.Error(), "check that column") &&
+					!strings.Contains(err.Error(), "doesn't exist") &&
+					!strings.Contains(err.Error(), "Unknown") {
+					return nil, err
+				}
+			}
+		}
+	}
+	if err := db.Exec("ALTER TABLE wf_node_logs MODIFY COLUMN event_id varchar(500)").Error; err != nil {
+		return nil, err
+	}
+	if err := db.Exec("ALTER TABLE wf_node_logs MODIFY COLUMN relation_type varchar(500) DEFAULT ''").Error; err != nil {
+		return nil, err
+	}
+	// 以列名为索引名重建前缀(191)索引（与 GORM 约定一致，避免后续 AutoMigrate 重复创建）
+	for _, col := range []string{"event_id", "relation_type"} {
+		if err := db.Exec("ALTER TABLE wf_node_logs ADD INDEX `" + col + "` (" + col + "(191))").Error; err != nil &&
+			!strings.Contains(err.Error(), "Duplicate") && !strings.Contains(err.Error(), "Duplicate key name") {
+			return nil, err
+		}
 	}
 
 	// AutoMigrate 已自动新增 trace_id 列；这里补建索引（幂等：已存在则忽略报错）。
@@ -158,7 +230,24 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		mqExecutor:              workflow.NewMQExecutorWithLogAndEnv(activityLogRepo, envConfigRepo),
 		dslBuilder:              builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
 		engine:                  engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
-		invokeRootChainMapCache: cmap.New[*types.RuleChain](),
+		invokeRootChainMapCache: cmap.New[*invokeCacheEntry](),
+		chainPoolVersions:       cmap.New[*chainPoolEntry](),
+	}
+
+	// 启动后台巡检：即使用户无流量，也能按时间策略错峰回收历史版本实例。
+	go s.chainPoolJanitor()
+
+	// 启动跨副本失效广播的订阅端（仅多副本部署时需要）。
+	// 由 custom.normal.root_chain_broadcast_enabled 控制：
+	//   - true（默认）：多副本部署，建立 Redis 订阅，使各副本发布即时生效；
+	//   - false：单机部署，完全不创建订阅与后台协程，省去 Redis 开销。
+	// 关闭时 invalidateBus 保持 nil，NotifyRootChainChanged 自动退化为仅本地失效。
+	if config.GetRootChainBroadcastEnabled() {
+		s.invalidateBus = newInvalidatePubSub(s)
+		s.invalidateBus.Start()
+		log.Info().Msg("Root chain invalidate broadcast enabled (multi-instance mode)")
+	} else {
+		log.Info().Msg("Root chain invalidate broadcast disabled (single-instance mode)")
 	}
 
 	log.Info().Msg("WorkflowService initialized, tables migrated")
@@ -338,12 +427,43 @@ func (s *WorkflowService) GetProjectRedisConfig(ctx context.Context, project, en
 
 // RegisterNode 注册节点到数据库。
 func (s *WorkflowService) RegisterNode(ctx context.Context, def *workflow.NodeDef) error {
+	// 保存前为 activities 缺失的 arg_template / ret_template 补齐元定义数据，避免落库后运行时解析参数出错
+	if err := s.fillNodeActivityTemplates(ctx, def); err != nil {
+		log.Warn().Err(err).Str("node_id", def.NodeID).Msg("fillNodeActivityTemplates skipped due to error")
+	}
 	return s.nodeRepo.Create(ctx, def)
 }
 
 // GenerateNodeID 生成下一个节点的自动 ID（如 N000005）。
 func (s *WorkflowService) GenerateNodeID(ctx context.Context) (string, error) {
 	return s.nodeRepo.NextNodeID(ctx)
+}
+
+// ensureBuiltinReturnNode 幂等确保项目下存在内置「返回值节点」（custom/ReturnValue）定义。
+// 该节点是内置类型，无对应节点配置（行为由 rulego 注册的实现决定），
+// 但作为一条普通 NodeDef 入库后，其 node_id 与普通节点一样由 NextNodeID 生成（N0000xx 形式），
+// 编排页添加时与其它类型完全一致（instanceId = node_id__rand），避免显示成类型名。
+func (s *WorkflowService) ensureBuiltinReturnNode(ctx context.Context, project string) error {
+	exists, err := s.nodeRepo.ExistsByType(ctx, project, common.ReturnValueNodeTypeName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	nodeID, err := s.nodeRepo.NextNodeID(ctx)
+	if err != nil {
+		return err
+	}
+	def := &workflow.NodeDef{
+		Project: project,
+		NodeID:  nodeID,
+		Name:    "返回值节点",
+		Type:    common.ReturnValueNodeTypeName,
+		Kind:    "return",
+		Status:  models.NodeStatusEnabled,
+	}
+	return s.nodeRepo.Create(ctx, def)
 }
 
 // BatchRegisterNodes 批量注册节点（upsert：project+node_id 冲突则更新，否则插入）。
@@ -367,6 +487,11 @@ func (s *WorkflowService) GetNode(ctx context.Context, project, nodeID string) (
 // ListNodes 列出指定项目下的节点，可按命名空间与 tag 过滤（为空表示不过滤）。
 // onlyEnabled=true 时仅返回启用状态（用于编排选择），false 时返回全部（含禁用，用于管理列表）。
 func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag string, onlyEnabled, isAdmin bool) ([]*workflow.NodeDef, error) {
+	// 确保内置节点（custom/ReturnValue 返回值节点）存在：其 node_id 与其它节点同样由 NextNodeID 生成（N0000xx 形式），
+	// 这样编排页添加时 instanceId = node_id__rand，与其它类型生成方式完全一致。
+	if err := s.ensureBuiltinReturnNode(ctx, project); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin return node failed")
+	}
 	all, err := s.nodeRepo.List(ctx, project, namespace, onlyEnabled)
 	if err != nil {
 		return nil, err
@@ -401,6 +526,8 @@ func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag
 			if _, ok := idx.nodes[n.NodeID]; ok {
 				n.PublishedInRootChain = true
 			}
+			// 同时带上明细列表（含根链 ID/名称/版本），供列表展示引用数量与悬停明细
+			n.PublishedRootChains = sortedRefs(idx.nodeChains, n.NodeID)
 		}
 	}
 	return all, nil
@@ -416,7 +543,111 @@ func (s *WorkflowService) UpdateNode(ctx context.Context, def *workflow.NodeDef,
 	if published && !isAdmin {
 		return workflow.ErrNodePublishedInRootChain
 	}
+	// 保存前为 activities 缺失的 arg_template / ret_template 补齐元定义数据，避免落库后运行时解析参数出错
+	if err := s.fillNodeActivityTemplates(ctx, def); err != nil {
+		log.Warn().Err(err).Str("node_id", def.NodeID).Msg("fillNodeActivityTemplates skipped due to error")
+	}
 	return s.nodeRepo.Update(ctx, def)
+}
+
+// isEmptyTemplateValue 判断 arg_template / ret_template 是否被当成「空」处理（缺失、空串、空对象、空数组）。
+func isEmptyTemplateValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		return s == "" || s == "{}" || s == "null"
+	case map[string]any:
+		return len(t) == 0
+	case []any:
+		return len(t) == 0
+	}
+	return false
+}
+
+// fillNodeActivityTemplates 在保存节点前，为 node_config.activities 中缺失 arg_template /
+// ret_template 的 activity，从对应的 activity 元定义（项目内按 act_namespace+act_name 定位）
+// 补齐这两个字段，确保落库的节点配置带有完整的参数/返回值模板，运行时解析不再出错。
+// 仅当对应字段缺失或为空时才补齐，已显式配置的字段保留原值（支持节点级自定义覆盖）。
+func (s *WorkflowService) fillNodeActivityTemplates(ctx context.Context, def *workflow.NodeDef) error {
+	if len(def.Configuration) == 0 {
+		return nil
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(def.Configuration, &cfg); err != nil {
+		return err
+	}
+	nc, ok := cfg["node_config"].(map[string]any)
+	if !ok {
+		nc = map[string]any{}
+		cfg["node_config"] = nc
+	}
+	actsRaw, ok := nc["activities"]
+	if !ok {
+		return nil
+	}
+	// activities 按阶段分组：[][]activity；也兼容扁平 []activity
+	stages, ok := actsRaw.([]any)
+	if !ok {
+		return nil
+	}
+	changed := false
+	for si := range stages {
+		stage, ok := stages[si].([]any)
+		if !ok {
+			// 扁平结构：把单个 activity 当成单元素阶段处理
+			if actMap, ok := stages[si].(map[string]any); ok {
+				stage = []any{actMap}
+			} else {
+				continue
+			}
+		}
+		for ai := range stage {
+			actMap, ok := stage[ai].(map[string]any)
+			if !ok {
+				continue
+			}
+			ns, _ := actMap["act_namespace"].(string)
+			name, _ := actMap["act_name"].(string)
+			if ns == "" || name == "" {
+				continue
+			}
+			actDef, err := s.activityRepo.GetByNamespaceName(ctx, def.Project, ns, name)
+			if err != nil {
+				// 找不到对应 activity 元定义，跳过补齐（不阻断保存）
+				continue
+			}
+			// 补齐 arg_template（缺省或空时），来源为 activity 的 arg_template 字符串
+			if v, ok := actMap["arg_template"]; !ok || isEmptyTemplateValue(v) {
+				if actDef.ArgTemplate != "" {
+					actMap["arg_template"] = actDef.ArgTemplate
+					changed = true
+				}
+			}
+			// 补齐 ret_template（缺省或空时），来源为 activity 的 return_values
+			if v, ok := actMap["ret_template"]; !ok || isEmptyTemplateValue(v) {
+				if len(actDef.ReturnValues) > 0 && string(actDef.ReturnValues) != "null" {
+					var rv any
+					if err := json.Unmarshal(actDef.ReturnValues, &rv); err == nil {
+						actMap["ret_template"] = rv
+						changed = true
+					}
+				}
+			}
+			stage[ai] = actMap
+		}
+		stages[si] = stage
+	}
+	if changed {
+		b, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		def.Configuration = b
+	}
+	return nil
 }
 
 // DeleteNode 软删除节点。
@@ -604,7 +835,17 @@ func (s *WorkflowService) ListRootChains(ctx context.Context, project string) ([
 			return nil, err
 		}
 		c.HasReleases = has
+
+		// 解析 dsl_json，提取每个节点 arguments/responses 中引用的 {{arguments.xxx}} 入参，
+		// 赋值给 MustInputParams，供前端列表展示该根链调用所需入参。
+		var rc types.RuleChain
+		if c.DSLJSON != "" {
+			if err := json.Unmarshal([]byte(c.DSLJSON), &rc); err == nil {
+				c.MustInputParams = builder.CollectAllInputArguments(rc.Metadata.Nodes)
+			}
+		}
 	}
+
 	return chains, nil
 }
 
@@ -617,7 +858,22 @@ func (s *WorkflowService) DeleteRootChain(ctx context.Context, project, chainID 
 	if has {
 		return workflow.ErrRootChainHasReleases
 	}
-	return s.rootChainRepo.Delete(ctx, project, chainID)
+	// 删除前先取回 ChainKey（删除后就查不到了），用于后续清理缓存与引擎池实例。
+	var chainKey string
+	if rc, qerr := s.rootChainRepo.GetByID(ctx, chainID); qerr == nil {
+		chainKey = rc.ChainKey
+	}
+	if err := s.rootChainRepo.Delete(ctx, project, chainID); err != nil {
+		return err
+	}
+	// 根链已删除，其各版本引擎实例不再可用，连同 DSL 缓存一并清理。
+	// 同时广播给其他副本，使其也清理该链的缓存与引擎池实例。
+	if chainKey != "" {
+		s.ClearChainRootByKey(project, chainKey)
+		s.invalidateChainPoolEntry(cacheKeyOf(project, chainKey))
+		s.NotifyRootChainChanged(project, chainKey, reasonDelete)
+	}
+	return nil
 }
 
 // ============================================================
@@ -691,6 +947,12 @@ func (s *WorkflowService) ListAllEnvConfigs(ctx context.Context) ([]*workflow.En
 	return s.envConfigRepo.ListAll(ctx)
 }
 
+// ListAlertEnvs 列出所有【开启了告警】的环境配置，供离线巡检扫描告警目标。
+// 逐环境的告警配置（通道 / 机器人地址 / 阈值 / 提醒间隔）以 JSON 存在 alert_config，按各自配置发送。
+func (s *WorkflowService) ListAlertEnvs(ctx context.Context) ([]*workflow.EnvConfigDef, error) {
+	return s.envConfigRepo.ListAlertEnvs(ctx)
+}
+
 // EnvConfigRepo 返回环境配置仓储实例（供 web 层收集器发现 Redis 配置复用）。
 func (s *WorkflowService) EnvConfigRepo() *repo.EnvConfigRepo {
 	return s.envConfigRepo
@@ -711,24 +973,37 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 	if err != nil {
 		return nil, err
 	}
+
+	// 与当前线上版本对比：若内容完全一致则拒绝发布，避免产生重复版本。
+	if current, cerr := s.releaseRepo.GetCurrent(ctx, project, chainID); cerr == nil && current != nil {
+		if rootChainContentEqual(draft, current) {
+			return nil, fmt.Errorf("当前草稿与线上生效版本(v%d)内容完全一致，无需重复发布", current.Version)
+		}
+	}
+
 	maxVer, err := s.releaseRepo.MaxVersion(ctx, project, chainID)
 	if err != nil {
 		return nil, err
 	}
 	release := &workflow.RootChainReleaseDef{
-		Project:            draft.Project,
-		ChainID:            draft.ChainID,
-		Version:            maxVer + 1,
-		Name:               draft.Name,
-		Description:        draft.Description,
-		DSLJSON:            draft.DSLJSON,
-		NodeIDs:            draft.NodeIDs,
-		SubChainIDs:        draft.SubChainIDs,
-		ConnectionsData:    draft.ConnectionsData,
-		NodeParamOverrides: draft.NodeParamOverrides,
-		IsCurrent:          true,
-		PublishedAt:        time.Now(),
+		Project:               draft.Project,
+		ChainID:               draft.ChainID,
+		Version:               maxVer + 1,
+		Name:                  draft.Name,
+		Description:           draft.Description,
+		DSLJSON:               draft.DSLJSON,
+		NodeIDs:               draft.NodeIDs,
+		SubChainIDs:           draft.SubChainIDs,
+		ConnectionsData:       draft.ConnectionsData,
+		NodeParamOverrides:    draft.NodeParamOverrides,
+		NodeSwitchOverrides:   draft.NodeSwitchOverrides,
+		NodeNameOverrides:     draft.NodeNameOverrides,
+		NodeCollapseOverrides: draft.NodeCollapseOverrides,
+		RootResponses:         draft.RootResponses,
+		IsCurrent:             true,
+		PublishedAt:           time.Now(),
 	}
+
 	if err := s.releaseRepo.Create(ctx, release); err != nil {
 		return nil, err
 	}
@@ -742,6 +1017,64 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		Int("version", release.Version).
 		Msg("root chain published")
 	return release, nil
+}
+
+// canonicalJSON 将 JSON 字符串规范化为可比较的形式（忽略空白/键序差异）。
+// 空字符串与无法解析的字符串均按原样返回，保证比较结果稳定。
+func canonicalJSON(s string) string {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return ""
+	}
+	var v interface{}
+	if err := json.Unmarshal([]byte(t), &v); err != nil {
+		return t
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return t
+	}
+	return string(b)
+}
+
+// rootChainContentEqual 比较两个根链的内容是否完全一致（用于发布去重）。
+// draft 为即将发布的草稿（RootChainDef），current 为当前线上版本（RootChainReleaseDef）。
+// 仅比较业务内容字段，忽略版本号、发布时间等元数据。
+func rootChainContentEqual(draft *workflow.RootChainDef, current *workflow.RootChainReleaseDef) bool {
+	if draft.Name != current.Name || draft.Description != current.Description {
+		return false
+	}
+	newFieldsJson := []string{
+		draft.DSLJSON,
+		draft.ConnectionsData,
+		draft.NodeParamOverrides,
+	}
+	oldFieldsJson := []string{
+		current.DSLJSON,
+		current.ConnectionsData,
+		current.NodeParamOverrides,
+	}
+
+	for i := 0; i < len(newFieldsJson); i++ {
+		if !cond.IsSameJson(newFieldsJson[i], oldFieldsJson[i]) {
+			return false
+		}
+	}
+
+	newFieldsString := []string{
+		draft.NodeIDs,
+		draft.SubChainIDs,
+	}
+	oldFieldsString := []string{
+		current.NodeIDs,
+		current.SubChainIDs,
+	}
+	for i := 0; i < len(newFieldsString); i++ {
+		if newFieldsString[i] != oldFieldsString[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // ListRootChainReleases 列出根链的发布历史（版本号倒序）。
@@ -817,7 +1150,7 @@ func (s *WorkflowService) DeleteRootChainRelease(ctx context.Context, project, c
 }
 
 // executeRootChainByIDTimeout 流程同步执行的超时时间，避免长时间取不到结果导致调用方永久阻塞。
-const executeRootChainByIDTimeout = 300000 * time.Second
+const executeRootChainByIDTimeout = 3600 * time.Second
 
 // ExecuteRootChainByID 基于已解析的根链 DSL（ruleChain）同步执行流程。
 // 从根链 flow 节点提取子链 ID 并通过 project 查询子链 DSL，组装 ActivityFlowConfig 后
@@ -853,6 +1186,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 
 	// 2. 查询子链 DSL
 	var subChainDSL []*types.RuleChainBaseInfo
+	var subChainNodes []*types.RuleNode // 收集子链节点，用于提取子链所需的入参
 	for subID := range subChainIDs {
 		subDef, err := s.subChainRepo.GetByID(execCtx, project, subID)
 		if err != nil {
@@ -863,7 +1197,14 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 			return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
 		}
 		subChainDSL = append(subChainDSL, &subChain.RuleChain)
+		subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
 	}
+
+	// 子链节点也可能引用 {{arguments.xxx}} / 顶层 {{name}}，按根链+子链所需参数对原始入参重新过滤，避免误删
+	// 过滤多余入参：仅保留链实际需要的入参，避免恶意传入无关参数造成变量名污染。
+	// originalPayload 保留原始入参，子链加载后再按根链+子链所需参数重新过滤一次。
+	originalPayload := jsonPayload
+	jsonPayload = s.filterPayloadArguments(originalPayload, ruleChain.Metadata.Nodes, subChainNodes)
 
 	// 2.1 根据项目+环境解析 Redis 配置（按环境将运行数据打入对应 Redis）
 	redisCfg, err := s.GetRedisConnect(execCtx, project, envName)
@@ -873,6 +1214,8 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 
 	// 3. 构造流程上下文：全局入参作为 arguments（供 DSL 中的 {{arguments.x}} 取值）
 	flowCtx := s.getParamContext(ruleChain, jsonPayload)
+
+	engine.MysqlLogger.Info("ExecuteRootChainByID", " ruleChain:", ruleChain, " param:", conv.String(jsonPayload), " flowCtx:", conv.String(flowCtx))
 
 	actConfig := &rulegox.ActivityFlowConfig{}
 	if activityFlowConfig != nil {
@@ -889,6 +1232,9 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		RootChainID: rootChainID,
 		RedisConfig: redisCfg,
 		TraceId:     id.GetUUID(traceId),
+		PoolKey:     actConfig.PoolKey, // 发布/invoke 路径下用于引擎池隔离，避免与草稿实例冲突
+		// 发布/invoke 路径下记录本次执行的发布版本标识（形如 R000005@3），写入节点日志。
+		RootChainReleaseID: actConfig.RootChainReleaseID,
 	}
 
 	// 6. 同步执行并捕获结果
@@ -915,11 +1261,18 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		if resultParam == nil {
 			return nil, fmt.Errorf("execute root chain %s: empty result", rootChainID)
 		}
+
 		return resultParam, nil
 	case <-execCtx.Done():
 		return nil, fmt.Errorf("execute root chain %s: timeout after %s: %w", rootChainID, executeRootChainByIDTimeout, execCtx.Err())
 	}
 }
+
+// 根链返回值（root_responses）的静态占位符解析已于 2026-10 废弃：
+// 取值改为由内置「返回值节点」（custom/ReturnValue）在运行期写入 FlowContext.Responses，
+// 以支持多分支动态返回（被实际执行的分支才触达该节点并写入）。
+// 相关解析逻辑（resolveRootResponseValue / convertRootResponseValue 等）已迁移至
+// workflow/rulegox/components/commnode 包供返回值节点复用。
 
 func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayload map[string]any) *paramx.FlowContext {
 	newJson := conv.MapFromKeyList(jsonPayload)
@@ -938,71 +1291,392 @@ func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayloa
 	return flowCtx
 }
 
-// checkAllNodesArguments 校验 CondSwitch / Activity 节点 configuration.arguments 中
-// 形如 {{arguments.xxx}} 的前端入参占位符，是否都在 jsonPayload 中存在；缺失则报错，
-// 避免后续执行时因缺少入参而失败。
+// checkAllNodesArguments 校验节点 configuration.arguments / responses 中形如 {{arguments.xxx}}
+// 的前端入参占位符（xxx 可能含层级分隔 "."，如 N000036__70lic.mobile），是否都在 jsonPayload 中传入；
+// 缺失则报错，避免后续执行时因缺少入参而失败。
+//
+// 判定顺序：
+//  1. 按层级路径在 jsonPayload 中查找（中间 "." 视为层级分隔，等价于 json.Get(jsonPayload, item)）；
+//  2. 未找到则视为 "." 被当作整体字符串键传入，从 jsonPayloadMap（conv.KeyListFromMap 扁平化结果）中再查；
+//  3. 都未找到 → 该入参未传，报错。
 func (s *WorkflowService) checkAllNodesArguments(nodes []*types.RuleNode, jsonPayload map[string]any) error {
-	// 仅校验需要前端入参的节点类型
-	const (
-		typeActivity   = "custom/Activity"
-		typeCondSwitch = "custom/CondSwitch"
-	)
-	// 匹配 {{arguments.xxx}}（xxx 为前端入参名，仅允许字母数字下划线，不含点号）
-	argTplRe := regexp.MustCompile(`\{\{arguments\.([A-Za-z0-9_]+)}}`)
+	allInputArguments := builder.CollectAllInputArguments(nodes)
+	jsonPayloadMap := conv.KeyListFromMap(jsonPayload)
+	jsonPayloadStr := conv.String(jsonPayload)
+	var firstErr []string
+	for _, item := range allInputArguments {
+		if item == "" {
+			continue
+		}
 
-	for _, node := range nodes {
-		if node == nil {
+		// 1) 按层级路径在嵌套结构 jsonPayload 中查找
+		if _, ok := jsonPayload[item]; ok {
 			continue
 		}
-		if node.Type != typeActivity && node.Type != typeCondSwitch {
+		// 2) 未找到：中间 "." 被当作整体字符串键传入，从扁平化结果中查找
+		if _, ok := jsonPayloadMap[item]; ok {
 			continue
 		}
-		rawArgs, ok := node.Configuration["arguments"]
-		if !ok || rawArgs == nil {
+		// 说明是深层的json串了
+		if getByDotPath(jsonPayloadStr, item) {
 			continue
 		}
-		argsList, ok := rawArgs.([]any)
-		if !ok {
+		// 3) 都没找到 → 未传该参数
+		firstErr = append(firstErr, item)
+	}
+	if len(firstErr) > 0 {
+		return fmt.Errorf("argument list: %s not input", strings.Join(firstErr, ","))
+	}
+
+	return nil
+}
+
+// getByDotPath 利用 gjson 按 "." 分隔的层级路径在 JSON 字符串中查找节点是否存在。
+// 例如 path="N000036__70lic.mobile" 会依次进入 .N000036__70lic.mobile，
+// 仅当路径真实存在时返回 true（gjson 的 Exists 判断）。
+func getByDotPath(jsonStr string, path string) bool {
+	if path == "" {
+		return false
+	}
+	return gjson.Parse(jsonStr).Get(path).Exists()
+}
+
+// filterPayloadArguments 仅保留 nodeGroups 中各节点实际引用的入参（{{arguments.xxx}} 及顶层 {{name}}），
+// 过滤掉其余无关参数，避免变量名污染。nodeGroups 可传多个节点集合（如根链节点、子链节点），
+// 全部按需保留。返回一个新的 map，不修改入参 payload
+// 只处理第一层key
+func (s *WorkflowService) filterPayloadArguments(payload map[string]any, nodeGroups ...[]*types.RuleNode) map[string]any {
+	nodeList := make([]*types.RuleNode, 0)
+	lo.ForEach(nodeGroups, func(nodes []*types.RuleNode, _ int) {
+		nodeList = append(nodeList, nodes...)
+	})
+	allInputArguments := builder.CollectAllInputArguments(nodeList)
+	jsonPayloadMap := conv.KeyListFromMap(payload)
+	newPayload := make(map[string]any, len(allInputArguments))
+	for _, item := range allInputArguments {
+		if item == "" {
 			continue
 		}
-		for _, item := range argsList {
-			m, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			val, ok := m["value"]
-			if !ok {
-				continue
-			}
-			valStr, ok := val.(string)
-			if !ok {
-				continue
-			}
-			for _, matched := range argTplRe.FindAllStringSubmatch(valStr, -1) {
-				name := matched[1]
-				if _, exist := jsonPayload[name]; !exist {
-					return fmt.Errorf("node %q requires argument %q but it is not provided in payload", node.Id, name)
-				}
-			}
+		if v, ok := payload[item]; ok {
+			newPayload[item] = v
+			continue
+		}
+		oneItem := strings.Split(item, ".")
+		if v, ok := payload[oneItem[0]]; ok {
+			newPayload[oneItem[0]] = v
+			continue
+		}
+		if v, ok := jsonPayloadMap[item]; ok {
+			newPayload[item] = v
+			continue
 		}
 	}
-	return nil
+	return newPayload
 }
 func (s *WorkflowService) ClearChainRootByKey(project, chainKey string) {
 	cacheKey := id.GetUUID(project + "-" + chainKey)
+	// 清除「发布在线」DSL 缓存，强制下次调用重新查库拿到新版本 DSL 与版本号。
+	//
+	// 注意：这里【不能】调用 rulego.Del(cacheKey) 删除引擎池实例！
+	// rulego 的 Pool.Del 内部会调用引擎实例的 Stop(ctx)：先等待活跃消息自然完成
+	// （Pool.Del 传 context.Background()，默认最多等 10s），超时则强制取消上下文
+	// 中断正在执行的流程 —— 存在打断长流程（>10s）的线上风险。
+	// 正确做法：引擎池 key 带发布版本号（见 InvokeRootChain 的 PoolKey），
+	// 发布后新请求自然命中新版本实例；旧版本实例由错峰回收策略（数量 + 存活时间）
+	// 在优雅排空后移除，故这里【不直接清理引擎实例】。
 	s.invokeRootChainMapCache.Remove(cacheKey)
+
+	// 同时把登记表中的「在线版本」标记为未知：
+	// 发布/回滚/设为生效后当前在线版本已变化，需等下次调用重新解析；
+	// 在未知期间巡检保守不动，避免回滚到的版本被误当可清理项回收。
+	s.markChainPoolCurrentUnknown(cacheKey)
+}
+
+// markChainPoolCurrentUnknown 将某条根链的在线版本标记为未知，并重置错峰计时。
+func (s *WorkflowService) markChainPoolCurrentUnknown(cacheKey string) {
+	if e, ok := s.chainPoolVersions.Get(cacheKey); ok && e != nil {
+		e.mu.Lock()
+		e.current = currentUnknown
+		e.waitStart = time.Time{}
+		e.mu.Unlock()
+	}
+}
+
+// ============================================================
+// rulego 引擎池版本登记与清理（错峰 FIFO）
+// ============================================================
+//
+// 背景：InvokeRootChain 的引擎池 key 带发布版本号（<cacheKey>@<version>），
+// 发布后新请求自然命中新实例，旧实例不会被 Del/Stop，因此存量流程安全跑完；
+// 但代价是池中会残留历史版本实例，需要按策略回收。
+//
+// 回收策略（两配置项 custom.normal）：
+//   - root_chain_pool_max_versions：每条根链最多保留的版本实例数（0=不限制数量）
+//   - root_chain_pool_ttl_minutes：非在线版本最长存活时间（分钟，0=不限制时间）
+//
+// 组合语义：
+//   - 仅数量（ttl=0）  ：始终维持该数量，超出部分按发布时间先后【立即】清理；
+//   - 仅时间（数量=0） ：按发布时间先后【错峰】清理，每间隔 ttl 清一个，最终只剩在线版本；
+//   - 两者都配        ：最终保留该数量（含在线版本），超出部分按时间先后错峰清理。
+//
+// 排序依据【发布时间 PublishedAt】而非版本号：回滚场景下老版本号可能重新成为在线版本，
+// 只有发布时间能真实反映先后。在线版本始终受保护，永不被清理。
+
+const (
+	// poolStopGrace 移除版本实例前的优雅排空时长（30 分钟）。
+	// rulego.Del 内部会以 10s 超时强制中断流程，故先用较长宽限期自行 Stop，
+	// 让长流程尽量自然跑完，再 Del 摘除登记。
+	// 设为 30 分钟以覆盖含人工审批、慢外部调用等长流程场景。
+	poolStopGrace = 30 * time.Minute
+	// poolSweepInterval 后台巡检间隔。
+	poolSweepInterval = 1 * time.Minute
+	// currentUnknown 在线版本号未知（版本号从 1 开始，故 -1 可作哨兵）。
+	// 发生在发布/回滚/设为生效之后、下一次调用重新解析之前。
+	// 此时巡检必须保守不动，否则回滚到的版本会被误当成可清理项。
+	currentUnknown = -1
+)
+
+// poolVersionEntry 引擎池中某个已加载版本的登记信息。
+type poolVersionEntry struct {
+	// PoolKey 该版本对应的 rulego 引擎池 key（<cacheKey>@<version>）。
+	PoolKey string
+	// Version 发布版本号。
+	Version int
+	// PublishedAt 该发布版本的发布时间，用于 FIFO 排序（回滚安全）。
+	PublishedAt time.Time
+	// LoadedAt 载入引擎池的时刻，用于同发布时间时的稳定排序。
+	LoadedAt time.Time
+}
+
+// chainPoolEntry 单条根链在引擎池中已加载版本的登记表。
+type chainPoolEntry struct {
+	mu sync.Mutex
+	// current 当前在线版本号，永不被清理。
+	current int
+	// versions version -> 登记项。
+	versions map[int]*poolVersionEntry
+	// waitStart 队首（最早发布）待清理版本的等待起点。
+	// 清理掉队首后置为当前时刻，使下一个版本从此时起再等待一个 ttl，实现错峰。
+	waitStart time.Time
+}
+
+// getOrCreateChainPoolEntry 获取（或新建）某条根链的登记表。
+func (s *WorkflowService) getOrCreateChainPoolEntry(cacheKey string) *chainPoolEntry {
+	if e, ok := s.chainPoolVersions.Get(cacheKey); ok && e != nil {
+		return e
+	}
+	ne := &chainPoolEntry{versions: make(map[int]*poolVersionEntry), current: currentUnknown}
+	s.chainPoolVersions.Set(cacheKey, ne)
+	// 极小概率并发覆盖；以 map 中最终生效者为准，避免两个登记表并存。
+	if cur, ok := s.chainPoolVersions.Get(cacheKey); ok && cur != nil {
+		return cur
+	}
+	return ne
+}
+
+// trackPoolVersion 记录本次使用的版本，并标记其为在线版本。
+func (s *WorkflowService) trackPoolVersion(cacheKey string, version int, poolKey string, publishedAt time.Time) {
+	e := s.getOrCreateChainPoolEntry(cacheKey)
+	e.mu.Lock()
+	e.current = version
+	if it, ok := e.versions[version]; ok {
+		it.PoolKey = poolKey
+		if !publishedAt.IsZero() {
+			it.PublishedAt = publishedAt
+		}
+	} else {
+		e.versions[version] = &poolVersionEntry{
+			PoolKey:     poolKey,
+			Version:     version,
+			PublishedAt: publishedAt,
+			LoadedAt:    time.Now(),
+		}
+	}
+	e.mu.Unlock()
+}
+
+// candidatesLocked 计算待清理候选（需在持锁时调用）。
+// 返回按【发布时间升序】排列的可清理版本；在线版本不在其中。
+// retain 为除在线版本外还可保留的最新版本数量。
+func (e *chainPoolEntry) candidatesLocked(retain int) []*poolVersionEntry {
+	cands := make([]*poolVersionEntry, 0, len(e.versions))
+	for ver, it := range e.versions {
+		if ver == e.current {
+			continue // 在线版本永不清
+		}
+		cands = append(cands, it)
+	}
+	// FIFO：发布时间早的排前面；同发布时间用载入时刻、版本号兜底保证稳定。
+	sort.Slice(cands, func(i, j int) bool {
+		a, b := cands[i], cands[j]
+		if !a.PublishedAt.Equal(b.PublishedAt) {
+			return a.PublishedAt.Before(b.PublishedAt)
+		}
+		if !a.LoadedAt.Equal(b.LoadedAt) {
+			return a.LoadedAt.Before(b.LoadedAt)
+		}
+		return a.Version < b.Version
+	})
+	// 保留最近发布的 retain 个，其余为候选
+	if retain > 0 && len(cands) > retain {
+		return cands[:len(cands)-retain]
+	}
+	if retain > 0 {
+		return nil
+	}
+	return cands
+}
+
+// sweepChainPool 按策略巡检并清理某条根链的引擎池版本实例。
+func (s *WorkflowService) sweepChainPool(cacheKey string) {
+	e, ok := s.chainPoolVersions.Get(cacheKey)
+	if !ok || e == nil {
+		return
+	}
+	maxVersions, ttlMinutes := config.GetRootChainPoolPolicy()
+	ttl := time.Duration(ttlMinutes) * time.Minute
+
+	// 在线版本未知（发布/回滚/设为生效后尚未重新解析）：保守跳过，
+	// 否则回滚到的版本会被误判为可清理项而被回收。
+	e.mu.Lock()
+	unknown := e.current == currentUnknown
+	e.mu.Unlock()
+	if unknown {
+		return
+	}
+
+	// 除在线版本外还可保留的数量：maxVersions 含在线版本，故减 1。
+	retain := 0
+	if maxVersions > 0 {
+		retain = maxVersions - 1
+		if retain < 0 {
+			retain = 0
+		}
+	}
+
+	for {
+		now := time.Now()
+		e.mu.Lock()
+		cands := e.candidatesLocked(retain)
+		if len(cands) == 0 {
+			e.waitStart = time.Time{} // 无可清理项，等待计时归零
+			e.mu.Unlock()
+			return
+		}
+		if e.waitStart.IsZero() {
+			e.waitStart = now // 队首开始计时
+		}
+		head := cands[0]
+		due := e.waitStart.Add(ttl)
+		if now.Before(due) {
+			e.mu.Unlock()
+			return // 未到清理时点
+		}
+		delete(e.versions, head.Version)
+		e.mu.Unlock()
+
+		// 先自行优雅排空（宽限期远大于 rulego.Del 内置的 10s），再摘除池中登记。
+		s.stopAndDropVersion(head.PoolKey, cacheKey, head.Version)
+
+		e.mu.Lock()
+		e.waitStart = time.Now() // 下一个队首从现在起重新计时 → 错峰 T
+		e.mu.Unlock()
+
+		// ttl=0 表示纯数量策略：本轮一直清到满足数量为止。
+		if ttl > 0 {
+			return
+		}
+	}
+}
+
+// stopAndDropVersion 优雅停止并移除某个版本的引擎实例。
+func (s *WorkflowService) stopAndDropVersion(poolKey, cacheKey string, version int) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Error().Any("panic", rec).Str("pool_key", poolKey).Msg("Recovered panic during engine pool version cleanup")
+		}
+	}()
+
+	// 1) 自行 Stop：使用远长于 rulego.Del 内置值（10s）的宽限期，
+	//    尽量让正在执行的流程自然跑完，避免被强制中断。
+	if ins, ok := rulego.Get(poolKey); ok && ins != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), poolStopGrace)
+		ins.Stop(stopCtx)
+		cancel()
+	}
+	// 2) 摘除池中登记项（此时已排空，内部 Stop 会很快返回）。
+	rulego.Del(poolKey)
+
+	log.Info().Str("cache_key", cacheKey).Int("version", version).Str("pool_key", poolKey).
+		Msg("Idle root chain engine instance evicted by pool policy")
+}
+
+// invalidateChainPoolEntry 某条根链对应的根链已被删除时，清理其全部版本实例与登记。
+func (s *WorkflowService) invalidateChainPoolEntry(cacheKey string) {
+	e, ok := s.chainPoolVersions.Get(cacheKey)
+	if !ok || e == nil {
+		return
+	}
+	e.mu.Lock()
+	victims := make([]*poolVersionEntry, 0, len(e.versions))
+	for _, it := range e.versions {
+		victims = append(victims, it)
+	}
+	e.versions = make(map[int]*poolVersionEntry)
+	e.waitStart = time.Time{}
+	e.mu.Unlock()
+
+	for _, it := range victims {
+		s.stopAndDropVersion(it.PoolKey, cacheKey, it.Version)
+	}
+	s.chainPoolVersions.Remove(cacheKey)
+}
+
+// chainPoolJanitor 后台巡检，保证无流量时也能按时间策略清理。
+func (s *WorkflowService) chainPoolJanitor() {
+	ticker := time.NewTicker(poolSweepInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		keys := s.chainPoolVersions.Keys()
+		for _, k := range keys {
+			s.sweepChainPool(k)
+		}
+	}
+}
+
+// invokeCacheEntry 「发布在线」根链缓存项：解析后的 DSL 及对应的发布版本标识。
+type invokeCacheEntry struct {
+	RuleChain *types.RuleChain
+	// ReleaseID 发布版本标识，形如 R000005@3，与 RuleChain 一起缓存，
+	// 保证日志记录的版本号与缓存 DSL 版本一致（发布后缓存失效前不会误报成新版本）。
+	ReleaseID string
+	// Version 发布版本号，与 DSL 一起缓存，用于生成带版本的引擎池 key。
+	// 每次发布版本号递增，使新请求使用新的引擎实例，从而与旧版本实例彻底隔离。
+	Version int
+	// PublishedAt 该发布版本的发布时间，缓存后用于版本实例的 FIFO 清理排序。
+	PublishedAt time.Time
 }
 
 // InvokeRootChain 通过 project + chain_key 定位「发布在线」的根链 DSL 并同步执行。
-// 缓存：map[cacheKey]*types.RuleChain，cacheKey = id.GetUUID(project+"-"+chain_key)（确定性），
+// 缓存：map[cacheKey]*invokeCacheEntry，cacheKey = id.GetUUID(project+"-"+chain_key)（确定性），
 // 命中缓存直接复用已解析的 DSL，跳过查询 wf_root_chains 与 wf_root_chain_releases。
 func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey, envName, traceId string, payload map[string]any, isAsync bool) (any, error) {
 	cacheKey := id.GetUUID(project + "-" + chainKey)
 
 	// 1. 先查缓存
-	ruleChain, ok := s.invokeRootChainMapCache.Get(cacheKey)
+	cached, ok := s.invokeRootChainMapCache.Get(cacheKey)
+	var ruleChain *types.RuleChain
+	var releaseID string
+	var releaseVersion int
+	var releasePublishedAt time.Time
+	if ok && cached != nil {
+		ruleChain = cached.RuleChain
+		releaseID = cached.ReleaseID
+		releaseVersion = cached.Version
+		releasePublishedAt = cached.PublishedAt
+	}
 	// 2. 未命中：查库并解析 DSL，再写入缓存
-	if !ok || ruleChain == nil {
+	if ruleChain == nil {
 		// 2.1 通过 project + chain_key 查根链（得到 chain_id）
 		rootDef, err := s.rootChainRepo.GetByKey(ctx, project, chainKey)
 		if err != nil {
@@ -1018,16 +1692,36 @@ func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey
 		if err := json.Unmarshal([]byte(release.DSLJSON), rc); err != nil {
 			return nil, fmt.Errorf("parse root chain dsl failed: %w", err)
 		}
-		rc.RuleChain.ID = cacheKey
-		// 2.4 写入缓存
-		s.invokeRootChainMapCache.Set(cacheKey, rc)
+		// 注意：不可将 rc.RuleChain.ID 覆写为 cacheKey（UUID），否则该 UUID 会经
+		// metaData.RootChainID 流入节点日志 root_chain_id 字段，污染数据。
+		// 引擎池隔离改用 metaData.PoolKey（cacheKey@version）实现（见 StartWorkFlow）。
+		// 2.4 记录发布版本标识，用于节点日志的 root_chain_release_id 字段
+		releaseID = fmt.Sprintf("%s@%d", rootDef.ChainID, release.Version)
+		releaseVersion = release.Version
+		releasePublishedAt = release.PublishedAt
+		// 2.5 写入缓存
+		s.invokeRootChainMapCache.Set(cacheKey, &invokeCacheEntry{RuleChain: rc, ReleaseID: releaseID, Version: releaseVersion, PublishedAt: releasePublishedAt})
 		ruleChain = rc
 	}
 
-	// 3. 执行
+	// 3. 执行：以真实根链 id 记录日志，以带版本号的 key 作为引擎池 key 隔离不同发布版本，
+	// 并记录当时执行的发布版本号（root_chain_release_id）。
+	//
+	// 引擎池 key 带版本号（<cacheKey>@<version>）的作用：
+	//   - 发布后版本号递增，新请求必然未命中旧实例，从而用新版本 DSL 重建引擎 → 立即走新流程；
+	//   - 旧版本实例不再被任何新请求引用，且【不会被 Del/Stop】，
+	//     因此正在其上执行的存量流程不受影响，可安全执行完毕后成为孤儿被回收。
+	//   （若直接对旧实例调用 rulego.Del，其内部 Stop() 会在等待 10s 后强制中断长流程。）
+	poolKey := fmt.Sprintf("%s@%d", cacheKey, releaseVersion)
+	// 登记该版本到本链的引擎池登记表（标记在线，参与错峰回收），
+	// 再按策略巡检一次：有流量时即可快速回收超量版本（尤其纯数量策略需立即生效）。
+	s.trackPoolVersion(cacheKey, releaseVersion, poolKey, releasePublishedAt)
+	s.sweepChainPool(cacheKey)
 	return s.ExecuteRootChainByID(ctx, ruleChain, payload, project, envName, traceId, &rulegox.ActivityFlowConfig{
-		IsAsync:  isAsync,
-		UseCache: true,
+		IsAsync:            isAsync,
+		UseCache:           true,
+		PoolKey:            poolKey,
+		RootChainReleaseID: releaseID,
 	})
 }
 
@@ -1042,7 +1736,9 @@ func (s *WorkflowService) ExecutePublishedRootChain(ctx context.Context, project
 	if err := s.engine.LoadChainDSL(ctx, project, chainID, release.DSLJSON, release.SubChainIDs); err != nil {
 		return "", err
 	}
-	return s.engine.ExecuteWithEnv(ctx, project, chainID, jsonPayload, envName, redisCfg)
+	// 记录本次执行的发布版本标识（形如 R000005@3），写入节点日志的 root_chain_release_id。
+	releaseID := fmt.Sprintf("%s@%d", chainID, release.Version)
+	return s.engine.ExecuteWithEnv(ctx, project, chainID, jsonPayload, envName, redisCfg, releaseID)
 }
 
 // ============================================================
@@ -1100,8 +1796,8 @@ func (s *WorkflowService) BuildLoadAndExecute(ctx context.Context, req *workflow
 		return "", err
 	}
 
-	// 3. 执行（按环境注入 Redis 元数据）
-	return s.engine.ExecuteWithEnv(ctx, def.Project, def.ChainID, jsonPayload, envName, redisCfg)
+	// 3. 执行（按环境注入 Redis 元数据；BuildLoadAndExecute 为即时编排执行，无发布版本，release 标识留空）
+	return s.engine.ExecuteWithEnv(ctx, def.Project, def.ChainID, jsonPayload, envName, redisCfg, "")
 }
 
 // ============================================================
@@ -1450,8 +2146,9 @@ func (s *WorkflowService) TestActivity(ctx context.Context, req *TestActivityReq
 			"project":            req.Project,
 			"env_name":           req.EnvName,
 			"activity_type":      kind,
-			"activity_name":      actDef.Name,
 			"activity_namespace": actDef.ActNamespace,
+			"activity_name":      actDef.ActName,
+			"activity_label":     actDef.Name,
 			"trace_id":           traceId,
 			"span_id":            spanId,
 		},
@@ -1867,10 +2564,24 @@ func (s *WorkflowService) ListActivities(ctx context.Context, project string, ta
 		if err != nil {
 			return nil, err
 		}
+		// 「activity → 引用它的 Node」索引，用于列表展示改动影响面。
+		// 该列仅为辅助参考，构建失败时降级为空列表，不影响主列表返回。
+		refNodeMap := map[string][]*workflow.RefNodeInfo{}
+		if refNodes, berr := s.buildActivityRefNodes(ctx, project, idx); berr == nil {
+			refNodeMap = refNodes
+		} else {
+			log.Warn().Err(berr).Str("project", project).Msg("Build activity ref node index failed, skip ref_nodes")
+		}
+
 		for _, a := range activities {
-			if _, ok := idx.activities[a.ActNamespace+"\x00"+a.ActName]; ok {
+			key := a.ActNamespace + "\x00" + a.ActName
+			if _, ok := idx.activities[key]; ok {
 				a.PublishedInRootChain = true
 			}
+			// 同时带上明细列表（含根链 ID/名称/版本），供列表展示引用数量与悬停明细
+			a.PublishedRootChains = sortedRefs(idx.activityChains, key)
+			// 引用该 activity 的节点明细（含节点是否已在发布链中）
+			a.RefNodes = refNodeMap[key]
 		}
 	}
 	return activities, nil

@@ -59,6 +59,7 @@ func (r *ActivityTestRecordRepo) ListByActivity(ctx context.Context, project, ac
 	err := r.db.WithContext(ctx).
 		Where("project = ? AND activity_id = ?", project, activityID).
 		Order("id DESC").
+		Limit(50).
 		Find(&modelsList).Error
 	if err != nil {
 		return nil, err

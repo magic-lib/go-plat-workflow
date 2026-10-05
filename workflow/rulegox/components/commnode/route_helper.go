@@ -2,11 +2,11 @@ package commnode
 
 import (
 	"fmt"
-
 	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/rulego/rulego/api/types"
+	"log"
 )
 
 // routeByCondition 对给定的条件表达式求值，并返回应下发的 relationType 与原始表达式结果。
@@ -20,6 +20,8 @@ import (
 // 这些由调用方根据自身上下文（参数、耗时、返回值等）完成。
 func routeByCondition(ruleObj *templates.RuleExprEngine, expr string, params map[string]any) (relationType string, result any, err error) {
 	conResult, runErr := ruleObj.RunString(expr, params)
+	log.Printf("[routeByCondition] expr=%s params=%s", expr, conv.String(params))
+
 	if runErr != nil {
 		return "", nil, runErr
 	}
@@ -30,6 +32,7 @@ func routeByCondition(ruleObj *templates.RuleExprEngine, expr string, params map
 		if convErr != nil {
 			return "", conResult, fmt.Errorf("routeByCondition convert bool failed: %w", convErr)
 		}
+
 		rt := types.True
 		if !boolResult {
 			rt = types.False

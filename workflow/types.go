@@ -133,6 +133,30 @@ type ProjectConfigResponse struct {
 
 // NodeDef 节点定义，对应 rulego RuleNode。
 // 每个 NodeDef 代表一个可复用的规则节点配置，可以被多个规则链引用。
+// RefNodeInfo 引用了某个 activity 的 Node 信息（用于 Activities 列表展示改动影响面）。
+// 由列表接口实时计算填充，不入库。
+type RefNodeInfo struct {
+	// NodeID 引用该 activity 的节点 ID
+	NodeID string `json:"node_id"`
+	// Name 节点名称
+	Name string `json:"name,omitempty"`
+	// Published 该节点自身是否已被发布到根链（当前生效版本）。
+	// 为 true 表示修改该 activity 会直接影响线上流程，需谨慎。
+	Published bool `json:"published"`
+}
+
+// PublishedRootChainRef 引用了某个节点（或 activity）并已发布的根链信息。
+// 仅统计「当前生效」版本（is_current=true），历史版本不计入。
+// 由列表接口按发布快照实时计算填充，不入库。
+type PublishedRootChainRef struct {
+	// ChainID 根链 ID
+	ChainID string `json:"chain_id"`
+	// Name 根链名称（发布时快照）
+	Name string `json:"name,omitempty"`
+	// Version 当前生效的发布版本号
+	Version int `json:"version"`
+}
+
 type NodeDef struct {
 	// Project 所属项目，用于多项目隔离
 	Project string `json:"project"`
@@ -176,6 +200,10 @@ type NodeDef struct {
 	// PublishedInRootChain 节点是否已被发布到根链（含子链传递引用），为 true 时禁止编辑/删除。
 	// 由列表接口按发布快照实时计算填充，不入库。
 	PublishedInRootChain bool `json:"published_in_root_chain,omitempty"`
+	// PublishedRootChains 引用了该节点且已发布（当前生效版本）的根链明细列表，含 ID、名称与版本号。
+	// 由列表接口按发布快照实时计算填充，不入库；
+	// 前端据此在 Nodes 列表展示「已发布引用」数量，并在悬停时列出全部根链，便于人工处理。
+	PublishedRootChains []*PublishedRootChainRef `json:"published_root_chains,omitempty"`
 	// HasSwitchCondition 节点是否配置了路由条件 switch_condition，为 true 表示该节点带路由分支功能。
 	// 由列表/详情接口按节点配置实时计算填充，不入库。
 	HasSwitchCondition bool `json:"has_switch_condition,omitempty"`
@@ -240,6 +268,12 @@ type SubChainDef struct {
 	ConnectionsData string `json:"connections_data,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖值 JSON，保存后可在下次编辑时恢复
 	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖 JSON（map[instanceId]expr），仅本链生效，不影响节点定义
+	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
+	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态 JSON（map[instanceId]bool，true=收起），仅前端展示用
+	NodeCollapseOverrides string `json:"node_collapse_overrides,omitempty"`
 }
 
 // RootChainDef 根规则链定义。
@@ -267,8 +301,19 @@ type RootChainDef struct {
 	ConnectionsData string `json:"connections_data,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖值 JSON，保存后可在下次编辑时恢复
 	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖 JSON（map[instanceId]expr），仅本链生效，不影响节点定义
+	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
+	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态 JSON（map[instanceId]bool，true=收起），仅前端展示用
+	NodeCollapseOverrides string `json:"node_collapse_overrides,omitempty"`
+	// RootResponses 根节点返回值定义 JSON（[]RootResponseItem），执行结束后据此生成返回结构。
+	// 同时会注入 DSL 的 ruleChain.additionalInfo.root_responses，发布快照随 dsl_json 一起携带。
+	RootResponses string `json:"root_responses,omitempty"`
 	// HasReleases 是否存在发布记录（存在时不允许删除该根链）
 	HasReleases bool `json:"has_releases"`
+	// MustInputParams 必须输入的参数列表
+	MustInputParams []string `json:"must_input_params"`
 }
 
 // RootChainReleaseDef 根链发布版本定义。
@@ -295,6 +340,14 @@ type RootChainReleaseDef struct {
 	ConnectionsData string `json:"connections_data,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖值 JSON
 	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖 JSON（map[instanceId]expr），仅本链生效，不影响节点定义
+	NodeSwitchOverrides string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖 JSON（map[instanceId]name），仅本链生效，不影响节点定义
+	NodeNameOverrides string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态 JSON（map[instanceId]bool，true=收起），仅前端展示用
+	NodeCollapseOverrides string `json:"node_collapse_overrides,omitempty"`
+	// RootResponses 根节点返回值定义 JSON（[]RootResponseItem），发布时快照，回滚后随之恢复
+	RootResponses string `json:"root_responses,omitempty"`
 	// IsCurrent 是否为生产环境当前使用的版本
 	IsCurrent bool `json:"is_current"`
 	// PublishedAt 发布时间
@@ -386,6 +439,40 @@ type MySQLConfig struct {
 	Params string `json:"params,omitempty"`
 }
 
+// AlertChannelFeishu 飞书自定义机器人告警通道。
+const AlertChannelFeishu = "feishu"
+
+// EnvAlertConfig 环境级告警配置。
+// 后台以 JSON 字符串存库（wf_env_configs.alert_config），在环境配置页面的「告警设置」中维护。
+// 每次巡检先扫描开启了告警的环境，再按各自配置（通道 / 机器人地址 / 阈值 / 提醒间隔）发送告警，
+// 未配置的项回落到全局配置（custom.normal.activity_offline_alert_*）。
+type EnvAlertConfig struct {
+	// Enabled 该环境是否开启告警。false 时不做任何离线判定与发送（测试环境应保持关闭）。
+	Enabled bool `json:"enabled"`
+	// Channel 告警通道，目前支持 AlertChannelFeishu（飞书自定义机器人）；为空按 feishu 处理。
+	Channel string `json:"channel,omitempty"`
+	// Webhook 该环境专属的机器人 Webhook 地址。
+	// 为空时回落到全局配置 custom.normal.feishu_alert_webhook（即所有环境共用同一个群）。
+	Webhook string `json:"webhook,omitempty"`
+	// ThresholdSec 心跳中断超过该秒数判定离线；nil 或 <=0 用全局阈值。
+	ThresholdSec *int `json:"threshold_seconds,omitempty"`
+	// RemindMinutes 持续离线时的重复提醒间隔（分钟）；nil 用全局配置，显式 0 表示只提醒一次。
+	RemindMinutes *int `json:"remind_minutes,omitempty"`
+}
+
+// AlertEnabled 返回该环境是否开启告警（配置为空时视为关闭）。
+func (c *EnvAlertConfig) AlertEnabled() bool {
+	return c != nil && c.Enabled
+}
+
+// EffectiveChannel 返回生效的告警通道（未指定时按飞书处理）。
+func (c *EnvAlertConfig) EffectiveChannel() string {
+	if c == nil || c.Channel == "" {
+		return AlertChannelFeishu
+	}
+	return c.Channel
+}
+
 // EnvConfigDef 环境配置定义。
 // 挂在某个 project 下，按 EnvName 区分多个环境（如 dev/test/prod）。
 // 每个环境可配置环境变量、Redis、MySQL 连接信息，供后续使用。
@@ -402,6 +489,10 @@ type EnvConfigDef struct {
 	RedisConfig *RedisConfig `json:"redis_config,omitempty"`
 	// MySQLConfig MySQL 连接配置
 	MySQLConfig *MySQLConfig `json:"mysql_config,omitempty"`
+	// AlertConfig 该环境的告警配置（后台以 JSON 存库，页面上可配置）。
+	// 逐环境开关，用于屏蔽测试/开发环境：只有开启的环境才会对其下 activity 做离线判定并告警。
+	// nil 或 Enabled=false 表示不告警（缺省关闭，需人工开启）。
+	AlertConfig *EnvAlertConfig `json:"alert_config,omitempty"`
 	// CreatedAt 创建时间
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt 更新时间
@@ -432,6 +523,50 @@ type ConnectionDef struct {
 	Label string `json:"label,omitempty"`
 }
 
+// 根节点返回值定义的转换类型（与节点参数/返回值的类型转换保持一致）。
+const (
+	// RootResponseTypeRaw 不转换，原样返回取到的值
+	RootResponseTypeRaw = ""
+	// RootResponseTypeString 转为字符串
+	RootResponseTypeString = "string"
+	// RootResponseTypeInt64 转为整数
+	RootResponseTypeInt64 = "int64"
+	// RootResponseTypeFloat64 转为浮点数
+	RootResponseTypeFloat64 = "float64"
+	// RootResponseTypeBool 转为布尔
+	RootResponseTypeBool = "bool"
+	// RootResponseTypeSlice 转为数组（字符串按 JSON 解析）
+	RootResponseTypeSlice = "slice"
+	// RootResponseTypeMap 转为对象（字符串按 JSON 解析）
+	RootResponseTypeMap = "map"
+	// RootResponseTypeFormula 表达式：由表达式引擎计算，此处不做转换
+	RootResponseTypeFormula = "formula"
+)
+
+// RootResponseItem 根节点返回值定义项（根链级别的返回结构定义）。
+//
+// 背景：流程执行完返回 FlowContext，其中 Responses（根节点返回值）此前一直为空，
+// 调用方只能从 Steps 里自行翻找各节点的入参与返回值。通过本定义在编排页配置返回结构：
+// 每个字段指定「取值来源」（可引用链上任意节点的 arguments / responses）与「转换类型」，
+// 执行结束后按定义把占位符替换为真实值、转换后写入 FlowContext.Responses 返回。
+type RootResponseItem struct {
+	// Key 返回字段的键名（必填）
+	Key string `json:"key"`
+	// Label 字段中文名/说明（选填，便于阅读）
+	Label string `json:"label,omitempty"`
+	// Type 转换类型，见 RootResponseType* 常量；空表示不转换
+	Type string `json:"type,omitempty"`
+	// Value 取值来源：
+	//   - 引用形式：{{steps.<节点实例ID>.arguments.<key>}} / {{steps.<节点实例ID>.responses.<key>}}；
+	//     也支持 {{steps.<id>.responses}} 取整个返回值、{{arguments.<key>}} 取出参、{{<key>}} 简写。
+	//   - 固定值：不含占位符时按字面量（再按 Type 转换）。
+	Value string `json:"value,omitempty"`
+	// Required 该字段是否必填（仅定义元信息，运行期按 Type 转换后写入；供编排/调用方校验）
+	Required bool `json:"required,omitempty"`
+	// Description 字段说明（选填）
+	Description string `json:"description,omitempty"`
+}
+
 // BuildRequest 组装根链请求。
 type BuildRequest struct {
 	// Project 所属项目
@@ -459,6 +594,15 @@ type BuildRequest struct {
 	// NodeParamOverrides 节点实例参数覆盖，key=nodeID, value=覆盖的配置键值对
 	// 例: {"N000001": {"url": "https://real-api.example.com", "timeout": 30}}
 	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖，key=node 实例 instanceId，value=路由表达式
+	NodeSwitchOverrides map[string]string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖，key=node 实例 instanceId，value=节点显示名称
+	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态，key=node 实例 instanceId，value=true 表示收起
+	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides,omitempty"`
+	// RootResponses 根节点返回值定义：执行结束后按此结构从各节点取值并写入 FlowContext.Responses。
+	// 可引用链上任意节点的 arguments / responses（不要求是上游）。
+	RootResponses []RootResponseItem `json:"root_responses,omitempty"`
 }
 
 // BuildSubChainRequest 编排方式组装子链请求。
@@ -487,6 +631,12 @@ type BuildSubChainRequest struct {
 	FirstNodeIndex int `json:"first_node_index,omitempty"`
 	// NodeParamOverrides 节点实例参数覆盖，key=nodeID, value=覆盖的配置键值对
 	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides,omitempty"`
+	// NodeSwitchOverrides 每节点 switch_condition 覆盖，key=node 实例 instanceId，value=路由表达式
+	NodeSwitchOverrides map[string]string `json:"node_switch_overrides,omitempty"`
+	// NodeNameOverrides 每节点实例名称覆盖，key=node 实例 instanceId，value=节点显示名称
+	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
+	// NodeCollapseOverrides 每节点实例参数配置区收起状态，key=node 实例 instanceId，value=true 表示收起
+	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides,omitempty"`
 }
 
 // ============================================================
@@ -639,6 +789,14 @@ type ActivityDef struct {
 	// PublishedInRootChain activity 是否已被发布到根链（含子链传递引用），为 true 时禁止编辑/删除。
 	// 由列表接口按发布快照实时计算填充，不入库。
 	PublishedInRootChain bool `json:"published_in_root_chain,omitempty"`
+	// PublishedRootChains 引用了该 activity 且已发布（当前生效版本）的根链明细列表，含 ID、名称与版本号。
+	// 由列表接口按发布快照实时计算填充，不入库；
+	// 前端据此在 Activities 列表展示「已发布引用」数量，并在悬停时列出全部根链，便于人工处理。
+	PublishedRootChains []*PublishedRootChainRef `json:"published_root_chains,omitempty"`
+	// RefNodes 引用了该 activity 的全部 Node 明细（含节点 ID、名称及该节点是否已发布）。
+	// 与 PublishedRootChains 是不同维度：后者是「最终的根链」，这里是「直接使用的节点」，
+	// 用于修改 activity 前评估影响面。由列表接口实时计算填充，不入库。
+	RefNodes []*RefNodeInfo `json:"ref_nodes,omitempty"`
 	// CreatedAt 创建时间
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt 更新时间
@@ -845,6 +1003,18 @@ type ActivityHeartbeatInfo struct {
 	Count int `json:"count"`
 }
 
+// PublishedActivityRef 标识一个「已被发布到根链（当前生效版本）」的 activity，
+// 供管理端离线告警等场景筛选「线上正在跑」的 activity：
+// 未加入发布（仅草稿 / 未被任何已发布根链引用）的 activity 不在其中，因此不会触发离线告警。
+type PublishedActivityRef struct {
+	// Project 项目名
+	Project string `json:"project"`
+	// ActNamespace 活动命名空间
+	ActNamespace string `json:"act_namespace"`
+	// ActName 活动名称
+	ActName string `json:"act_name"`
+}
+
 // ActivityLogDef activity 执行日志定义。
 // 由管理端收集器消费 worker 上报的日志后落库，前端可按 activity 查看与检索。
 type ActivityLogDef struct {
@@ -966,7 +1136,9 @@ type NodeLogDef struct {
 	// TraceID 本次执行的分布式追踪 ID，用于回查本次执行产生的 activity 日志（wf_activity_logs.trace_id）
 	TraceID     string `json:"trace_id"`
 	RootChainID string `json:"root_chain_id"`
-	SpanID      string `json:"span_id"`
+	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），用于追溯当时执行的是哪个发布版本。
+	RootChainReleaseID string `json:"root_chain_release_id"`
+	SpanID             string `json:"span_id"`
 	// RelationType 该 node 执行完成后往下传递的连接类型（relationType），
 	// 对应 rulego 的 TellSuccess/TellFailure/TellNext 等，取值如 Success/Failure/True/False 或自定义字符串。
 	// 用于回查本次 node 走了哪条分支链路。
@@ -986,6 +1158,8 @@ type NodeLogFilter struct {
 	Env string `json:"env,omitempty"`
 	// TraceID 链路 ID 精确匹配（用于跨 node/activity 回查）
 	TraceID string `json:"trace_id,omitempty"`
+	// RootChainID 根链 ID 精确匹配（用于按根链过滤 node 运行日志）
+	RootChainID string `json:"root_chain_id,omitempty"`
 	// Keyword 关键词模糊匹配 payload/result/error_msg
 	Keyword string `json:"keyword,omitempty"`
 	// Limit 每页条数

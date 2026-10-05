@@ -23,7 +23,7 @@ type AddReq struct {
 }
 
 func AddMethod(_ context.Context, req *AddReq) (int, error) {
-	fmt.Println("[AddMethod] received:", conv.String(req))
+	fmt.Println("[AddMethod] received::", conv.String(req))
 	return req.A + req.B, nil
 }
 
