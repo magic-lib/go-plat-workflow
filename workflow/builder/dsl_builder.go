@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/plugins/activity"
 	"sort"
 	"strings"
 
@@ -492,9 +493,9 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 
 		// 构建用户传入参数（frontend），override key 使用实例 ID 以区分同一节点的多次添加
 		frontendMap := make(map[string]any)
-		frontendSrc := make(map[string]string) // 记录每个覆盖参数的来源 src，用于设置 DSL 的 policy
+		frontendSrc := make(map[string]string)  // 记录每个覆盖参数的来源 src，用于设置 DSL 的 policy
 		frontendType := make(map[string]string) // 记录每个覆盖参数的类型 type，用于写入 DSL arguments 的 BindConfig.Type
-		privateKeys := make([]string, 0)       // 私有参数 key 列表（需从入参二级结构取值）
+		privateKeys := make([]string, 0)        // 私有参数 key 列表（需从入参二级结构取值）
 		if nodeOverrides, ok := overrides[inst.instanceId]; ok {
 			for k, v := range nodeOverrides {
 				// 兼容两种格式：
@@ -581,7 +582,7 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			}
 			// 按 key 自动排序，保证 DSL 稳定可读、与节点参数定义实时一致
 			sortBindConfigsByKey(args)
-			config["arguments"] = args
+			config[activity.Arguments] = args
 		} else if len(frontendMap) > 0 {
 			// 无参数定义时的兜底：仍以 BindConfig 数组格式保存，便于后期判断覆盖策略
 			args := make([]*param.BindConfig, 0)
@@ -592,17 +593,17 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 				args = append(args, &param.BindConfig{Key: k, Value: v, Type: frontendType[k], Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
 			}
 			sortBindConfigsByKey(args)
-			config["arguments"] = args
+			config[activity.Arguments] = args
 		}
 
 		// responses：取节点定义中的返回值配置（config 已实时从 node.Configuration 加载），
 		// 按 key 自动排序，确保与节点实时变化保持一致、顺序稳定。
-		if raw, ok := config["responses"]; ok && raw != nil {
+		if raw, ok := config[activity.Responses]; ok && raw != nil {
 			var respArr []*confPackage.NodeConfigResponse
 			if b, _ := json.Marshal(raw); len(b) > 0 && string(b) != "null" {
 				if err := json.Unmarshal(b, &respArr); err == nil && len(respArr) > 0 {
 					sortRespConfigsByKey(respArr)
-					config["responses"] = respArr
+					config[activity.Responses] = respArr
 				}
 			}
 		}

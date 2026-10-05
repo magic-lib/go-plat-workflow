@@ -750,6 +750,9 @@ func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string
 	if invokeRequest == nil {
 		return nil, fmt.Errorf("invokeRequest is nil")
 	}
+	if invokeRequest.Result != nil {
+		invokeRequest.Metadata.IsAsync = false // 如果需要返回值，这里就必须为false，才能准确拿到返回
+	}
 
 	jsonMapTemp := templates.NewJsonMapTemplate("{", "}")
 	newUrl, err := jsonMapTemp.ReplacePath(ProjectWorkflowInvoke, map[string]any{
