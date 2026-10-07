@@ -6,7 +6,7 @@ require (
 	github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf
 	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915073806-8eaab07bf01d
 	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260908085532-bcf290ddeea0
-	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261006032926-e8036ff54ad8
+	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261007063901-ca1b277d4f01
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.35.1
