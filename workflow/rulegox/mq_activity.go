@@ -385,7 +385,9 @@ func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, 
 		return nil, err
 	}
 
-	data, err := w.execActivityResponse(resp.Data, act.Responses, returnValues)
+	actKey := fmt.Sprintf("%s/%s", act.ActNamespace, act.ActName)
+
+	data, err := w.execActivityResponse(actKey, resp.Data, act.Responses, returnValues)
 	if err != nil {
 		engine.MysqlLogErrorString("RequestActivity execActivityResponse", "argAny:", argAny, "argTemplate:", argTemplate, " params:", params,
 			"headers:", headers, " returnValues:", returnValues, " activity:", act, "actNamespace:", actNamespace,
@@ -432,7 +434,7 @@ func sendRulegoxAlert(project, env, title, content string) {
 }
 
 // execActivityResponse 处理活动返回值
-func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any, returnValues []*config.ReturnValue) (any, error) {
+func (w *MQWorker) execActivityResponse(actKey string, respData any, respConfig map[string]any, returnValues []*config.ReturnValue) (any, error) {
 	responses := ""
 	if len(respConfig) > 0 {
 		responses = conv.String(respConfig)
@@ -454,9 +456,9 @@ func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any,
 		}
 		// 按【环境变量级】告警配置（各自飞书群）发送，回落全局 webhook；未配置则静默跳过。
 		sendRulegoxAlert(w.Project, w.Env, "[工作流告警] 活动返回 nil",
-			fmt.Sprintf("项目: %s\n环境: %s\n说明: 活动执行成功但返回值为 nil，下游引用该节点的参数/返回值需注意。\n返回值定义: %s\n时间: %s",
-				w.Project, w.Env, strings.Join(rvList, ", "), time.Now().Format("2006-01-02 15:04:05")))
-		return nil, fmt.Errorf("该结果返回为nil，数据错误")
+			fmt.Sprintf("项目: %s\n环境: %s\n活动: %s\n说明: 活动执行成功但返回值为 nil，下游引用该节点的参数/返回值需注意。\n返回值定义: %s\n时间: %s",
+				w.Project, w.Env, actKey, strings.Join(rvList, ", "), time.Now().Format("2006-01-02 15:04:05")))
+		return nil, fmt.Errorf("%s 该结果返回为nil，数据错误", actKey)
 	}
 
 	// 需要处理返回值的类型
