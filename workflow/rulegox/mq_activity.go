@@ -397,24 +397,27 @@ func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, 
 	return resp, nil
 }
 
-// rulegoxAlertSender 告警发送器抽象（与 commnode.AlertSender / workflow 共用同一接口签名）。
+// rulegoxAlertSender 告警发送器抽象（与 commnode.AlertSender / workflow 共用同一契约）。
 // 定义在 rulegox 包内，避免 rulegox -> commnode / workflow 的循环依赖：
-// 真正的实现由 workflow 包在初始化时通过 SetAlertSender 注入，与 commnode 共用同一发送器。
+// 真正的实现由 workflow 包在初始化时通过 SetAlertSender 注入。
+// 与 commnode 不同，这里携带 project/env，便于按【环境变量级】告警配置（各自飞书群）发送，
+// 而非统一的全局 webhook。
 type rulegoxAlertSender interface {
-	// SendAlert 发送一条告警。title 为标题，content 为正文。
-	SendAlert(ctx context.Context, title, content string)
+	// SendAlertForEnv 向指定环境发送一条告警（实现侧应优先使用该环境的告警 webhook，
+	// 未配置环境 webhook 时回落全局发送器；无全局发送器则静默 no-op）。
+	SendAlertForEnv(ctx context.Context, project, env, title, content string)
 }
 
 // defaultRulegoxAlertSender 包级默认告警发送器（由 workflow 包注入）。
 var defaultRulegoxAlertSender rulegoxAlertSender
 
-// SetAlertSender 注入（或清空）rulegox 包级告警发送器。webhook 未配置时实现侧 no-op。
+// SetAlertSender 注入（或清空）rulegox 包级告警发送器。未注入时告警静默跳过。
 func SetAlertSender(sender rulegoxAlertSender) {
 	defaultRulegoxAlertSender = sender
 }
 
 // sendRulegoxAlert 在已注入告警发送器时异步发送告警，避免阻塞主流程；内部 recover 防异常影响业务。
-func sendRulegoxAlert(ctx context.Context, title, content string) {
+func sendRulegoxAlert(project, env, title, content string) {
 	if defaultRulegoxAlertSender == nil {
 		return
 	}
@@ -424,7 +427,7 @@ func sendRulegoxAlert(ctx context.Context, title, content string) {
 				log.Printf("rulegox alert: panic when sending alert, title=%s, err=%v", title, r)
 			}
 		}()
-		defaultRulegoxAlertSender.SendAlert(ctx, title, content)
+		defaultRulegoxAlertSender.SendAlertForEnv(context.Background(), project, env, title, content)
 	}()
 }
 
@@ -443,27 +446,16 @@ func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any,
 		return data, nil
 	}
 	if data == nil {
-		// 执行返回 nil 但 returnValues 有定义：用零值构造返回值返回，
-		// 避免下游引用该节点的参数/返回值时报错（缺失 key）。
-		//respMap := make(map[string]any)
-		// 飞书告警：活动执行成功但返回 nil（已按 returnValues 契约补零值），
-		// 提示运维关注上游数据缺失，下游若引用该节点返回值请注意可能为默认零值。
+		// 执行返回 nil 但 returnValues 有定义：活动执行成功却无返回值，按错误返回，
+		// 避免下游引用该节点时拿到缺 key 而产生更难排查的逻辑错误；同时飞书告警提示运维。
 		var rvList []string
 		for _, rv := range returnValues {
 			rvList = append(rvList, fmt.Sprintf("%s(%s)", rv.Key, rv.Type))
 		}
-		sendRulegoxAlert(context.Background(), "[工作流告警] 活动返回 nil",
+		// 按【环境变量级】告警配置（各自飞书群）发送，回落全局 webhook；未配置则静默跳过。
+		sendRulegoxAlert(w.Project, w.Env, "[工作流告警] 活动返回 nil",
 			fmt.Sprintf("项目: %s\n环境: %s\n说明: 活动执行成功但返回值为 nil，下游引用该节点的参数/返回值需注意。\n返回值定义: %s\n时间: %s",
 				w.Project, w.Env, strings.Join(rvList, ", "), time.Now().Format("2006-01-02 15:04:05")))
-		//for _, returnValue := range returnValues {
-		//	if returnValue.Type != "" {
-		//		if returnValue.Name != "" {
-		//			respMap[returnValue.Name] = conv.ZeroForTypeString(returnValue.Type)
-		//		} else if returnValue.Key != "" {
-		//			respMap[returnValue.Key] = conv.ZeroForTypeString(returnValue.Type)
-		//		}
-		//	}
-		//}
 		return nil, fmt.Errorf("该结果返回为nil，数据错误")
 	}
 

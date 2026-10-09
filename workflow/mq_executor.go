@@ -369,14 +369,55 @@ var (
 	alertSenderMu sync.RWMutex
 )
 
-// SetAlertSender 注入告警发送器，供 workflow 包与 commnode 组件共用。
-// 传入 nil 表示清除（回退为静默跳过告警）。
+// alertEnvConfigStore 用于解析【环境变量级】告警 webhook（按 project+env 查询环境配置）。
+// 由 SetAlertEnvConfigStore 注入；为 nil 时按全局 webhook 处理。
+var alertEnvConfigStore EnvConfigStore
+
+// globalAlertWebhook 全局飞书 webhook 兜底（由 SetFeiShuAlertWebhook 注入）。
+// 环境未配置各自 webhook 时回落此地址；环境已关闭告警则不发送。
+var globalAlertWebhook string
+
+// SetAlertEnvConfigStore 注入环境配置仓储，并同步注入 env-aware 告警发送器，
+// 使所有告警（Node 执行失败 / 活动返回 nil 等）均按【环境变量级】告警配置发送。
+func SetAlertEnvConfigStore(s EnvConfigStore) {
+	alertEnvConfigStore = s
+	commnode.SetEnvAlertSender(envAwareAlertSender{})
+	rulegox.SetAlertSender(envAwareAlertSender{})
+}
+
+// envAwareAlertSender 统一告警发送器：按环境变量级告警配置（EnvConfigDef.AlertConfig）发送。
+//   - 环境未配置或 AlertEnabled()==false：不告警（满足"未打开就不告"）。
+//   - 环境开启但无 webhook：回落 globalAlertWebhook（旧全局 webhook）。
+//   - 环境未配置告警（无 EnvConfigDef）：回落 globalAlertWebhook（兼容旧行为）。
+type envAwareAlertSender struct{}
+
+func (envAwareAlertSender) SendAlertForEnv(ctx context.Context, project, env, title, content string) {
+	webhook := ""
+	if alertEnvConfigStore != nil && project != "" && env != "" {
+		if def, err := alertEnvConfigStore.GetByName(ctx, project, env); err == nil && def != nil &&
+			def.AlertConfig != nil {
+			if !def.AlertConfig.AlertEnabled() {
+				// 环境已配置但未开启告警 → 不发送（不回落全局）
+				return
+			}
+			webhook = def.AlertConfig.Webhook
+		}
+	}
+	if webhook == "" {
+		webhook = globalAlertWebhook
+	}
+	if webhook != "" {
+		feishuSenderFor(webhook).SendAlert(ctx, title, content)
+	}
+}
+
+// SetAlertSender 注入默认（全局）告警发送器，供 workflow 包与 commnode 兼容旧全局场景共用。
+// 传入 nil 表示清除（回退为静默跳过告警）。env-aware 发送器由 SetAlertEnvConfigStore 注入。
 func SetAlertSender(sender commnode.AlertSender) {
 	alertSenderMu.Lock()
 	alertSender = sender
 	alertSenderMu.Unlock()
 	commnode.SetAlertSender(sender)
-	rulegox.SetAlertSender(sender)
 }
 
 // CurrentAlertSender 返回当前注入的告警发送器（未注入返回 nil）。
@@ -409,6 +450,7 @@ func SetFeiShuAlertWebhook(webhook string) {
 	if webhook == "" {
 		return
 	}
+	globalAlertWebhook = webhook
 	SetAlertSender(&feishuAlertSender{webhook: webhook})
 }
 

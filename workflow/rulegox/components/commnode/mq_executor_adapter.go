@@ -134,19 +134,43 @@ type AlertSender interface {
 	SendAlert(ctx context.Context, title, content string)
 }
 
-// defaultAlertSender 包级默认告警发送器（由 workflow 包注入）。
+// defaultAlertSender 包级默认告警发送器（由 workflow 包注入，兼容旧全局 webhook 场景）。
 var defaultAlertSender AlertSender
 
-// SetAlertSender 注入（或清空）包级默认告警发送器。
+// AlertSenderForEnv 携带 project/env 的告警发送能力抽象，便于按【环境变量级】告警配置发送。
+// 与 AlertSender 并存：优先使用 ForEnv 版本，使 Node 执行失败等场景能按当前环境（各自飞书群）告警。
+type AlertSenderForEnv interface {
+	// SendAlertForEnv 向指定环境发送一条告警（实现侧应优先用该环境的告警 webhook，
+	// 环境未开启告警时静默 no-op）。
+	SendAlertForEnv(ctx context.Context, project, env, title, content string)
+}
+
+// envAlertSender 包级 env-aware 告警发送器（由 workflow 包注入）。
+var envAlertSender AlertSenderForEnv
+
+// SetAlertSender 注入（或清空）包级默认（全局）告警发送器，兼容旧调用。
 // workflow 包初始化时应调用此方法，使 Node 执行失败等场景能推送告警到飞书群。
 // 传入 nil 可清除（回退为静默跳过）。
 func SetAlertSender(sender AlertSender) {
 	defaultAlertSender = sender
 }
 
-// sendAlert 在已注入告警发送器时异步发送告警（webhook 未配置时实现侧 no-op）。
+// SetEnvAlertSender 注入（或清空）包级 env-aware 告警发送器。
+// 一旦注入，Node 执行失败等告警将按 project/env 走各自环境告警配置（各自飞书群）。
+func SetEnvAlertSender(sender AlertSenderForEnv) {
+	envAlertSender = sender
+}
+
+// sendAlert 异步发送告警。优先使用 env-aware 发送器（按当前环境告警配置），
+// 未注入时回落默认（全局）发送器；两者皆未注入则静默跳过。
 // 异步执行避免阻塞主流程；内部 recover 防止告警逻辑异常影响业务。
-func sendAlert(ctx context.Context, title, content string) {
+func sendAlert(ctx context.Context, project, env, title, content string) {
+	if envAlertSender != nil {
+		goroutines.GoAsync(func(params ...any) {
+			envAlertSender.SendAlertForEnv(ctx, project, env, title, content)
+		})
+		return
+	}
 	if defaultAlertSender == nil {
 		return
 	}

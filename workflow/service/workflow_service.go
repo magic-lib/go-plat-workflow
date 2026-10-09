@@ -234,6 +234,10 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		chainPoolVersions:       cmap.New[*chainPoolEntry](),
 	}
 
+	// 注入环境配置仓储，使所有告警（Node 执行失败 / 活动返回 nil 等）均按
+	// 环境变量级告警配置（各自飞书群）发送；环境未开启告警则不发送。
+	workflow.SetAlertEnvConfigStore(envConfigRepo)
+
 	// 启动后台巡检：即使用户无流量，也能按时间策略错峰回收历史版本实例。
 	go s.chainPoolJanitor()
 
