@@ -410,6 +410,22 @@ func (w *MQWorker) execActivityResponse(respData any, respConfig map[string]any,
 	if len(returnValues) == 0 {
 		return data, nil
 	}
+	if data == nil {
+		// 执行返回 nil 但 returnValues 有定义：用零值构造返回值返回，
+		// 避免下游引用该节点的参数/返回值时报错（缺失 key）。
+		respMap := make(map[string]any)
+		for _, returnValue := range returnValues {
+			if returnValue.Type != "" {
+				if returnValue.Name != "" {
+					respMap[returnValue.Name] = conv.ZeroForTypeString(returnValue.Type)
+				} else if returnValue.Key != "" {
+					respMap[returnValue.Key] = conv.ZeroForTypeString(returnValue.Type)
+				}
+			}
+		}
+		return respMap, nil
+	}
+
 	// 需要处理返回值的类型
 	if cond.IsJsonObject(conv.String(data)) {
 		var argMap map[string]any

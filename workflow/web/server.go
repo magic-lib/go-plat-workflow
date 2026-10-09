@@ -1020,20 +1020,20 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 	}
 
 	buildReq := &workflow.BuildRequest{
-		Project:            req.Project,
-		ChainID:            req.ChainID,
-		ChainKey:           req.ChainKey,
-		ChainName:          req.ChainName,
-		Description:        req.Description,
-		NodeIDs:            req.NodeIDs,
-		SubChainIDs:        req.SubChainIDs,
-		Connections:        req.Connections,
-		DebugMode:          req.DebugMode,
-		NodeParamOverrides: req.NodeParamOverrides,
-		NodeSwitchOverrides: req.NodeSwitchOverrides,
-		NodeNameOverrides:  req.NodeNameOverrides,
+		Project:               req.Project,
+		ChainID:               req.ChainID,
+		ChainKey:              req.ChainKey,
+		ChainName:             req.ChainName,
+		Description:           req.Description,
+		NodeIDs:               req.NodeIDs,
+		SubChainIDs:           req.SubChainIDs,
+		Connections:           req.Connections,
+		DebugMode:             req.DebugMode,
+		NodeParamOverrides:    req.NodeParamOverrides,
+		NodeSwitchOverrides:   req.NodeSwitchOverrides,
+		NodeNameOverrides:     req.NodeNameOverrides,
 		NodeCollapseOverrides: req.NodeCollapseOverrides,
-		RootResponses:      req.RootResponses,
+		RootResponses:         req.RootResponses,
 	}
 
 	def, err := ws.svc.SaveRootChain(r.Context(), buildReq)
@@ -1090,33 +1090,33 @@ func (ws *WebServer) handleCreateRootChain(w http.ResponseWriter, r *http.Reques
 // ============================================================
 
 type buildSubChainRequest struct {
-	Project     string                   `json:"project"`
-	ChainID     string                   `json:"chain_id"`
-	ChainName   string                   `json:"chain_name"`
-	Description string                   `json:"description"`
-	NodeIDs     []string                 `json:"node_ids"`
-	SubChainIDs []string                 `json:"sub_chain_ids"`
-	Connections []workflow.ConnectionDef `json:"connections"`
-	DebugMode   bool                     `json:"debug_mode"`
-	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
-	NodeSwitchOverrides map[string]string `json:"node_switch_overrides"`
-	NodeNameOverrides  map[string]string `json:"node_name_overrides"`
-	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides"`
+	Project               string                            `json:"project"`
+	ChainID               string                            `json:"chain_id"`
+	ChainName             string                            `json:"chain_name"`
+	Description           string                            `json:"description"`
+	NodeIDs               []string                          `json:"node_ids"`
+	SubChainIDs           []string                          `json:"sub_chain_ids"`
+	Connections           []workflow.ConnectionDef          `json:"connections"`
+	DebugMode             bool                              `json:"debug_mode"`
+	NodeParamOverrides    map[string]map[string]interface{} `json:"node_param_overrides"`
+	NodeSwitchOverrides   map[string]string                 `json:"node_switch_overrides"`
+	NodeNameOverrides     map[string]string                 `json:"node_name_overrides"`
+	NodeCollapseOverrides map[string]bool                   `json:"node_collapse_overrides"`
 }
 
 func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSubChainRequest {
 	return &workflow.BuildSubChainRequest{
-		Project:     project,
-		ChainID:     r.ChainID,
-		ChainName:   r.ChainName,
-		Description: r.Description,
-		NodeIDs:     r.NodeIDs,
-		SubChainIDs: r.SubChainIDs,
-		Connections: r.Connections,
-		DebugMode:   r.DebugMode,
-		NodeParamOverrides: r.NodeParamOverrides,
-		NodeSwitchOverrides: r.NodeSwitchOverrides,
-		NodeNameOverrides:  r.NodeNameOverrides,
+		Project:               project,
+		ChainID:               r.ChainID,
+		ChainName:             r.ChainName,
+		Description:           r.Description,
+		NodeIDs:               r.NodeIDs,
+		SubChainIDs:           r.SubChainIDs,
+		Connections:           r.Connections,
+		DebugMode:             r.DebugMode,
+		NodeParamOverrides:    r.NodeParamOverrides,
+		NodeSwitchOverrides:   r.NodeSwitchOverrides,
+		NodeNameOverrides:     r.NodeNameOverrides,
 		NodeCollapseOverrides: r.NodeCollapseOverrides,
 	}
 }
@@ -1333,23 +1333,23 @@ func (ws *WebServer) handleDeleteRootChainRelease(w http.ResponseWriter, r *http
 // ============================================================
 
 type executeRequest struct {
-	Project            string                            `json:"project"`
-	ChainID            string                            `json:"chain_id"`
-	ChainKey           string                            `json:"chain_key"`
-	ChainName          string                            `json:"chain_name"`
-	Description        string                            `json:"description"`
-	NodeIDs            []string                          `json:"node_ids"`
-	TraceId            string                            `json:"trace_id"`
-	SubChainIDs        []string                          `json:"sub_chain_ids"`
-	Connections        []workflow.ConnectionDef          `json:"connections"`
-	Payload            json.RawMessage                   `json:"payload"`
-	DebugMode          bool                              `json:"debug_mode"`
-	UseRelease         bool                              `json:"use_release"`
-	EnvName            string                            `json:"env_name"`
-	NodeParamOverrides map[string]map[string]interface{} `json:"node_param_overrides"`
-	NodeSwitchOverrides map[string]string                `json:"node_switch_overrides"`
-	NodeNameOverrides  map[string]string                `json:"node_name_overrides"`
-	NodeCollapseOverrides map[string]bool               `json:"node_collapse_overrides"`
+	Project               string                            `json:"project"`
+	ChainID               string                            `json:"chain_id"`
+	ChainKey              string                            `json:"chain_key"`
+	ChainName             string                            `json:"chain_name"`
+	Description           string                            `json:"description"`
+	NodeIDs               []string                          `json:"node_ids"`
+	TraceId               string                            `json:"trace_id"`
+	SubChainIDs           []string                          `json:"sub_chain_ids"`
+	Connections           []workflow.ConnectionDef          `json:"connections"`
+	Payload               json.RawMessage                   `json:"payload"`
+	DebugMode             bool                              `json:"debug_mode"`
+	UseRelease            bool                              `json:"use_release"`
+	EnvName               string                            `json:"env_name"`
+	NodeParamOverrides    map[string]map[string]interface{} `json:"node_param_overrides"`
+	NodeSwitchOverrides   map[string]string                 `json:"node_switch_overrides"`
+	NodeNameOverrides     map[string]string                 `json:"node_name_overrides"`
+	NodeCollapseOverrides map[string]bool                   `json:"node_collapse_overrides"`
 	// RootResponses 根节点返回值定义（保存根链时提交，执行结束后据此生成返回结构）
 	RootResponses []workflow.RootResponseItem `json:"root_responses"`
 }
@@ -2366,15 +2366,15 @@ func (ws *WebServer) handleListNodeLogsGlobal(w http.ResponseWriter, r *http.Req
 		pageSize = 200
 	}
 	filter := &workflow.NodeLogFilter{
-		Level:    q.Get("level"),
-		NodeID:   q.Get("node_id"),
-		NodeName: q.Get("node_name"),
-		Env:      q.Get("env"),
-		TraceID:  strings.TrimSpace(q.Get("trace_id")),
+		Level:       q.Get("level"),
+		NodeID:      q.Get("node_id"),
+		NodeName:    q.Get("node_name"),
+		Env:         q.Get("env"),
+		TraceID:     strings.TrimSpace(q.Get("trace_id")),
 		RootChainID: strings.TrimSpace(q.Get("root_chain_id")),
-		Keyword:  q.Get("keyword"),
-		Limit:    pageSize,
-		Offset:   (page - 1) * pageSize,
+		Keyword:     q.Get("keyword"),
+		Limit:       pageSize,
+		Offset:      (page - 1) * pageSize,
 	}
 	logs, total, err := ws.svc.ListNodeLogsGlobal(r.Context(), project, filter)
 	if err != nil {
