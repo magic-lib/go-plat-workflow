@@ -376,6 +376,7 @@ func SetAlertSender(sender commnode.AlertSender) {
 	alertSender = sender
 	alertSenderMu.Unlock()
 	commnode.SetAlertSender(sender)
+	rulegox.SetAlertSender(sender)
 }
 
 // CurrentAlertSender 返回当前注入的告警发送器（未注入返回 nil）。
