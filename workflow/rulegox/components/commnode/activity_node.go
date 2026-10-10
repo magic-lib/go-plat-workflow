@@ -295,8 +295,8 @@ func (x *ActivityNode) onMsgFailureEndExec(ctx types.RuleContext, msg types.Rule
 	nodeSpanId := id.GetUUID(nodeStr)
 	// 飞书告警：node 执行失败，按当前环境（各自飞书群）异步发送到群（环境未开启告警则静默跳过）
 	sendAlert(context.Background(), actMetaData.Project, actMetaData.Env, "[工作流告警] Node 执行失败",
-		fmt.Sprintf("节点名称: %s\n节点ID: %s\n项目: %s\n环境: %s\n错误信息: %s\n时间: %s",
-			x.nodeName, nodeStr, actMetaData.Project, actMetaData.Env, err.Error(), time.Now().Format("2006-01-02 15:04:05")))
+		fmt.Sprintf("节点名称: %s\n节点ID: %s\n项目: %s\n环境: %s\nTraceId: %s\n错误信息: %s\n时间: %s",
+			x.nodeName, nodeStr, actMetaData.Project, actMetaData.Env, actMetaData.TraceId, err.Error(), time.Now().Format("2006-01-02 15:04:05")))
 
 	nodeStep.Status = paramx.StepStatusFail
 	nodeStep.Error = &paramx.ErrorInfo{
