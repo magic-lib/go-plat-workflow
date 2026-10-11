@@ -247,10 +247,10 @@ github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260917070835-1b56bc896bf2 h
 github.com/magic-lib/go-plat-cache v1.20260210.2-0.20260917070835-1b56bc896bf2/go.mod h1:av6z3OIHWEgbBugewSoN2Ma2Gkk1L52f+OsZ6tTDxi4=
 github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf h1:3PQ/Vqjh9VIo2GZhbQy0fvH4VG0n658G+wCvFM0wVcg=
 github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf/go.mod h1:y70xri7t2tgEVyxicN0RQCLJ9br4gMLyFmWntlyxH7M=
-github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915073806-8eaab07bf01d h1:fgCOcXtmPrc3EpPi8L3KdKgiqRb5jhEIiGUnZq3rvOg=
-github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915073806-8eaab07bf01d/go.mod h1:iYdbSbameJCGB+uScnCgN4hYF1CgNeC+cT4j97Sflww=
-github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260908085532-bcf290ddeea0 h1:Xl1lfYNN+zIRrj5h7z/JaoH0uIRTQemm7owRWALTIEc=
-github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260908085532-bcf290ddeea0/go.mod h1:qdbmrxmQN8N0llmryFZxZxYLM8O56UZO7PveIWdKkHk=
+github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db h1:jsBX3J10unUmiFmTAwcPvBJm3ubxsUa3d8+PqZoEeK4=
+github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db/go.mod h1:nW/tV8hKRZLhwsuziG+vbewK0in26WI3Df/f3Gx0BM0=
+github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8 h1:htYzzc+uHf0EP7Bom0MimzOobg1Uyg/oom6x/7MPFDg=
+github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8/go.mod h1:RjKLILmDdALutDWqRJuW74AYPuE8Si1cA9VeiHo4gt0=
 github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261010124941-069dee9be352 h1:gGlVvTUJ5r2HroZydDbUjmkJYOe/cJMAmoOSvFLJYoE=
 github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261010124941-069dee9be352/go.mod h1:sllh8JGw17FAb3EovJOblfJgaYDCHH4E4Q8m3J1edaA=
 github.com/marspere/goencrypt v1.0.7 h1:Rlvsc9b7Yeaeda+gsGeCjREVZ/KL7szelRq4+haK5mw=

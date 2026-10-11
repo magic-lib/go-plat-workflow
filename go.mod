@@ -3,9 +3,10 @@ module github.com/magic-lib/go-plat-workflow
 go 1.24.3
 
 require (
+	github.com/hibiken/asynq v0.26.0
 	github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf
-	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20260915073806-8eaab07bf01d
-	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20260908085532-bcf290ddeea0
+	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db
+	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8
 	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261010124941-069dee9be352
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/redis/go-redis/v9 v9.17.2
@@ -82,7 +83,6 @@ require (
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hbollon/go-edlib v1.7.0 // indirect
-	github.com/hibiken/asynq v0.26.0 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/iancoleman/orderedmap v0.3.0 // indirect
 	github.com/imdario/mergo v0.3.16 // indirect

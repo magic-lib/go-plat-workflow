@@ -24,6 +24,8 @@ import (
 	"log"
 
 	mq "github.com/magic-lib/go-plat-mq/mq"
+
+	"github.com/hibiken/asynq"
 )
 
 const (
@@ -33,6 +35,13 @@ const (
 
 	// 心跳上报间隔：每 10s 统一上报一次，多个 actName 只需一次 HSET 即可完成，减少请求量
 	heartbeatInterval = 10 * time.Second
+
+	// MQ worker 空闲轮询 Redis 取任务的间隔；越小任务入队→被消费延迟越低，但 Redis 轻量轮询压力越大。
+	mqWorkerTaskCheckInterval = 100 * time.Millisecond
+	// 生产者侧结果兜底轮询间隔（Pub/Sub 偶发丢失时退化等待），调小缩短退化路径等待。
+	mqWorkerPollInterval = 50 * time.Millisecond
+	// worker 并发数，与 go-plat-mq 默认保持一致。
+	mqWorkerConcurrency = 50
 
 	// HeartbeatKeyPrefix ActivityLogKeyPrefix  Redis key 约定（服务端按相同命名读取）：
 	//   心跳：workflow:heartbeat:<namespace>   —— Hash，field=actName，value=最近心跳时间戳(秒)
@@ -130,8 +139,13 @@ type activityHeartbeat struct {
 // NewMQWorker 创建 MQ worker，内部构建 asynq 消费端
 func NewMQWorker(projectName, env string, redisCfg *conn.Connect) (*MQWorker, error) {
 	cfg := &mq.AsynqMessageQueue{
-		Namespace: GetMQNamespace(projectName, env), //项目+环境命名空间
-		Timeout:   config.DefaultTimeout,
+		Namespace:    GetMQNamespace(projectName, env), //项目+环境命名空间
+		Timeout:      config.DefaultTimeout,
+		PollInterval: mqWorkerPollInterval,
+		ServerConfig: &asynq.Config{
+			Concurrency:       mqWorkerConcurrency,
+			TaskCheckInterval: mqWorkerTaskCheckInterval,
+		},
 	}
 	client, err := mq.NewAsynqMessageQueue(redisCfg, cfg)
 	if err != nil {
