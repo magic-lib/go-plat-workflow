@@ -5895,23 +5895,29 @@ async function refreshExecEnvs() {
   const sel = document.getElementById('exec-env');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '<option value="">-- 选择环境 --</option>';
-  if (!p) return;
+  if (!p) { sel.innerHTML = '<option value="">-- 选择环境 --</option>'; return; }
   try {
     const envs = await api('/api/env-configs');
-    const seenEnv = {};
-    (envs || []).forEach(e => {
+    const list = Array.isArray(envs) ? envs : [];
+    // 关键：等数据回来后再一次性替换 innerHTML（而不是先清空再 append）。
+    // 否则在连续两次未 await 的调用（如切 tab + 切项目）并发时，
+    // 两次 append 会叠加，导致「执行环境」下拉里同一环境出现重复选项。
+    const seen = {};
+    const frag = document.createDocumentFragment();
+    frag.appendChild(new Option('-- 选择环境 --', ''));
+    list.forEach(e => {
       if (!e || !e.env_name) return;
       // 按 env_name 去重：仅 trim 前后空格，保留大小写区分（test 与 Test 视为不同环境）
       const name = String(e.env_name).trim();
-      if (!name || seenEnv[name]) return;
-      seenEnv[name] = true;
-      const opt = document.createElement('option');
-      opt.value = name;
+      if (!name || seen[name]) return;
+      seen[name] = true;
+      const opt = new Option(name, name);
       opt.textContent = name + (e.description ? ' (' + e.description + ')' : '');
-      sel.appendChild(opt);
+      frag.appendChild(opt);
     });
-    if (cur) sel.value = cur;
+    sel.innerHTML = '';
+    sel.appendChild(frag);
+    if (cur && Array.prototype.some.call(sel.options, o => o.value === cur)) sel.value = cur;
   } catch (e) { /* 忽略环境加载失败 */ }
 }
 
