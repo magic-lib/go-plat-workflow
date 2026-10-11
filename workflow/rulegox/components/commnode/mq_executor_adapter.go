@@ -26,6 +26,7 @@ import (
 	"log"
 
 	"github.com/magic-lib/go-plat-utils/plugins/activity"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 )
 
 // ActivityMQRequest 通过 MQ 执行单个 Activity 的请求。
@@ -123,6 +124,14 @@ var defaultNodeLogSaver NodeLogSaver
 // 传入 nil 可清除（此时 pushNodeLog 回退为 redis 推送，保持兼容）。
 func SetNodeLogSaver(saver NodeLogSaver) {
 	defaultNodeLogSaver = saver
+	// 注入落库实现时同步注册“整条流程总耗时”汇总日志钩子：
+	// 任意流程（根链/子链）执行结束都会经过 rulegox.StartWorkFlow 的结束回调触发 FlowCompletedHook，
+	// 写入一条 NodeID 为空的 flow_total 记录到 wf_node_logs，便于用 traceId 查整条流程耗时。
+	if saver != nil {
+		rulegox.FlowCompletedHook = pushFlowTotalNodeLog
+	} else {
+		rulegox.FlowCompletedHook = nil
+	}
 }
 
 // AlertSender 发送告警通知的能力抽象（如飞书自定义机器人）。

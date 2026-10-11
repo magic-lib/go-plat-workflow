@@ -481,6 +481,17 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 	return nodeLogCli, nil
 }
 
+// pushFlowTotalNodeLog 整条流程执行结束时写入一条“流程总耗时”汇总日志到 wf_node_logs。
+// 单 node 相关字段（NodeID/NodeName/EventID/RelationType/Payload/Arguments/Result）按需求留空，
+// 仅保留流程级标识（TraceID/RootChainID/RootChainReleaseID）与总耗时 DurationMs，
+// 便于用 traceId 查询时直接看到整条流程用了多少时间。runErr 为流程级错误（无则 nil）。
+func pushFlowTotalNodeLog(metaData *rulegox.ActivityMetaData, durationMs int64, runErr error) {
+	if metaData == nil {
+		return
+	}
+	_, _ = pushNodeLog(nil, metaData, "", durationMs, "", "", "", "flow_total", "", nil, nil, nil, runErr)
+}
+
 func (x *ActivityNode) getNodeFlowContext(ctx types.RuleContext, allParam *paramx.FlowContext) (*paramx.FlowContext, error) {
 	currNodeId := getNodeId(ctx)
 	if currNodeId == "" {

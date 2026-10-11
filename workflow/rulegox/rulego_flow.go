@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+// FlowCompletedHook 在整条流程（每次 StartWorkFlow 执行的根链/子链）执行结束时触发，
+// 入参为流程级元数据、总耗时（毫秒）、流程级错误。由 commnode 包在注入 NodeLogSaver 时注册，
+// 用于把“整个流程耗时”作为一条 NodeID 为空的汇总记录写入 wf_node_logs，便于按 traceId 查询整条流程耗时。
+// 未注入（nil）时不触发，保持兼容。
+var FlowCompletedHook func(metaData *ActivityMetaData, durationMs int64, runErr error)
+
 type ActivityFlowConfig struct {
 	RootChainDSL *types.RuleChain           //根配置
 	SubChainDSL  []*types.RuleChainBaseInfo //子配置
@@ -182,6 +188,7 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 	msg.SetMetadata(newMetadata)
 
 	var endOption, endCompletedOption types.RuleContextOption
+	flowStartTime := time.Now() // 流程发起时刻，用于计算整条流程总耗时（flow_total 汇总日志）
 	if hasEndNodeTag {
 		var ruleCompleteCtx context.Context
 		var ruleCompleteMsg types.RuleMsg
@@ -199,9 +206,12 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 			_ = conv.Unmarshal(ruleCompleteMsg.GetData(), resultParam)
 			if ruleCompleteErr != nil {
 				actConfig.EndFunc(ruleCompleteCtx, ruleRelationType, resultParam, ruleCompleteErr)
-				return
+			} else {
+				actConfig.EndFunc(ruleCompleteCtx, ruleRelationType, resultParam, nil)
 			}
-			actConfig.EndFunc(ruleCompleteCtx, ruleRelationType, resultParam, nil)
+			if FlowCompletedHook != nil {
+				FlowCompletedHook(metaData, time.Since(flowStartTime).Milliseconds(), ruleCompleteErr)
+			}
 		})
 	} else {
 		endOption = types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
@@ -209,9 +219,12 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 			_ = conv.Unmarshal(msg.GetData(), resultParam)
 			if err != nil {
 				actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, err)
-				return
+			} else {
+				actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, nil)
 			}
-			actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, nil)
+			if FlowCompletedHook != nil {
+				FlowCompletedHook(metaData, time.Since(flowStartTime).Milliseconds(), err)
+			}
 		})
 	}
 
