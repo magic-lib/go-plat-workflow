@@ -40,11 +40,14 @@ type ActivityFlowConfig struct {
 
 type ActivityMetaData struct {
 	RootChainID string        `json:"root_chain_id,omitempty"`
-	PoolKey     string        `json:"pool_key,omitempty"`
-	TraceId     string        `json:"trace_id,omitempty"`
-	Env         string        `json:"env,omitempty"`
-	Project     string        `json:"project,omitempty"`
-	RedisConfig *conn.Connect `json:"redis_config,omitempty"`
+	// RootChainName 根链（流程）名称，由 StartWorkFlow 自 DSL 的 RuleChain.Name 填充，
+	// 随 msg.Metadata 透传给各节点，用于失败告警/日志展示更直观的流程名。
+	RootChainName string        `json:"root_chain_name,omitempty"`
+	PoolKey       string        `json:"pool_key,omitempty"`
+	TraceId       string        `json:"trace_id,omitempty"`
+	Env           string        `json:"env,omitempty"`
+	Project       string        `json:"project,omitempty"`
+	RedisConfig   *conn.Connect `json:"redis_config,omitempty"`
 	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），写入 wf_node_logs.root_chain_release_id。
 	RootChainReleaseID string `json:"root_chain_release_id,omitempty"`
 }
@@ -64,6 +67,7 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 	}
 	metaData.TraceId = id.GetUUID(metaData.TraceId)
 	metaData.RootChainID = actConfig.RootChainDSL.RuleChain.ID
+	metaData.RootChainName = actConfig.RootChainDSL.RuleChain.Name
 	actConfig.FlowContext.SetTraceId(metaData.TraceId)
 	actConfig.FlowContext.SetFlowId(metaData.RootChainID)
 
