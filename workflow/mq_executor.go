@@ -818,16 +818,21 @@ func InvokeWorkerFlowAPI(ctx context.Context, project, env string, domain string
 		postData[k] = v
 	}
 
+	timeNow := time.Now()
+
 	resp := curl.NewClient().NewRequest(&curl.Request{
 		Url:    newUrl,
 		Data:   postData,
 		Method: http.MethodPost,
 	}).Submit(ctx)
+	costTime := time.Since(timeNow).Milliseconds()
+
 	if resp.Error != nil {
 		return nil, resp.Error
 	}
 	respData := new(httputil.CommResponse)
 	err = conv.Unmarshal(resp.Response, respData)
+	respData.Time = costTime
 	if err != nil {
 		return nil, err
 	}
