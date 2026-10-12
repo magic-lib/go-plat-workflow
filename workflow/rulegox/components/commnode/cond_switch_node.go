@@ -101,22 +101,27 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	nodeSpanId := id.GetUUID(nodeStr)
 
+	nodeParams, argErr := NodeArguments(allParams, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
+
 	condStr := x.getCondition()
 	if condStr == "" {
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, 0, nodeStr, x.nodeName, "success", "info", types.Success, allParams, nil, nil, nil)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
+		if argErr == nil {
+			allParams.SetStepArguments(currNodeId, nodeParams)
+			msg.SetData(conv.String(allParams))
+		}
 		ctx.TellNext(msg) //结束流程了
 		return
 	}
-	nodeParams, err := NodeArguments(allParams, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
-	if err != nil {
-		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, 0, nodeStr, x.nodeName, "fail", "error", types.Failure, allParams, nil, nil, err)
+	if argErr != nil {
+		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, 0, nodeStr, x.nodeName, "fail", "error", types.Failure, allParams, nil, nil, argErr)
 		if cliErr == nil && x.nodeLogCli == nil {
 			x.nodeLogCli = nodeCli
 		}
-		ctx.TellFailure(msg, err)
+		ctx.TellFailure(msg, argErr)
 		return
 	}
 	allParams.SetStepArguments(currNodeId, nodeParams)
@@ -138,6 +143,9 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	if cliErr == nil && x.nodeLogCli == nil {
 		x.nodeLogCli = nodeCli
 	}
+
+	msg.SetData(conv.String(allParams))
+
 	ctx.TellNext(msg, relationType)
 }
 

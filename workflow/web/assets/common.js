@@ -7376,6 +7376,8 @@ function markOrchParamRefBroken(field, broken) {
 
 // 暂存已编辑的参数值（key=nodeId, value={key: {src, value}}），用于重渲染时保留
 let _orchParamPreset = {};
+// 标记某参数是否已「由调用传入首次切到固定配置并清空过默认值」，用于仅首次自动清空、之后不再改动
+let _orchFixedSeeded = {};
 // 节点参数配置区收起状态（key=instanceId, value=true 表示收起），持久化到数据库
 let _orchCollapseState = {};
 
@@ -7425,6 +7427,7 @@ function onParamSrcChange(sel) {
   const nodeId = field.getAttribute('data-node');
   const key = field.getAttribute('data-key');
   const preset = (_orchParamPreset[nodeId] && _orchParamPreset[nodeId][key]) || { src: orchParamSrcToInternal(src), value: '' };
+  const prevSrc = preset.src; // 切换前的来源（用于判断是否由「调用传入」切来）
 
   if (src === PARAM_SRC_REF_ACT) {
     preset.src = PARAM_SRC_UPSTREAM;
@@ -7435,6 +7438,13 @@ function onParamSrcChange(sel) {
     renderCallInputHint(slot, key, nodeId, !!preset.private);
   } else {
     preset.src = PARAM_SRC_FIXED;
+    // 首次由「调用传入」切到「固定配置」：清空默认值（调用传入的隐藏值里默认带的是参数 key，不应带出）。
+    // 仅首次如此，之后用户手动改过的值不再被自动清空（按 seedKey 去重）。
+    const seedKey = nodeId + '\x00' + key;
+    if (prevSrc === PARAM_SRC_ENTRY && !_orchFixedSeeded[seedKey]) {
+      preset.value = '';
+      _orchFixedSeeded[seedKey] = true;
+    }
     renderFixedInput(slot, preset.value, orchParamValuePlaceholder(nodeId, 'string'));
   }
   // 类型下拉：仅「固定配置」可编辑；其它来源锁定并还原为参数定义默认类型（p.type / 返回值定义 type）
@@ -7907,6 +7917,7 @@ function collectOrchParamOverrides() {
 // 兼容旧格式：paramKey 直接是字符串值（纯值，按格式推断来源）
 function applyOrchParamOverrides(saved) {
   _orchParamPreset = {};
+  _orchFixedSeeded = {};
   if (!saved) return;
   try {
     const obj = typeof saved === 'string' ? JSON.parse(saved) : saved;
@@ -8555,6 +8566,7 @@ function newSubChainViaOrch() {
   document.getElementById('orch-chain-desc').value = '';
   document.getElementById('orch-debug-mode').checked = false;
   _orchParamPreset = {}; // 重置节点参数配置暂存
+  _orchFixedSeeded = {}; // 重置首次切固定配置标记
   _orchCollapseState = {}; // 重置节点参数配置区收起状态
   _orchRootResponses = []; // 重置根节点返回值定义
   renderOrchRootResponses();

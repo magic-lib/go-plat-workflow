@@ -88,9 +88,19 @@ func NodeArguments(allParamCtx *paramx.FlowContext, nodeId paramx.StepId, argTem
 		return allParam, nil
 	}
 	newAllParam := make(map[string]any)
+	ruleEngine := templates.NewRuleExprEngine()
+	allMaps, _ := allParamCtx.ToMaps()
 	lo.ForEach(arguments, func(item *param.BindConfig, index int) {
 		if one, ok := allParam[item.Key]; ok {
-			newAllParam[item.Key] = one
+			if item.Type == "formula" {
+				expAny, err := ruleEngine.RunString(conv.String(one), allMaps)
+				if err != nil {
+					return
+				}
+				newAllParam[item.Key] = expAny
+			} else {
+				newAllParam[item.Key] = one
+			}
 		}
 	})
 	return newAllParam, nil
