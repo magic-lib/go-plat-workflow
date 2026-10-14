@@ -7328,18 +7328,38 @@ function collectOrchBrokenRefs() {
   const container = document.getElementById('orch-param-list');
   if (!container) return out;
   container.querySelectorAll('.override-field').forEach(field => {
-    const srcSel = field.querySelector('.param-src-select');
-    if (!srcSel || srcSel.value !== PARAM_SRC_UPSTREAM) return;
-    const slot = field.querySelector('.param-value-slot');
-    const finalEl = slot ? slot.querySelector('.param-ref-final') : null;
-    const inputEl = slot ? slot.querySelector('.param-value-input') : null;
-    const ref = finalEl && finalEl.value ? finalEl.value : (inputEl ? inputEl.value : '');
-    if (!ref) return;
     const nodeId = field.getAttribute('data-node');
+    const key = field.getAttribute('data-key');
+    const preset = resolveOrchParamPreset(nodeId, key);
+    if (!preset || preset.src !== PARAM_SRC_UPSTREAM) return; // 仅校验「引用节点」来源（用内部值，避免界面值比较错误）
+    const ref = (preset.value || '').trim();
+    if (!ref) return;
     const parsed = parseStepsRef(ref);
     if (!parsed || !getOrchRefNodeCandidates(nodeId).some(c => c.id === parsed.nodeId)) {
-      out.push({ nodeId: nodeId, key: field.getAttribute('data-key'), ref: String(ref) });
+      out.push({ nodeId: nodeId, key: key, ref: String(ref) });
     }
+  });
+  return out;
+}
+
+// 保存前检查：扫描所有节点参数配置，找出「引用节点」选中的上游节点不在当前节点所有连接路径上的情况
+// （存在不经过它的分支路径），运行时可能走不到那条、取值不正确。仅提示，不修改配置、不阻断保存。
+function collectOrchNonCommonRefs() {
+  const out = [];
+  (window._orchNodeInstances || []).forEach(inst => {
+    getOrchInstanceParams(inst).forEach(p => {
+      const preset = resolveOrchParamPreset(inst.instanceId, p.key);
+      if (!preset || preset.src !== PARAM_SRC_UPSTREAM) return;
+      const ref = (preset.value || '').trim();
+      if (!ref) return;
+      const parsed = parseStepsRef(ref);
+      if (!parsed || !parsed.nodeId) return;
+      if (orchParamRefBroken(inst.instanceId, preset)) return; // 已失效由另一检查负责，避免重复提示
+      const dominators = getOrchDominatorIds(inst.instanceId);
+      if (!dominators.has(parsed.nodeId)) {
+        out.push({ nodeId: inst.instanceId, key: p.key, ref: String(ref), refNode: parsed.nodeId });
+      }
+    });
   });
   return out;
 }
@@ -7370,6 +7390,24 @@ function markOrchParamRefBroken(field, broken) {
   const refId = (parseStepsRef(broken.ref) || {}).nodeId || broken.ref;
   const text = '⚠️ 引用的节点 ' + refId + ' 已不在该节点的上游（已删除或已移出链路），运行时可能取不到值。' +
                '请重新选择来源，或重新连上连线后本提示会自动消失。';
+  warn.textContent = text;
+  warn.title = text;
+}
+
+// 在参数行上标记「引用节点不在该节点的所有连接路径上（存在不经过它的分支）」提示，复用 param-ref-broken 标红样式
+function markOrchParamNotCommon(field, info) {
+  field.classList.add('param-ref-broken');
+  const sel = field.querySelector('.param-src-select');
+  if (sel) sel.classList.add('param-src-need-reselect');
+  const extra = field.querySelector('.param-extra-row');
+  if (!extra) return;
+  let warn = field.querySelector('.param-ref-broken-warn');
+  if (!warn) {
+    warn = document.createElement('span');
+    warn.className = 'param-ref-broken-warn';
+    extra.appendChild(warn);
+  }
+  const text = '⚠️ 引用的节点 ' + info.refNode + ' 不在该节点的所有连接路径上（存在不经过它的分支），运行时可能走不到那条、取值不正确。请改用所有路径都经过的节点。';
   warn.textContent = text;
   warn.title = text;
 }
@@ -7591,6 +7629,24 @@ function getOrchAncestorIds(targetId) {
     });
   }
   return result;
+}
+
+// 计算节点 targetId 的「必经节点」集合：从任意入口到 targetId 的每条连接路径都经过的节点。
+// 等价于 targetId 所有直接父节点「祖先或自身」集合的交集 —— 引用节点选中的上游节点若不在此集合，
+// 说明存在不经过它的分支路径，运行时可能走不到那条、取不到值。
+function getOrchDominatorIds(targetId) {
+  const conns = collectOrchConnections();
+  const parents = [];
+  conns.forEach(c => { if (c.to_id === targetId && c.from_id) parents.push(c.from_id); });
+  if (parents.length === 0) return new Set(); // 入口节点无父节点，引用无意义
+  let dominators = null;
+  parents.forEach(p => {
+    const closure = new Set(getOrchAncestorIds(p));
+    closure.add(p); // 含父节点自身（父节点也是到 targetId 的必经点）
+    if (dominators === null) dominators = closure;
+    else dominators = new Set([...dominators].filter(id => closure.has(id)));
+  });
+  return dominators || new Set();
 }
 
 // 渲染「引用节点」控件：先选节点，再选 参数定义/返回值定义
@@ -8700,6 +8756,31 @@ async function generateOrchRootChain() {
     const more = brokenRefs.length > 5 ? ' …（共 ' + brokenRefs.length + ' 个）' : '';
     showToast('⚠️ 有 ' + brokenRefs.length + ' 个参数的「引用节点」已失效（目标不在其上游）：' + lines + more +
               '。已照常保存，但运行时可能取不到值，请确认后重新选择来源。', 'error');
+  }
+
+  // 保存前检查「引用节点」所选上游节点是否为当前节点的「必经节点」（所有连接路径都经过）：
+  // 仅提示，不阻断保存；不通过则标红 + 自动展开该节点的参数配置面板，便于定位。
+  const nonCommonRefs = collectOrchNonCommonRefs();
+  if (nonCommonRefs.length > 0) {
+    const lines2 = nonCommonRefs.slice(0, 5).map(r => '· ' + r.nodeId + '.' + r.key + ' → ' + r.ref).join('；');
+    const more2 = nonCommonRefs.length > 5 ? ' …（共 ' + nonCommonRefs.length + ' 个）' : '';
+    showToast('⚠️ 有 ' + nonCommonRefs.length + ' 个参数的「引用节点」所选上游节点不在该节点的所有连接路径上（存在不经过它的分支）：' +
+              lines2 + more2 + '。运行时可能走不到那条、取值不正确，请改用所有路径都经过的节点。已照常保存。', 'error');
+    // 标红 + 自动展开出错的节点参数配置面板
+    const container = document.getElementById('orch-param-list');
+    const expandIds = new Set(nonCommonRefs.map(r => r.nodeId));
+    expandIds.forEach(id => { if (_orchCollapseState) _orchCollapseState[id] = false; });
+    if (container) {
+      renderOrchParamOverrides(); // 重新渲染并强制展开出错节点
+      const fields = container.querySelectorAll('.override-field');
+      nonCommonRefs.forEach(r => {
+        const field = [...fields].find(f => f.getAttribute('data-node') === r.nodeId && f.getAttribute('data-key') === r.key);
+        if (field) markOrchParamNotCommon(field, r);
+      });
+      const first = nonCommonRefs[0];
+      const f0 = [...fields].find(f => f.getAttribute('data-node') === first.nodeId && f.getAttribute('data-key') === first.key);
+      if (f0 && f0.scrollIntoView) f0.scrollIntoView({ block: 'center' });
+    }
   }
 
   const body = {
