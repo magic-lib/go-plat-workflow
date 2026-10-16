@@ -6,7 +6,7 @@ require (
 	github.com/hibiken/asynq v0.26.0
 	github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf
 	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db
-	github.com/magic-lib/go-plat-retry v1.20260210.2-0.20261016025331-28003ee03633
+	github.com/magic-lib/go-plat-retry v1.20261016.1
 	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8
 	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261016025118-6d056bc6ad0c
 	github.com/orcaman/concurrent-map/v2 v2.0.1

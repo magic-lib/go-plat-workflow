@@ -251,8 +251,8 @@ github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf h1
 github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf/go.mod h1:y70xri7t2tgEVyxicN0RQCLJ9br4gMLyFmWntlyxH7M=
 github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db h1:jsBX3J10unUmiFmTAwcPvBJm3ubxsUa3d8+PqZoEeK4=
 github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db/go.mod h1:nW/tV8hKRZLhwsuziG+vbewK0in26WI3Df/f3Gx0BM0=
-github.com/magic-lib/go-plat-retry v1.20260210.2-0.20261016025331-28003ee03633 h1:jFsaCXYFqrqIXQp2wmkbdCPxKSpOJDExXj4gIrt6lZQ=
-github.com/magic-lib/go-plat-retry v1.20260210.2-0.20261016025331-28003ee03633/go.mod h1:0zrrOzI2TYsN64/o+GmtlmABlegiF5aCImYgG4ErwC0=
+github.com/magic-lib/go-plat-retry v1.20261016.1 h1:X2f0H63a0qdlROKL/TtjS7vNvBaWEHxF9/+QX6pOX2Q=
+github.com/magic-lib/go-plat-retry v1.20261016.1/go.mod h1:0zrrOzI2TYsN64/o+GmtlmABlegiF5aCImYgG4ErwC0=
 github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8 h1:htYzzc+uHf0EP7Bom0MimzOobg1Uyg/oom6x/7MPFDg=
 github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8/go.mod h1:RjKLILmDdALutDWqRJuW74AYPuE8Si1cA9VeiHo4gt0=
 github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261016025118-6d056bc6ad0c h1:L9FVZWU+Fsp0nyydqUfbPuP268oYjkp43JMiyrh8bJE=
