@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"github.com/magic-lib/go-plat-retry/backoffretry"
 	"github.com/magic-lib/go-plat-startupcfg/startupcfg"
 	"github.com/magic-lib/go-plat-utils/conv"
 	"github.com/magic-lib/go-plat-utils/utils"
@@ -110,6 +111,11 @@ func (l *WfLogic) InvokeWorkerFlowAPI(ctx context.Context, invokeReq *InvokeRequ
 }
 
 func (l *WfLogic) RegisterActivities(ctx context.Context, allActivities []*RegActivityInfo) error {
+	return backoffretry.AsyncBackoffRetry(ctx, func() error {
+		return l.registerActivities(ctx, allActivities)
+	})
+}
+func (l *WfLogic) registerActivities(ctx context.Context, allActivities []*RegActivityInfo) error {
 	w, err := l.getWfWorker(ctx)
 	if err != nil {
 		log.Println("RegisterActivities err:", err)

@@ -6,8 +6,9 @@ require (
 	github.com/hibiken/asynq v0.26.0
 	github.com/magic-lib/go-plat-curl v1.20250627.2-0.20260818105045-be6cec1a72bf
 	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db
+	github.com/magic-lib/go-plat-retry v1.20260210.2-0.20261016025331-28003ee03633
 	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8
-	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261010124941-069dee9be352
+	github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261016025118-6d056bc6ad0c
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.35.1
@@ -38,6 +39,7 @@ require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
+	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/coocood/freecache v1.2.4 // indirect
