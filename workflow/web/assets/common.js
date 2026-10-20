@@ -6163,7 +6163,9 @@ let _orchSwitchDefaultName = ''; // 当前编辑节点的节点定义默认名�
 
 async function loadOrchData() {
   try {
-    _orchNodes = await api('/api/nodes?only_enabled=true');
+    // 编排页依赖节点定义的完整 configuration（路由条件、参数/返回值下拉等），
+    // 故通过 full=true 获取未瘦身的完整节点列表，避免读取被置空的字段报错。
+    _orchNodes = await api('/api/nodes?only_enabled=true&full=true');
     _orchSubChains = await api('/api/sub-chains?only_enabled=true');
     refreshOrchNodeNsFilter();
     refreshOrchNodeTagFilter();

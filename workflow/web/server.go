@@ -665,13 +665,19 @@ func (ws *WebServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	// 列表仅用于展示与标记（node_id / name / type / kind / tags / status / namespace /
 	// published_in_root_chain / published_root_chains / has_switch_condition / node_heartbeats），
 	// 自带的 configuration / additional_info / params / outputs 体积较大，跨多节点时成倍放大
-	// 网络传输量。这里直接置空瘦身；编辑(Edit)与测试(Test)需要全量时通过
+	// 网络传输量。默认直接置空瘦身；编辑(Edit)与测试(Test)需要全量时通过
 	// GET /api/nodes/{node_id} 单条获取。
-	for _, n := range nodes {
-		n.Configuration = nil
-		n.AdditionalInfo = nil
-		n.Params = nil
-		n.Outputs = nil
+	//
+	// 但编排页(Orchestrate)依赖节点定义的完整 configuration（路由条件、参数/返回值下拉等），
+	// 因此提供 full=true 参数返回完整列表，供编排页使用以避免读取被置空的字段报错。
+	full := r.URL.Query().Get("full") == "true"
+	if !full {
+		for _, n := range nodes {
+			n.Configuration = nil
+			n.AdditionalInfo = nil
+			n.Params = nil
+			n.Outputs = nil
+		}
 	}
 
 	writeJSON(w, http.StatusOK, nodes)
