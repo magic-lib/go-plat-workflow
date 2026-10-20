@@ -860,20 +860,36 @@ function onNodeEnvFilterChange() {
   loadNodes();
 }
 
+// Nodes 列表加载按项目缓存本次会话结果，避免重复拉取。
+// 与 loadActivityEnvOptions / loadOrchData 同理：初始化时序里 顶层 loadProjects(.then) /
+// bootstrap(onLoginSuccess→loadProjects) / applyInitialTab(switchTab) 都会触发 loadNodeEnvOptions，
+// 导致 /api/nodes 与 /api/env-configs 同一项目被重复拉取。
+let _nodeEnvLoadPromise = null;
+let _nodeEnvLoadedProject = '';
+
 // 初始化 Nodes 环境筛选下拉（复用环境配置列表），恢复上次选择，并加载列表
-async function loadNodeEnvOptions() {
+async function loadNodeEnvOptions(force = false) {
   const sel = document.getElementById('node-env-filter');
   if (!sel) return;
-  try {
-    const envs = await api('/api/env-configs');
-    const savedEnv = (() => { try { return localStorage.getItem('wf_node_env') || ''; } catch (_) { return ''; } })();
-    const list = Array.isArray(envs) ? envs : [];
-    sel.innerHTML = '<option value="">全部环境</option>' + list.map(e =>
-      '<option value="' + esc(e.env_name || e.name || e) + '">' + esc(e.env_name || e.name || e) + '</option>'
-    ).join('');
-    sel.value = savedEnv;
-  } catch (e) { /* 环境列表可选，失败不影响节点列表 */ }
-  loadNodes();
+  const p = getProject();
+  // 同一项目下并发/重复调用复用同一请求，仅拉取一次；force=true 可强制刷新。
+  if (!force && _nodeEnvLoadPromise && _nodeEnvLoadedProject === p) {
+    return _nodeEnvLoadPromise;
+  }
+  _nodeEnvLoadedProject = p;
+  _nodeEnvLoadPromise = (async () => {
+    try {
+      const envs = await api('/api/env-configs');
+      const savedEnv = (() => { try { return localStorage.getItem('wf_node_env') || ''; } catch (_) { return ''; } })();
+      const list = Array.isArray(envs) ? envs : [];
+      sel.innerHTML = '<option value="">全部环境</option>' + list.map(e =>
+        '<option value="' + esc(e.env_name || e.name || e) + '">' + esc(e.env_name || e.name || e) + '</option>'
+      ).join('');
+      sel.value = savedEnv;
+    } catch (e) { /* 环境列表可选，失败不影响节点列表 */ }
+    loadNodes();
+  })();
+  return _nodeEnvLoadPromise;
 }
 
 // ============================================================
@@ -2346,26 +2362,41 @@ function pickActivityModalEnv(envs, allowEmpty) {
   return '';
 }
 
+// Activities 列表加载按项目缓存本次会话结果，避免重复拉取。
+// 与 loadOrchData 同理：初始化时序里 顶层 loadProjects(.then) / bootstrap(onLoginSuccess→loadProjects)
+// / applyInitialTab(switchTab) 都会触发 loadActivityEnvOptions，导致 /api/activities 同一项目被拉取多次。
+let _activityEnvLoadPromise = null;
+let _activityEnvLoadedProject = '';
+
 // 初始化 Activities 环境筛选下拉（复用环境配置列表），恢复上次选择的环境，并加载列表
-async function loadActivityEnvOptions() {
+async function loadActivityEnvOptions(force = false) {
   const sel = document.getElementById('act-env-filter');
   if (!sel) return;
-  try {
-    const envs = await api('/api/env-configs');
-    const savedEnv = (() => { try { return localStorage.getItem('wf_activity_env') || ''; } catch (_) { return ''; } })();
-    sel.innerHTML = '<option value="">全部环境</option>';
-    (envs || []).forEach(e => {
-      const opt = document.createElement('option');
-      opt.value = e.env_name;
-      opt.textContent = e.env_name + (e.description ? ' (' + e.description + ')' : '');
-      sel.appendChild(opt);
-    });
-    // 恢复上次选择的环境（仅当该环境仍存在时），否则回退到默认"全部环境"
-    if (savedEnv && (envs || []).some(e => e.env_name === savedEnv)) sel.value = savedEnv;
-    else sel.value = '';
-  } catch (e) { /* 环境列表可选 */ }
-  // 环境选项就绪后再加载列表，确保带上恢复后的环境去查询
-  loadActivities();
+  const p = getProject();
+  // 同一项目下并发/重复调用复用同一请求，仅拉取一次；force=true 可强制刷新。
+  if (!force && _activityEnvLoadPromise && _activityEnvLoadedProject === p) {
+    return _activityEnvLoadPromise;
+  }
+  _activityEnvLoadedProject = p;
+  _activityEnvLoadPromise = (async () => {
+    try {
+      const envs = await api('/api/env-configs');
+      const savedEnv = (() => { try { return localStorage.getItem('wf_activity_env') || ''; } catch (_) { return ''; } })();
+      sel.innerHTML = '<option value="">全部环境</option>';
+      (envs || []).forEach(e => {
+        const opt = document.createElement('option');
+        opt.value = e.env_name;
+        opt.textContent = e.env_name + (e.description ? ' (' + e.description + ')' : '');
+        sel.appendChild(opt);
+      });
+      // 恢复上次选择的环境（仅当该环境仍存在时），否则回退到默认"全部环境"
+      if (savedEnv && (envs || []).some(e => e.env_name === savedEnv)) sel.value = savedEnv;
+      else sel.value = '';
+    } catch (e) { /* 环境列表可选 */ }
+    // 环境选项就绪后再加载列表，确保带上恢复后的环境去查询
+    loadActivities();
+  })();
+  return _activityEnvLoadPromise;
 }
 
 // 关键词搜索变化：在全量数据上过滤（而非仅当前页），并回到第一页
@@ -6161,19 +6192,37 @@ let _orchNameOverrides = {};     // 每节点实例的名称覆盖（key=实例 
 let _orchSwitchEditId = '';      // 当前正在编辑 switch_condition 的节点实例 ID
 let _orchSwitchDefaultName = ''; // 当前编辑节点的节点定义默认名称（用于「用节点默认值」复位）
 
-async function loadOrchData() {
-  try {
-    // 编排页依赖节点定义的完整 configuration（路由条件、参数/返回值下拉等），
-    // 故通过 full=true 获取未瘦身的完整节点列表，避免读取被置空的字段报错。
-    _orchNodes = await api('/api/nodes?only_enabled=true&full=true');
-    _orchSubChains = await api('/api/sub-chains?only_enabled=true');
-    refreshOrchNodeNsFilter();
-    refreshOrchNodeTagFilter();
-    renderOrchNodeList();
-    renderOrchSubList();
-    refreshOrchConnOptions();
-    onOrchChange();
-  } catch(e) { showToast('加载编排数据失败: ' + e.message, 'error'); }
+// 编排数据（nodes / sub-chains）按项目缓存本次会话结果，避免重复拉取。
+// 初始化时序里 onProjectChange / bootstrap / orchLoadRootChainById 都可能触发 loadOrchData，
+// 而 /api/nodes?full=true 是较重接口，重复拉取会产生多次相同请求（同一项目 3 次）。
+let _orchDataLoadPromise = null;
+let _orchDataLoadedProject = '';
+
+async function loadOrchData(force = false) {
+  const p = getProject();
+  // 同一项目下并发/重复调用复用同一请求，仅拉取一次；force=true 可强制刷新。
+  if (!force && _orchDataLoadPromise && _orchDataLoadedProject === p) {
+    return _orchDataLoadPromise;
+  }
+  _orchDataLoadedProject = p;
+  _orchDataLoadPromise = (async () => {
+    try {
+      // 编排页依赖节点定义的完整 configuration（路由条件、参数/返回值下拉等），
+      // 故通过 full=true 获取未瘦身的完整节点列表，避免读取被置空的字段报错。
+      _orchNodes = await api('/api/nodes?only_enabled=true&full=true');
+      _orchSubChains = await api('/api/sub-chains?only_enabled=true');
+      refreshOrchNodeNsFilter();
+      refreshOrchNodeTagFilter();
+      renderOrchNodeList();
+      renderOrchSubList();
+      refreshOrchConnOptions();
+      onOrchChange();
+    } catch (e) {
+      _orchDataLoadPromise = null; // 失败则清空缓存，允许后续重试
+      showToast('加载编排数据失败: ' + e.message, 'error');
+    }
+  })();
+  return _orchDataLoadPromise;
 }
 
 function renderOrchNodeList(filterText, filterNs, filterTag) {
