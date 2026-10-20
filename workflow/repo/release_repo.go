@@ -103,6 +103,28 @@ func (r *RootChainReleaseRepo) HasReleases(ctx context.Context, project, chainID
 	return count > 0, nil
 }
 
+// HasReleasesMap 批量判断一组根链是否存在发布记录，单次查询返回 chainID->是否有发布。
+// 用于列表场景替代逐条 HasReleases 的 N+1 查询，根链数量大时显著降低 DB 往返。
+func (r *RootChainReleaseRepo) HasReleasesMap(ctx context.Context, project string, chainIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(chainIDs))
+	if len(chainIDs) == 0 {
+		return result, nil
+	}
+	var ids []string
+	err := r.db.WithContext(ctx).
+		Model(&models.RootChainReleaseModel{}).
+		Distinct("chain_id").
+		Where("project = ? AND chain_id IN ?", project, chainIDs).
+		Pluck("chain_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		result[id] = true
+	}
+	return result, nil
+}
+
 // MaxVersion 查询指定根链的最大发布版本号（无记录返回 0）。
 // 注意：必须使用 Unscoped 统计“包含软删除”的所有行，否则删除最大版本号后会复用该版本号，
 // 与 uk_project_chain_version 唯一索引冲突导致新发布插入失败。

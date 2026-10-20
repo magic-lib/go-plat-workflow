@@ -829,12 +829,17 @@ func (s *WorkflowService) ListRootChains(ctx context.Context, project string) ([
 	if err != nil {
 		return nil, err
 	}
+	// 一次性批量查询所有根链是否存在发布记录，避免逐条 HasReleases 的 N+1 查询。
+	chainIDs := make([]string, 0, len(chains))
 	for _, c := range chains {
-		has, err := s.releaseRepo.HasReleases(ctx, project, c.ChainID)
-		if err != nil {
-			return nil, err
-		}
-		c.HasReleases = has
+		chainIDs = append(chainIDs, c.ChainID)
+	}
+	hasMap, err := s.releaseRepo.HasReleasesMap(ctx, project, chainIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range chains {
+		c.HasReleases = hasMap[c.ChainID]
 
 		// 解析 dsl_json，提取每个节点 arguments/responses 中引用的 {{arguments.xxx}} 入参，
 		// 赋值给 MustInputParams，供前端列表展示该根链调用所需入参。
