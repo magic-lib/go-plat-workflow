@@ -207,6 +207,7 @@ func (ws *WebServer) registerRoutes() {
 
 	// RootChains API
 	ws.mux.HandleFunc("GET /api/root-chains", ws.handleListRootChains)
+	ws.mux.HandleFunc("GET /api/root-chains/{chain_id}", ws.handleGetRootChain)
 	ws.mux.HandleFunc("POST /api/root-chains", ws.handleSaveRootChain)
 	ws.mux.HandleFunc("POST /api/root-chains/create", ws.handleCreateRootChain)
 	ws.mux.HandleFunc("DELETE /api/root-chains/{chain_id}", ws.handleDeleteRootChain)
@@ -660,6 +661,19 @@ func (ws *WebServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 			n.NodeHeartbeats = hbs
 		}
 	}
+
+	// 列表仅用于展示与标记（node_id / name / type / kind / tags / status / namespace /
+	// published_in_root_chain / published_root_chains / has_switch_condition / node_heartbeats），
+	// 自带的 configuration / additional_info / params / outputs 体积较大，跨多节点时成倍放大
+	// 网络传输量。这里直接置空瘦身；编辑(Edit)与测试(Test)需要全量时通过
+	// GET /api/nodes/{node_id} 单条获取。
+	for _, n := range nodes {
+		n.Configuration = nil
+		n.AdditionalInfo = nil
+		n.Params = nil
+		n.Outputs = nil
+	}
+
 	writeJSON(w, http.StatusOK, nodes)
 }
 
@@ -979,7 +993,46 @@ func (ws *WebServer) handleListRootChains(w http.ResponseWriter, r *http.Request
 	if chains == nil {
 		chains = []*workflow.RootChainDef{}
 	}
+
+	// 列表仅用于展示与标记（chain_id / chain_key / name / status / node_ids /
+	// sub_chain_ids / connections_data / has_releases / must_input_params），
+	// 自带的 dsl_json 与各 override JSON 体积很大，跨多根链时成倍放大网络传输量。
+	// 这里直接置空瘦身；Execute 与编排需要全量时通过 GET /api/root-chains/{chain_id} 单条获取。
+	for _, c := range chains {
+		c.DSLJSON = ""
+		c.NodeParamOverrides = ""
+		c.NodeSwitchOverrides = ""
+		c.NodeNameOverrides = ""
+		c.NodeCollapseOverrides = ""
+		c.RootResponses = ""
+	}
+
 	writeJSON(w, http.StatusOK, chains)
+}
+
+// handleGetRootChain 单条获取根链完整定义（含 dsl_json / 各 override / root_responses 等大字段）。
+// 列表接口为减小体积已不再返回这些字段，执行(Execute)与编排(Orchestrate)需要全量时调用本接口按 ID 拉取。
+func (ws *WebServer) handleGetRootChain(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	chainID := r.PathValue("chain_id")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	if chainID == "" {
+		writeError(w, http.StatusBadRequest, "chain_id path parameter is required")
+		return
+	}
+	chain, err := ws.svc.GetRootChain(r.Context(), chainID)
+	if err != nil {
+		if errors.Is(err, workflow.ErrRootChainNotFound) {
+			writeError(w, http.StatusNotFound, "root chain not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, chain)
 }
 
 func (ws *WebServer) handleDeleteRootChain(w http.ResponseWriter, r *http.Request) {
@@ -1274,6 +1327,20 @@ func (ws *WebServer) handleListCurrentReleases(w http.ResponseWriter, r *http.Re
 	if releases == nil {
 		releases = []*workflow.RootChainReleaseDef{}
 	}
+
+	// 该接口仅用于前端构建 chain_id->version 映射（标记各根链当前发布版本号），
+	// 实际只用到 chain_id / version。每条 release 自带的 dsl_json 与各 override JSON
+	// 体积很大，跨多根链时成倍放大网络传输量、拖慢加载。这里直接将这些字段置空瘦身。
+	for _, r := range releases {
+		r.DSLJSON = ""
+		r.ConnectionsData = ""
+		r.NodeParamOverrides = ""
+		r.NodeSwitchOverrides = ""
+		r.NodeNameOverrides = ""
+		r.NodeCollapseOverrides = ""
+		r.RootResponses = ""
+	}
+
 	writeJSON(w, http.StatusOK, releases)
 }
 
@@ -2012,6 +2079,16 @@ func (ws *WebServer) handleListActivities(w http.ResponseWriter, r *http.Request
 			a.Heartbeat = &workflow.ActivityHeartbeatInfo{Ratio: ratio, Count: count}
 		}
 	}
+
+	// 列表瘦身：http_config / responses 仅编辑弹窗需要（编辑已改为按 ID 单条获取全量），
+	// 列表表格与编排参数编辑器都不依赖这两个字段，这里直接置空降低网络传输体积。
+	// 注意：arguments 列表本身用于参数计数与悬浮窗、return_values / arg_template 被编排
+	// 参数编辑器（_activityCache）依赖，故不可在此置空，否则会破坏列表展示或编排下拉。
+	for _, a := range activities {
+		a.HTTPConfig = ""
+		a.Responses = nil
+	}
+
 	writeJSON(w, http.StatusOK, activities)
 }
 

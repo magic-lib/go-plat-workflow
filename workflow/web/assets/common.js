@@ -2253,16 +2253,23 @@ async function saveNode() {
   } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
 }
 
-function editNodeByIndex(i) {
+async function editNodeByIndex(i) {
   const n = window._nodesForEdit[i];
-  if (n && n.published_in_root_chain) {
+  if (!n) return;
+  if (n.published_in_root_chain) {
     if (isAdmin()) {
       if (!confirm('该节点已发布到根链（线上生效版本引用），修改可能影响线上调用。\n\n确认要继续编辑吗？')) return;
     } else {
       showPublishedLockedToast('该节点'); return;
     }
   }
-  openNodeModal(n);
+  // 列表接口已瘦身，不返回 configuration / additional_info / params / outputs 等大字段；
+  // 编辑需要全量定义，按 ID 单条获取。
+  let full;
+  try {
+    full = await api('/api/nodes/' + encodeURIComponent(n.node_id));
+  } catch (e) { showToast('加载节点失败: ' + (e.message || e), 'error'); return; }
+  openNodeModal(full);
 }
 
 async function deleteNode(id) {
@@ -2958,8 +2965,12 @@ async function saveActivity() {
 }
 
 // 编辑指定 activity
-function editActivity(activityID) {
-  const a = window._activityCache.find(x => x.activity_id === activityID);
+async function editActivity(activityID) {
+  // 列表接口已瘦身（http_config / responses 置空），编辑需要全量定义，先按 ID 单条获取。
+  let a;
+  try {
+    a = await api('/api/activities/' + encodeURIComponent(activityID));
+  } catch (e) { showToast('加载 activity 失败: ' + (e.message || e), 'error'); return; }
   if (a && a.published_in_root_chain) {
     if (isAdmin()) {
       if (!confirm('该 activity 已发布到根链（线上生效版本引用），修改可能影响线上调用。\n\n确认要继续编辑吗？')) return;
@@ -5608,7 +5619,16 @@ function inferOrchParamPreset(val) {
   return { src: PARAM_SRC_FIXED, value: s };
 }
 
-function loadToExecuteByIndex(i) { loadToExecute(window._rootChainsForEdit[i]); }
+async function loadToExecuteByIndex(i) {
+  const c = window._rootChainsForEdit[i];
+  if (!c) return;
+  // 列表接口已瘦身，不返回 dsl_json 等大字段；执行需要全量定义，按 ID 单条获取。
+  let full;
+  try {
+    full = await api('/api/root-chains/' + encodeURIComponent(c.chain_id));
+  } catch (e) { showToast('加载根链失败: ' + (e.message || e), 'error'); return; }
+  loadToExecute(full);
+}
 // 流程图：跳转到独立编排页（orch.html）的只读预览模式（view=1），
 // 与「编排」打开同一页面，但隐藏左侧编辑面板、Live Preview 全宽展示。
 function showFlowchartByIndex(i) {
@@ -9681,8 +9701,9 @@ async function orchLoadSubChainById(chainId) {
 // 根链编排独立页（orch.html）按 chain_id 载入编辑态（不切换已删除的 tab）
 async function orchLoadRootChainById(chainId) {
   try {
-    const chains = await api('/api/root-chains');
-    const c = chains.find(x => x.chain_id === chainId);
+    // 列表接口已瘦身，不返回 dsl_json / 各 override / root_responses 等大字段，
+    // 编排需要全量定义，这里按 ID 单条获取。
+    const c = await api('/api/root-chains/' + encodeURIComponent(chainId));
     if (!c) { showToast('未找到根链: ' + chainId, 'error'); return; }
     document.getElementById('orch-chain-id').value = c.chain_id || '';
     document.getElementById('orch-chain-key').value = c.chain_key || '';
