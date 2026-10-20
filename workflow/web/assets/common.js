@@ -879,7 +879,7 @@ async function loadNodeEnvOptions(force = false) {
   _nodeEnvLoadedProject = p;
   _nodeEnvLoadPromise = (async () => {
     try {
-      const envs = await api('/api/env-configs');
+      const envs = await fetchEnvConfigs();
       const savedEnv = (() => { try { return localStorage.getItem('wf_node_env') || ''; } catch (_) { return ''; } })();
       const list = Array.isArray(envs) ? envs : [];
       sel.innerHTML = '<option value="">全部环境</option>' + list.map(e =>
@@ -2362,6 +2362,19 @@ function pickActivityModalEnv(envs, allowEmpty) {
   return '';
 }
 
+// 环境配置列表按项目共享缓存：nodes / activities 等多个初始化入口都复用同一请求，
+// 避免同一项目在刷新时重复拉取 /api/env-configs（index.html 中 nodes-table 与 act-env-filter
+// 同时存在于 DOM，初始化会分别触发 loadNodeEnvOptions 与 loadActivityEnvOptions，各自拉一次）。
+let _envConfigsPromise = null;
+let _envConfigsProject = '';
+async function fetchEnvConfigs(force = false) {
+  const p = getProject();
+  if (!force && _envConfigsPromise && _envConfigsProject === p) return _envConfigsPromise;
+  _envConfigsProject = p;
+  _envConfigsPromise = api('/api/env-configs').catch(e => { _envConfigsPromise = null; throw e; });
+  return _envConfigsPromise;
+}
+
 // Activities 列表加载按项目缓存本次会话结果，避免重复拉取。
 // 与 loadOrchData 同理：初始化时序里 顶层 loadProjects(.then) / bootstrap(onLoginSuccess→loadProjects)
 // / applyInitialTab(switchTab) 都会触发 loadActivityEnvOptions，导致 /api/activities 同一项目被拉取多次。
@@ -2380,7 +2393,7 @@ async function loadActivityEnvOptions(force = false) {
   _activityEnvLoadedProject = p;
   _activityEnvLoadPromise = (async () => {
     try {
-      const envs = await api('/api/env-configs');
+      const envs = await fetchEnvConfigs();
       const savedEnv = (() => { try { return localStorage.getItem('wf_activity_env') || ''; } catch (_) { return ''; } })();
       sel.innerHTML = '<option value="">全部环境</option>';
       (envs || []).forEach(e => {
