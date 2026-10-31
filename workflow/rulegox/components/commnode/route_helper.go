@@ -1,6 +1,7 @@
 package commnode
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/conv"
@@ -13,6 +14,7 @@ import (
 // 路由语义与 condSwitchNode 完全一致：
 //   - 结果为 bool → relationType = True/False
 //   - 结果为 string → relationType = 该字符串（即自定义 relationType，可对应任意下游连线名）
+//   - 结果为数字 → relationType = 数字的字符串形式（如 200 → "200"），不再转 bool，避免非 0 一律走 Success
 //   - 其他类型 → 尝试转为 bool → Success/Failure；转失败则使用字符串化结果作为 relationType
 //
 // expr 为空时调用方不应进入此函数（调用方应直接走默认分支）。
@@ -44,6 +46,12 @@ func routeByCondition(ruleObj *templates.RuleExprEngine, expr string, params map
 		return relationTypeTemp, relationTypeTemp, nil
 	}
 
+	// 数字结果按字符串作为自定义 relationType（表达式引擎算出的数字一般为 float64，如 2 → "2"）
+	if isNumberValue(conResult) {
+		relationTypeTemp := conv.String(conResult)
+		return relationTypeTemp, conResult, nil
+	}
+
 	// 默认分支：尝试转为 bool，走 Success/Failure
 	changeBool, convErr := conv.Convert[bool](conResult)
 	if convErr != nil {
@@ -55,4 +63,15 @@ func routeByCondition(ruleObj *templates.RuleExprEngine, expr string, params map
 		rt = types.Failure
 	}
 	return rt, changeBool, nil
+}
+
+// isNumberValue 判断值是否为数字类型（不含数字字符串，字符串已在上游按自定义 relationType 处理）
+func isNumberValue(v any) bool {
+	switch v.(type) {
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64, json.Number:
+		return true
+	}
+	return false
 }
