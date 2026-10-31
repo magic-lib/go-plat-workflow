@@ -41,7 +41,7 @@ type ActivityNode struct {
 	// 对应 node_config.enable_condition（旧字段 node_condition 已废弃，不再兼容）。
 	enableCondition string
 	// switchCondition 配置后，活动执行成功不再固定 TellSuccess，而是对本节点返回值求值该表达式，
-	// 按结果分支路由（bool→True/False；string→自定义 relationType；其他→Success/Failure），
+	// 按结果分支路由（bool→True/False；string→自定义 relationType；数字→其字符串形式；其他→Success/Failure），
 	// 从而将 activity_node 与 cond_switch_node 合二为一。为空时行为与原 TellSuccess 一致。
 	switchCondition string
 
@@ -642,7 +642,7 @@ func (x *ActivityNode) getActivityParam(allParam map[string]any, bindConfig []*p
 // 对本节点返回值求值表达式，并按结果分支路由出去（替代默认的 TellSuccess）。
 // 求值参数：整体 allParam（data/Steps/Arguments 等）+ 顶层 responses（本节点返回值 dataMap），
 // 因此表达式可写 `responses.in_blacklist == true`（走 True 分支）或 `responses.code`（走自定义 relationType）。
-// 路由语义与 condSwitchNode 一致：bool→True/False；string→自定义 relationType；其他→Success/Failure。
+// 路由语义与 condSwitchNode 一致：bool→True/False；string→自定义 relationType；数字→其字符串形式；其他→Success/Failure。
 func (x *ActivityNode) routeBySwitchCondition(actMetaData *rulegox.ActivityMetaData, nodeSpanId string, durationMs int64, nodeStr string,
 	allParam *paramx.FlowContext, arguments map[string]any, result any, stepDataMap map[string]any) (string, error) {
 	relationType, conResult, err := routeByCondition(x.ruleObj, x.switchCondition, stepDataMap)

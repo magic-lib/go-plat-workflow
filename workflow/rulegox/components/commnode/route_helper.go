@@ -13,6 +13,7 @@ import (
 // 路由语义与 condSwitchNode 完全一致：
 //   - 结果为 bool → relationType = True/False
 //   - 结果为 string → relationType = 该字符串（即自定义 relationType，可对应任意下游连线名）
+//   - 结果为数字 → relationType = 数字的字符串形式（如 200 → "200"），不再转 bool，避免非 0 一律走 Success
 //   - 其他类型 → 尝试转为 bool → Success/Failure；转失败则使用字符串化结果作为 relationType
 //
 // expr 为空时调用方不应进入此函数（调用方应直接走默认分支）。
@@ -42,6 +43,12 @@ func routeByCondition(ruleObj *templates.RuleExprEngine, expr string, params map
 
 	if relationTypeTemp, ok := conResult.(string); ok {
 		return relationTypeTemp, relationTypeTemp, nil
+	}
+
+	// 数字结果按字符串作为自定义 relationType（表达式引擎算出的数字一般为 float64，如 2 → "2"）
+	if cond.IsNumeric(conResult) {
+		relationTypeTemp := conv.String(conResult)
+		return relationTypeTemp, conResult, nil
 	}
 
 	// 默认分支：尝试转为 bool，走 Success/Failure
