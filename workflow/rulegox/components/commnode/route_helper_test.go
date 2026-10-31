@@ -67,6 +67,18 @@ func TestRouteByCondition(t *testing.T) {
 			wantRT: "3",
 		},
 		{
+			name:   "浮点误差 -> 四舍五入后匹配",
+			expr:   "0.1 + 0.2",
+			params: map[string]any{},
+			wantRT: "0.3",
+		},
+		{
+			name:   "除不尽 -> 保留 6 位小数",
+			expr:   "10 / 3",
+			params: map[string]any{},
+			wantRT: "3.333333",
+		},
+		{
 			name:    "语法错误 -> 报错",
 			expr:    "responses.x == ",
 			params:  map[string]any{"responses": map[string]any{}},
@@ -92,6 +104,31 @@ func TestRouteByCondition(t *testing.T) {
 		})
 	}
 }
+func TestNumberToRelationType(t *testing.T) {
+	cases := []struct {
+		in   any
+		want string
+	}{
+		{3.0000000001, "3"},
+		{4.0, "4"},
+		{3.3333333333, "3.333333"},
+		{2.9999999999, "3"},
+		{85.5, "85.5"},
+		{0.1 + 0.2, "0.3"},
+		{-1.25, "-1.25"},
+		{-0.0000001, "0"},
+		{1e21, "1000000000000000000000"},
+		{float32(2.5), "2.5"},
+		{200, "200"},
+		{int64(-7), "-7"},
+	}
+	for _, c := range cases {
+		if got := numberToRelationType(c.in); got != c.want {
+			t.Errorf("numberToRelationType(%v) 期望 %q，实际 %q", c.in, c.want, got)
+		}
+	}
+}
+
 func TestRouteByCondition11(t *testing.T) {
 	ruleObj := templates.NewRuleExprEngine()
 	expr := "SwitchExpr((In('K1', [responses.tag_list]) || In('K2', [responses.tag_list])  || In('K3', [responses.tag_list])), 'SET_T_MOBILE_DEFAULT', In('P1', [responses.tag_list]), 'SET_T_BANK_DEFAULT', 'SKIP')"
