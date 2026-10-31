@@ -1,7 +1,6 @@
 package commnode
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/cond"
 	"github.com/magic-lib/go-plat-utils/conv"
@@ -47,7 +46,7 @@ func routeByCondition(ruleObj *templates.RuleExprEngine, expr string, params map
 	}
 
 	// 数字结果按字符串作为自定义 relationType（表达式引擎算出的数字一般为 float64，如 2 → "2"）
-	if isNumberValue(conResult) {
+	if cond.IsNumeric(conResult) {
 		relationTypeTemp := conv.String(conResult)
 		return relationTypeTemp, conResult, nil
 	}
@@ -63,15 +62,4 @@ func routeByCondition(ruleObj *templates.RuleExprEngine, expr string, params map
 		rt = types.Failure
 	}
 	return rt, changeBool, nil
-}
-
-// isNumberValue 判断值是否为数字类型（不含数字字符串，字符串已在上游按自定义 relationType 处理）
-func isNumberValue(v any) bool {
-	switch v.(type) {
-	case int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64,
-		float32, float64, json.Number:
-		return true
-	}
-	return false
 }
