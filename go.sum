@@ -253,8 +253,8 @@ github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db h1
 github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db/go.mod h1:nW/tV8hKRZLhwsuziG+vbewK0in26WI3Df/f3Gx0BM0=
 github.com/magic-lib/go-plat-retry v1.20261016.1 h1:X2f0H63a0qdlROKL/TtjS7vNvBaWEHxF9/+QX6pOX2Q=
 github.com/magic-lib/go-plat-retry v1.20261016.1/go.mod h1:0zrrOzI2TYsN64/o+GmtlmABlegiF5aCImYgG4ErwC0=
-github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8 h1:htYzzc+uHf0EP7Bom0MimzOobg1Uyg/oom6x/7MPFDg=
-github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261010131623-1741280cbbe8/go.mod h1:RjKLILmDdALutDWqRJuW74AYPuE8Si1cA9VeiHo4gt0=
+github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261017135711-8445ab97b410 h1:OnpnRtfgGAo/wnZSq1TAQiPfCrp+sg/Q0QWk2Wx2N0I=
+github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261017135711-8445ab97b410/go.mod h1:wsaRiqDzJLRKhaVnMtDa6IcFjfLz33AqvIN8iloF2Ug=
 github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261030154931-8144a5b854ae h1:NPw18ij5tvN5gXTYGuHJ2NezWDKKo9pwAbXtvSvBLg8=
 github.com/magic-lib/go-plat-utils v1.20260902.2-0.20261030154931-8144a5b854ae/go.mod h1:Oi6AOSCpaqEFtJvW5ONeGP30bLpmac/bJRJ/rGikg4A=
 github.com/marspere/goencrypt v1.0.7 h1:Rlvsc9b7Yeaeda+gsGeCjREVZ/KL7szelRq4+haK5mw=
