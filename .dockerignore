@@ -1,8 +1,10 @@
-# 排除无关文件，减小构建上下文体积
+# 排除无关文件，减小构建上下文体积，也避免它们让 COPY . . 的缓存失效
+# .git（约 140MB）不再拷进构建：commit id 改由 --build-arg GIT_COMMIT_ID 传入
 **/.git
 **/.gitignore
-# 但构建时需要根目录 .git 读取当前 commit id
-!.git
+.idea
+.vscode
+.codebuddy
 **/_demo
 **/node_modules
 **/*.md
