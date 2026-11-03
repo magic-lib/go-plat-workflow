@@ -16,13 +16,17 @@ variables:
 stages:
   - build
 
+# runner 把宿主机 /var/run/docker.sock 挂进任务容器，docker 命令直接用宿主机的 Docker：
+# 层缓存和 Dockerfile 里的 cache mount（Go 模块、编译缓存）都留在宿主机上，跨流水线复用（参考 credit-server）。
+# 因此不再起 docker:dind：它因宿主机 docker.sock 已挂在同一路径而启动失败，构建一直用的就是宿主机 Docker，
+# 留着它只会让每个任务白等约 30 秒的服务启动超时。
 build:
   stage: build
-  image: docker:cli
+  image: docker:29-cli
   tags:
     - ${GITLAB_RUNNER_TAG}
-  services:
-    - docker:dind
+  # 同一分支的构建排队执行：共用宿主机 Docker 时，并发构建会互相覆盖同名的本地镜像 tag
+  resource_group: build-$CI_COMMIT_REF_SLUG
   rules:
     - if: $CI_COMMIT_BRANCH || $CI_COMMIT_TAG
       exists:
@@ -38,7 +42,8 @@ build:
     - env | grep ^CI_ | sort
     - env | grep ^GITLAB_ | sort
     - echo -e "\n========== CI变量打印完成 ==========\n"
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
   script:
-    - docker build --pull -t "$DOCKER_IMAGE_NAME" .
+    # .git 不再进构建上下文，commit id 由构建参数传入
+    - docker build --pull --build-arg GIT_COMMIT_ID="$CI_COMMIT_SHA" -t "$DOCKER_IMAGE_NAME" .
     - docker push $DOCKER_IMAGE_NAME

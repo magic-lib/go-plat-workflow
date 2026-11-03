@@ -1,17 +1,14 @@
-# 构建上下文应为本目录（go-plat-workflow/）
-#   docker build -t go-plat-workflow:latest -f Dockerfile .
+# 构建上下文应为本目录（go-plat-workflow/），需启用 BuildKit（docker 23+ 默认启用）
+#   docker build --build-arg GIT_COMMIT_ID="$(git rev-parse HEAD)" -t go-plat-workflow:latest -f Dockerfile .
 ARG GOLANG_IMAGE=golang:1.24.6
 ARG ALPINE_IMAGE=alpine:3.21.3
 
 FROM ${GOLANG_IMAGE} AS builder
 
-# git 用于：1) GOPROXY 缺失时 fallback clone 内部仓库；2) 获取当前 commit id
+# git 用于 GOPROXY 缺失时 fallback clone 内部仓库
 RUN apt-get update && apt-get install -y --no-install-recommends git make && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-
-COPY .. .
-COPY .git/ ./.git/
 
 ENV GOPROXY="https://goproxy.io,direct"
 ENV GOSUMDB="off"
@@ -19,19 +16,29 @@ ENV GOFLAGS="-mod=mod"
 ENV CGO_ENABLED=0
 ENV GO111MODULE=on
 
-RUN make gen-update-package
+# 优化顺序：优先处理依赖缓存（参考 credit-server）
+# 依赖层：只拷 go.mod/go.sum，依赖不变时整层直接命中缓存。
+# cache mount：Go 模块缓存(/go/pkg/mod)和编译缓存(/root/.cache/go-build)留在宿主机 Docker 里，
+#   跨构建复用；id 统一用 gomod/gobuild，和其他 Go 服务共用同一份缓存。
+# 原写法第一步就 COPY 整个目录（含 .git），任何提交都会让后面所有层失效，且没有 cache mount，
+#   每次都要重新下载全部模块、从零编译。
+COPY go.mod go.sum ./
+RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
+    for i in 1 2 3; do GODEBUG=http2client=0 go mod download -x && exit 0; echo "go mod download failed (attempt $i), retrying"; sleep 10; done; exit 1
 
-# 下载依赖（Go 模块缓存）
-RUN GODEBUG=http2client=0 go mod download -x
+# 复制源码（.git 已在 .dockerignore 排除，commit id 改由构建参数传入）
+COPY . .
 
-# 复制业务源码
-COPY workflow/ ./workflow/
-
-# 生成 git_commit_id 文件（内容为当前 HEAD commit）
-RUN git -C /src rev-parse HEAD > /src/git_commit_id
+# 每次构建都把 magic-lib 内部库更新到 master 最新（go mod tidy 依赖源码，只能放在 COPY . . 之后）。
+# 必须同样挂 id=gomod：cache mount 的内容不会留在镜像层里，不挂的话这一步看到的 /go/pkg/mod 是空的，
+#   又会把全部模块重新下载一遍；挂上后只需拉取有变化的内部库。
+RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
+    make gen-update-package
 
 # 编译静态二进制（-o 输出到 /src/server）
-RUN go build -ldflags="-s -w" -o /src/server ./workflow/web/cmd/
+RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=gobuild,target=/root/.cache/go-build \
+    go build -ldflags="-s -w" -o /src/server ./workflow/web/cmd/
 
 # ============================================================
 # 运行阶段
@@ -43,13 +50,17 @@ RUN apk add --no-cache ca-certificates tzdata && \
 
 WORKDIR /app
 
-COPY --from=builder /src/workflow/etc/app.yaml.demo /app/config/app.yaml
-COPY --from=builder /src/server /app/workflow
-# 当前 commit id（构建时由 git rev-parse HEAD 生成）
-COPY --from=builder /src/git_commit_id /app/git_commit_id
-
 # 数据/运行目录
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
+
+COPY --from=builder --chown=appuser:appuser /src/workflow/etc/app.yaml.demo /app/config/app.yaml
+COPY --from=builder --chown=appuser:appuser /src/server /app/workflow
+
+# 当前 commit id（CI 里由 --build-arg GIT_COMMIT_ID="$(git rev-parse HEAD)" 传入）。
+# ARG 放在最后：它每次提交都会变，放前面会让 apk 等层的缓存失效
+ARG GIT_COMMIT_ID
+ENV GIT_COMMIT_ID=${GIT_COMMIT_ID}
+RUN echo "${GIT_COMMIT_ID}" > /app/git_commit_id && chown appuser:appuser /app/git_commit_id
 
 USER appuser
 
