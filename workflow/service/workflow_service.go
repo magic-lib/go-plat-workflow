@@ -977,6 +977,17 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		return nil, err
 	}
 
+	// 引用的子链（含嵌套）必须是单出口，否则线上执行结果不完整（见 checkSubChainSingleExit）
+	if draft.DSLJSON != "" {
+		draftChain := &types.RuleChain{}
+		if err := json.Unmarshal([]byte(draft.DSLJSON), draftChain); err != nil {
+			return nil, fmt.Errorf("parse root chain dsl failed: %w", err)
+		}
+		if _, _, err := s.collectSubChains(ctx, project, draftChain.Metadata.Nodes); err != nil {
+			return nil, err
+		}
+	}
+
 	// 与当前线上版本对比：若内容完全一致则拒绝发布，避免产生重复版本。
 	if current, cerr := s.releaseRepo.GetCurrent(ctx, project, chainID); cerr == nil && current != nil {
 		if rootChainContentEqual(draft, current) {
@@ -1171,33 +1182,10 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		return nil, err
 	}
 
-	// 1-2. 从 flow 节点提取子链 ID（configuration.ruleChainId = "project:subChainID"）并查询完整 DSL，
-	// 子链里再引用的子链也一并收集（按 ID 去重，限制层数防止循环引用）。
-	const maxSubChainDepth = 10
-	var subChains []*types.RuleChain
-	var subChainNodes []*types.RuleNode // 收集子链节点，用于提取子链所需的入参
-	seenSubChains := make(map[string]bool)
-	pendingNodes := ruleChain.Metadata.Nodes
-	for depth := 0; len(pendingNodes) > 0 && depth < maxSubChainDepth; depth++ {
-		var nextNodes []*types.RuleNode
-		for _, subID := range flowSubChainIDs(pendingNodes) {
-			if seenSubChains[subID] {
-				continue
-			}
-			seenSubChains[subID] = true
-			subDef, err := s.subChainRepo.GetByID(execCtx, project, subID)
-			if err != nil {
-				return nil, fmt.Errorf("get sub chain %s failed: %w", subID, err)
-			}
-			subChain := &types.RuleChain{}
-			if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
-				return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
-			}
-			subChains = append(subChains, subChain)
-			subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
-			nextNodes = append(nextNodes, subChain.Metadata.Nodes...)
-		}
-		pendingNodes = nextNodes
+	// 1-2. 从 flow 节点提取子链 ID 并查询完整 DSL（含嵌套子链），同时校验子链不能并行扇出
+	subChains, subChainNodes, err := s.collectSubChains(execCtx, project, ruleChain.Metadata.Nodes)
+	if err != nil {
+		return nil, err
 	}
 
 	// 子链节点也可能引用 {{arguments.xxx}} / 顶层 {{name}}，按根链+子链所需参数对原始入参重新过滤，避免误删
@@ -1270,6 +1258,58 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	case <-execCtx.Done():
 		return nil, fmt.Errorf("execute root chain %s: timeout after %s: %w", rootChainID, executeRootChainByIDTimeout, execCtx.Err())
 	}
+}
+
+// collectSubChains 从 flow 节点（configuration.ruleChainId = "project:subChainID"）收集引用的子链完整 DSL，
+// 子链里再引用的子链也一并收集（按 ID 去重，限制层数防止循环引用）。返回子链列表及其全部节点（用于提取入参）。
+// 每条子链都必须满足 checkSubChainSingleExit。
+func (s *WorkflowService) collectSubChains(ctx context.Context, project string, nodes []*types.RuleNode) ([]*types.RuleChain, []*types.RuleNode, error) {
+	const maxSubChainDepth = 10
+	var subChains []*types.RuleChain
+	var subChainNodes []*types.RuleNode
+	seen := make(map[string]bool)
+	pending := nodes
+	for depth := 0; len(pending) > 0 && depth < maxSubChainDepth; depth++ {
+		var next []*types.RuleNode
+		for _, subID := range flowSubChainIDs(pending) {
+			if seen[subID] {
+				continue
+			}
+			seen[subID] = true
+			subDef, err := s.subChainRepo.GetByID(ctx, project, subID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("get sub chain %s failed: %w", subID, err)
+			}
+			subChain := &types.RuleChain{}
+			if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
+				return nil, nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
+			}
+			if err := checkSubChainSingleExit(subID, subChain); err != nil {
+				return nil, nil, err
+			}
+			subChains = append(subChains, subChain)
+			subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
+			next = append(next, subChain.Metadata.Nodes...)
+		}
+		pending = next
+	}
+	return subChains, subChainNodes, nil
+}
+
+// checkSubChainSingleExit 子链一次执行只能走到一个出口：不允许某个节点用同一种关系连到多个下游（并行扇出）。
+// 原因：flow 节点以 extend 模式调用子链，子链每个结束分支都会把结果转发给下游一次，
+// 并行扇出时根链会在第一个分支结束时就返回结果，其余分支的下游又在返回之后重复执行。
+// 条件分支（True/False、Success/Failure、自定义关系）每次只走一条，不受限制。
+func checkSubChainSingleExit(subID string, chain *types.RuleChain) error {
+	seen := make(map[string]bool)
+	for _, c := range chain.Metadata.Connections {
+		k := c.FromId + "\x00" + c.Type
+		if seen[k] {
+			return fmt.Errorf("子链 %s 的节点 %s 以关系 %s 连到了多个下游（并行分支），子链只支持单出口，请改为串行或拆到根链上", subID, c.FromId, c.Type)
+		}
+		seen[k] = true
+	}
+	return nil
 }
 
 // flowSubChainIDs 从 flow 节点的 configuration.ruleChainId（"project:subChainID"）提取子链 ID，按出现顺序去重。
