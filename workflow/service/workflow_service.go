@@ -66,6 +66,10 @@ type WorkflowService struct {
 	// key 由 project + chain_key 经 id.GetUUID 确定性生成，相同入参直接命中缓存，避免重复查库。
 	// invokeRootChainMapCache 「发布在线」根链 DSL 缓存，key 为 id.GetUUID(project+"-"+chainKey)。
 	invokeRootChainMapCache cmap.ConcurrentMap[string, *invokeCacheEntry]
+	// invokeCacheMu / invokeCacheGen 缓存代际号：每次清缓存时 +1，查库回填前核对代际号未变才写入，
+	// 避免「请求查到旧版本 → 发布清缓存 → 请求再把旧版本写回」导致缓存长期停在旧版本。
+	invokeCacheMu  sync.Mutex
+	invokeCacheGen map[string]uint64
 	// chainPoolVersions 每条根链在 rulego 引擎池中已加载版本的登记表，用于错峰回收。
 	// key 同上为 cacheKey，与引擎池实际 key（cacheKey@version）区分。
 	chainPoolVersions cmap.ConcurrentMap[string, *chainPoolEntry]
@@ -231,6 +235,7 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		dslBuilder:              builder.NewDSLBuilder(nodeRepo, subChainRepo, rootChainRepo),
 		engine:                  engine.NewWorkflowEngine(workflow.NewEngineRootChainStore(rootChainRepo), workflow.NewEngineSubChainStore(subChainRepo)),
 		invokeRootChainMapCache: cmap.New[*invokeCacheEntry](),
+		invokeCacheGen:          make(map[string]uint64),
 		chainPoolVersions:       cmap.New[*chainPoolEntry](),
 	}
 
@@ -1166,36 +1171,33 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		return nil, err
 	}
 
-	// 1. 从根链 flow 节点提取子链 ID（configuration.ruleChainId = "project:subChainID"）
-	subChainIDs := make(map[string]bool)
-	for _, node := range ruleChain.Metadata.Nodes {
-		if node == nil || node.Type != "flow" {
-			continue
-		}
-		if ref, ok := node.Configuration["ruleChainId"].(string); ok && ref != "" {
-			if idx := strings.LastIndex(ref, ":"); idx >= 0 {
-				ref = ref[idx+1:]
-			}
-			if ref != "" {
-				subChainIDs[ref] = true
-			}
-		}
-	}
-
-	// 2. 查询子链 DSL
-	var subChainDSL []*types.RuleChainBaseInfo
+	// 1-2. 从 flow 节点提取子链 ID（configuration.ruleChainId = "project:subChainID"）并查询完整 DSL，
+	// 子链里再引用的子链也一并收集（按 ID 去重，限制层数防止循环引用）。
+	const maxSubChainDepth = 10
+	var subChains []*types.RuleChain
 	var subChainNodes []*types.RuleNode // 收集子链节点，用于提取子链所需的入参
-	for subID := range subChainIDs {
-		subDef, err := s.subChainRepo.GetByID(execCtx, project, subID)
-		if err != nil {
-			return nil, fmt.Errorf("get sub chain %s failed: %w", subID, err)
+	seenSubChains := make(map[string]bool)
+	pendingNodes := ruleChain.Metadata.Nodes
+	for depth := 0; len(pendingNodes) > 0 && depth < maxSubChainDepth; depth++ {
+		var nextNodes []*types.RuleNode
+		for _, subID := range flowSubChainIDs(pendingNodes) {
+			if seenSubChains[subID] {
+				continue
+			}
+			seenSubChains[subID] = true
+			subDef, err := s.subChainRepo.GetByID(execCtx, project, subID)
+			if err != nil {
+				return nil, fmt.Errorf("get sub chain %s failed: %w", subID, err)
+			}
+			subChain := &types.RuleChain{}
+			if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
+				return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
+			}
+			subChains = append(subChains, subChain)
+			subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
+			nextNodes = append(nextNodes, subChain.Metadata.Nodes...)
 		}
-		subChain := &types.RuleChain{}
-		if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
-			return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
-		}
-		subChainDSL = append(subChainDSL, &subChain.RuleChain)
-		subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
+		pendingNodes = nextNodes
 	}
 
 	// 子链节点也可能引用 {{arguments.xxx}} / 顶层 {{name}}，按根链+子链所需参数对原始入参重新过滤，避免误删
@@ -1220,7 +1222,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		actConfig = activityFlowConfig
 	}
 	actConfig.RootChainDSL = ruleChain
-	actConfig.SubChainDSL = subChainDSL
+	actConfig.SubChains = subChains
 	actConfig.FlowContext = flowCtx
 
 	// 5. 执行元数据：环境 + Redis 配置（按环境将运行数据打入对应 Redis）
@@ -1240,11 +1242,15 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 		resultParam *paramx.FlowContext
 		resultErr   error
 		done        = make(chan struct{})
+		doneOnce    sync.Once
 	)
+	// StartWorkFlow 保证只回调一次；这里再用 Once 兜底，避免重复 close(done) panic
 	actConfig.EndFunc = func(ctx context.Context, relationType string, param *paramx.FlowContext, err error) {
-		resultParam = param
-		resultErr = err
-		close(done)
+		doneOnce.Do(func() {
+			resultParam = param
+			resultErr = err
+			close(done)
+		})
 	}
 	if err := rulegox.StartWorkFlow(execCtx, actConfig, &metaData); err != nil {
 		return nil, err
@@ -1264,6 +1270,26 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	case <-execCtx.Done():
 		return nil, fmt.Errorf("execute root chain %s: timeout after %s: %w", rootChainID, executeRootChainByIDTimeout, execCtx.Err())
 	}
+}
+
+// flowSubChainIDs 从 flow 节点的 configuration.ruleChainId（"project:subChainID"）提取子链 ID，按出现顺序去重。
+func flowSubChainIDs(nodes []*types.RuleNode) []string {
+	var ids []string
+	seen := make(map[string]bool)
+	for _, node := range nodes {
+		if node == nil || node.Type != "flow" {
+			continue
+		}
+		ref, _ := node.Configuration["ruleChainId"].(string)
+		if idx := strings.LastIndex(ref, ":"); idx >= 0 {
+			ref = ref[idx+1:]
+		}
+		if ref != "" && !seen[ref] {
+			seen[ref] = true
+			ids = append(ids, ref)
+		}
+	}
+	return ids
 }
 
 // 根链返回值（root_responses）的静态占位符解析已于 2026-10 废弃：
@@ -1382,7 +1408,10 @@ func (s *WorkflowService) ClearChainRootByKey(project, chainKey string) {
 	// 正确做法：引擎池 key 带发布版本号（见 InvokeRootChain 的 PoolKey），
 	// 发布后新请求自然命中新版本实例；旧版本实例由错峰回收策略（数量 + 存活时间）
 	// 在优雅排空后移除，故这里【不直接清理引擎实例】。
+	s.invokeCacheMu.Lock()
+	s.invokeCacheGen[cacheKey]++
 	s.invokeRootChainMapCache.Remove(cacheKey)
+	s.invokeCacheMu.Unlock()
 
 	// 同时把登记表中的「在线版本」标记为未知：
 	// 发布/回滚/设为生效后当前在线版本已变化，需等下次调用重新解析；
@@ -1653,7 +1682,14 @@ type invokeCacheEntry struct {
 	Version int
 	// PublishedAt 该发布版本的发布时间，缓存后用于版本实例的 FIFO 清理排序。
 	PublishedAt time.Time
+	// CachedAt 写入缓存的时间，超过 invokeCacheTTL 视为过期重新查库。
+	CachedAt time.Time
 }
+
+// invokeCacheTTL 「发布在线」DSL 缓存的兜底有效期。
+// 跨副本失效靠 Redis pub/sub，消息只投递一次：订阅未建好、断线重连期间发出的失效消息会丢，
+// 没有 TTL 的话对应副本会一直跑旧版本。过期后重新查库（两次简单查询），最多延迟这么久自愈。
+const invokeCacheTTL = time.Minute
 
 // InvokeRootChain 通过 project + chain_key 定位「发布在线」的根链 DSL 并同步执行。
 // 缓存：map[cacheKey]*invokeCacheEntry，cacheKey = id.GetUUID(project+"-"+chain_key)（确定性），
@@ -1662,12 +1698,15 @@ func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey
 	cacheKey := id.GetUUID(project + "-" + chainKey)
 
 	// 1. 先查缓存
+	s.invokeCacheMu.Lock()
+	gen := s.invokeCacheGen[cacheKey]
+	s.invokeCacheMu.Unlock()
 	cached, ok := s.invokeRootChainMapCache.Get(cacheKey)
 	var ruleChain *types.RuleChain
 	var releaseID string
 	var releaseVersion int
 	var releasePublishedAt time.Time
-	if ok && cached != nil {
+	if ok && cached != nil && time.Since(cached.CachedAt) < invokeCacheTTL {
 		ruleChain = cached.RuleChain
 		releaseID = cached.ReleaseID
 		releaseVersion = cached.Version
@@ -1697,8 +1736,12 @@ func (s *WorkflowService) InvokeRootChain(ctx context.Context, project, chainKey
 		releaseID = fmt.Sprintf("%s@%d", rootDef.ChainID, release.Version)
 		releaseVersion = release.Version
 		releasePublishedAt = release.PublishedAt
-		// 2.5 写入缓存
-		s.invokeRootChainMapCache.Set(cacheKey, &invokeCacheEntry{RuleChain: rc, ReleaseID: releaseID, Version: releaseVersion, PublishedAt: releasePublishedAt})
+		// 2.5 写入缓存：查库期间若有发布/回滚清过缓存（代际号变了），本次查到的可能是旧版本，不回填
+		s.invokeCacheMu.Lock()
+		if s.invokeCacheGen[cacheKey] == gen {
+			s.invokeRootChainMapCache.Set(cacheKey, &invokeCacheEntry{RuleChain: rc, ReleaseID: releaseID, Version: releaseVersion, PublishedAt: releasePublishedAt, CachedAt: time.Now()})
+		}
+		s.invokeCacheMu.Unlock()
 		ruleChain = rc
 	}
 
@@ -2593,12 +2636,28 @@ func (s *WorkflowService) ListActivities(ctx context.Context, project string, ta
 // UpdateActivity 更新 activity 模板。
 // activity 已被发布到根链（当前生效快照引用）时禁止更新，避免影响线上调用。超级管理员不受限。
 func (s *WorkflowService) UpdateActivity(ctx context.Context, def *workflow.ActivityDef, isAdmin bool) error {
-	published, err := s.ActivityPublishedInRootChain(ctx, def.Project, def.ActNamespace, def.ActName, isAdmin)
+	// 发布检查必须用库里现有的 namespace+name：线上根链按旧名字引用 activity，
+	// 用请求里的新名字检查的话，改个名字就能绕过保护，线上调用随即找不到 activity。
+	existing, err := s.activityRepo.GetByID(ctx, def.Project, def.ActivityID)
+	if err != nil {
+		return err
+	}
+	published, err := s.ActivityPublishedInRootChain(ctx, def.Project, existing.ActNamespace, existing.ActName, isAdmin)
 	if err != nil {
 		return err
 	}
 	if published {
 		return workflow.ErrActivityPublishedInRootChain
+	}
+	// 改成的新名字若已被线上根链引用（原先找不到、改名后就会命中），同样会改变线上行为
+	if def.ActNamespace != existing.ActNamespace || def.ActName != existing.ActName {
+		published, err = s.ActivityPublishedInRootChain(ctx, def.Project, def.ActNamespace, def.ActName, isAdmin)
+		if err != nil {
+			return err
+		}
+		if published {
+			return workflow.ErrActivityPublishedInRootChain
+		}
 	}
 	// 项目 + 命名空间 + 活动名称 必须全局唯一（排除自身）
 	exists, err := s.activityRepo.ExistsByNamespaceName(ctx, def.Project, def.ActNamespace, def.ActName, def.ActivityID)

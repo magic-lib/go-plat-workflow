@@ -7,12 +7,10 @@ import (
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/magic-lib/go-plat-utils/templates"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
-	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"github.com/redis/go-redis/v9"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 	"github.com/rulego/rulego/components/base"
-	"log"
 	"time"
 )
 
@@ -57,22 +55,15 @@ func (x *CondSwitchNode) Init(_ types.Config, configuration types.Configuration)
 	if ruleNode.Name != "" {
 		x.nodeName = ruleNode.Name
 	}
-	x.ruleObj = templates.NewRuleExprEngine()
-	return nil
-}
-
-// getCondition 解析配置中的 condition 表达式
-func (x *CondSwitchNode) getCondition() string {
-	if x.switchCondition != "" {
-		return x.switchCondition
-	}
+	// condition 在 Init 里一次解析好：节点实例会被并发消息共享，放到 OnMsg 里惰性写字段有数据竞争；
+	// 解析失败在这里返回 error（加载链时即报错），而不是在 OnMsg 里 panic 让这条分支静默消失。
 	newCond := new(condSwitchCfg)
 	if err := conv.Unmarshal(x.Configuration.NodeConfig, newCond); err != nil {
-		panic(fmt.Errorf("condRouter error parsing configuration: %s, %v", conv.String(x.Configuration), err))
+		return fmt.Errorf("condRouter error parsing node_config: %s, %v", conv.String(x.Configuration.NodeConfig), err)
 	}
 	x.switchCondition = newCond.SwitchCondition
-	log.Println("condRouter init, condition: ", x.switchCondition)
-	return x.switchCondition
+	x.ruleObj = templates.NewRuleExprEngine()
+	return nil
 }
 
 // OnMsg 处理消息，通过评估编译的表达式来过滤消息
@@ -87,14 +78,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	startTime := time.Now().UnixMilli()
 
-	metaDataAny := msg.GetMetadata()
-	metaDataMap := make(map[string]any)
-	metaDataAny.ForEach(func(key string, value string) bool {
-		metaDataMap[key] = value
-		return true
-	})
-	actMetaData := new(rulegox.ActivityMetaData)
-	_ = conv.Unmarshal(metaDataMap, actMetaData)
+	actMetaData := getActionMeta(msg)
 
 	currNodeId := getNodeId(ctx)
 	nodeStr := string(currNodeId)
@@ -103,7 +87,7 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	nodeParams, argErr := NodeArguments(allParams, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
 
-	condStr := x.getCondition()
+	condStr := x.switchCondition
 	if condStr == "" {
 		nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, 0, nodeStr, x.nodeName, "success", "info", types.Success, allParams, nil, nil, nil)
 		if cliErr == nil && x.nodeLogCli == nil {

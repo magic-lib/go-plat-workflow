@@ -125,7 +125,7 @@ func (e *WorkflowEngine) LoadChainDSL(ctx context.Context, project, chainID, dsl
 		return err
 	}
 
-	if _, err := rulego.New(key, []byte(dslJSON)); err != nil {
+	if _, err := LoadOrReload(key, []byte(dslJSON)); err != nil {
 		return fmt.Errorf("load chain %s into rulego pool: %w", key, err)
 	}
 
@@ -140,7 +140,7 @@ func (e *WorkflowEngine) LoadChainDSL(ctx context.Context, project, chainID, dsl
 	return nil
 }
 
-// loadSubChains 加载逗号分隔的子链列表到引擎池（已加载的跳过）。
+// loadSubChains 加载逗号分隔的子链列表到引擎池（已加载且 DSL 未变的直接复用，变了则热更新）。
 // depth 用于防止子链循环引用导致的无限递归加载，达到最大深度后停止。
 func (e *WorkflowEngine) loadSubChains(ctx context.Context, project, subChainIDs string, depth int) error {
 	const maxSubChainDepth = 10
@@ -153,14 +153,12 @@ func (e *WorkflowEngine) loadSubChains(ctx context.Context, project, subChainIDs
 			continue
 		}
 		scKey := chainKey(project, scID)
-		if _, loaded := rulego.Get(scKey); loaded {
-			continue
-		}
+		// 不能因为池里已有就跳过：子链修改后池里仍是旧实例，这里每次取最新 DSL 交给 LoadOrReload 比对
 		scDef, err := e.subChainStore.GetByID(ctx, project, scID)
 		if err != nil {
 			return fmt.Errorf("load sub chain %s/%s: %w", project, scID, err)
 		}
-		if _, err := rulego.New(scKey, []byte(scDef.DSLJSON)); err != nil {
+		if _, err := LoadOrReload(scKey, []byte(scDef.DSLJSON)); err != nil {
 			return fmt.Errorf("load sub chain %s into rulego pool: %w", scKey, err)
 		}
 		log.Ctx(ctx).Info().
@@ -241,34 +239,55 @@ func (e *WorkflowEngine) ExecuteWithEnv(ctx context.Context, project, chainID st
 	}
 
 	msg := types.NewMsgWithJsonData(jsonPayload)
-	// 注入环境元数据：供 Activity 节点按环境打入对应 Redis
+	// 注入环境元数据：供 Activity 节点按环境打入对应 Redis。
+	// Redis 配置（含密码）不放进 metadata（会随日志落库），登记到进程内，节点按 project/env 取回。
 	if envName != "" && redisCfg != nil {
+		SetEnvRedisConfig(project, envName, redisCfg)
 		msg.Metadata.PutValue("env", envName)
 		msg.Metadata.PutValue("project", project)
 		msg.Metadata.PutValue("root_chain_id", chainID)
 		msg.Metadata.PutValue("root_chain_release_id", rootChainReleaseID)
-		msg.Metadata.PutValue("redis_config", conv.String(redisCfg))
 	}
 
 	type result struct {
 		data string
 		err  error
 	}
-	resultCh := make(chan result, 1)
-
-	engine.OnMsgAndWait(msg,
+	// OnEnd 每个结束分支各回调一次（并行扇出、多条失败分支时会有多次），
+	// 所以这里加锁收集：任一分支失败即返回该错误，否则取第一个成功分支的结果；
+	// 全部节点执行完后由 OnAllNodeCompleted 通知一次。
+	// 用 OnMsg 异步执行再 select，ctx 超时才能真正生效（OnMsgAndWait 会一直阻塞到链执行完）。
+	var (
+		mu       sync.Mutex
+		res      result
+		gotEnd   bool
+		done     = make(chan struct{})
+		doneOnce sync.Once
+	)
+	engine.OnMsg(msg,
 		types.WithContext(ctx),
 		types.WithOnEnd(func(ctx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
+			mu.Lock()
+			defer mu.Unlock()
 			if err != nil {
-				resultCh <- result{err: fmt.Errorf("%w: %v", ErrExecutionFailed, err)}
-				return
+				if res.err == nil {
+					res = result{err: fmt.Errorf("%w: %v", ErrExecutionFailed, err)}
+				}
+			} else if !gotEnd {
+				res.data = msg.GetData()
 			}
-			resultCh <- result{data: msg.GetData()}
+			gotEnd = true
+		}),
+		types.WithOnAllNodeCompleted(func() {
+			doneOnce.Do(func() { close(done) })
 		}),
 	)
 
 	select {
-	case r := <-resultCh:
+	case <-done:
+		mu.Lock()
+		r := res
+		mu.Unlock()
 		if r.err != nil {
 			log.Ctx(ctx).Error().
 				Str("key", key).

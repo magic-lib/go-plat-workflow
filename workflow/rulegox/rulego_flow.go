@@ -18,24 +18,8 @@ import (
 	"time"
 )
 
-// envRedisConfigs 进程内按 project+env 保存 Redis 连接配置（含密码）。
-// Redis 配置不再随 msg.Metadata 透传：Metadata 会被调试日志、出错日志整份写进 MySQL，密码会一起落库。
-// 节点通过 EnvRedisConfig 按 metadata 里的 project/env 取回。
-var envRedisConfigs sync.Map
-
-func envRedisConfigKey(project, env string) string {
-	return project + "|" + env
-}
-
-// EnvRedisConfig 返回 StartWorkFlow 登记的 project+env 的 Redis 配置，未登记返回 nil。
-func EnvRedisConfig(project, env string) *conn.Connect {
-	if v, ok := envRedisConfigs.Load(envRedisConfigKey(project, env)); ok {
-		return v.(*conn.Connect)
-	}
-	return nil
-}
-
-// metadataRedisConfigKey ActivityMetaData.RedisConfig 的 json 字段名，写入 msg.Metadata 时剔除。
+// metadataRedisConfigKey ActivityMetaData.RedisConfig 的 json 字段名。Redis 配置改由 engine.SetEnvRedisConfig 登记，
+// 写入 msg.Metadata 时剔除，避免密码随 Metadata 进日志。
 const metadataRedisConfigKey = "redis_config"
 
 // FlowCompletedHook 在整条流程（每次 StartWorkFlow 执行的根链/子链）执行结束时触发，
@@ -45,8 +29,12 @@ const metadataRedisConfigKey = "redis_config"
 var FlowCompletedHook func(metaData *ActivityMetaData, durationMs int64, runErr error)
 
 type ActivityFlowConfig struct {
-	RootChainDSL *types.RuleChain           //根配置
-	SubChainDSL  []*types.RuleChainBaseInfo //子配置
+	RootChainDSL *types.RuleChain //根配置
+	// Deprecated: RuleChainBaseInfo 不含节点，按它注册出来的是空链，注册 key 也与 flow 节点引用的
+	// project:chainID 对不上，子链实际调不到。请改用 SubChains。
+	SubChainDSL []*types.RuleChainBaseInfo
+	// SubChains 根链 flow 节点（含嵌套）引用的子链完整 DSL，按 project:chainID 注册到引擎池
+	SubChains []*types.RuleChain
 	FlowContext  *paramx.FlowContext        //前端传入的参数
 	MsgType      string
 	IsAsync      bool
@@ -112,10 +100,8 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 	config := rulego.NewConfig()
 
 	// 如果有结束节点，则开启默认失败回调
-	hasEndNodeTag := false
 	if hasEndNode(actConfig.RootChainDSL.Metadata.Nodes) {
 		config.OnEndWithFailure = true
-		hasEndNodeTag = true
 	}
 
 	if len(actConfig.SubChainDSL) > 0 {
@@ -132,6 +118,19 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 		})
 		if subErr != nil {
 			return subErr
+		}
+	}
+
+	// 子链按 flow 节点引用的 targetId（project:chainID）注册；池里已有同名实例时按 DSL 是否变化热更新，
+	// 否则子链修改后会一直跑旧版本（rulego.New 遇到同名 key 直接返回旧实例）。
+	for _, sub := range actConfig.SubChains {
+		if sub == nil {
+			continue
+		}
+		sub.RuleChain.Root = false
+		subKey := metaData.Project + ":" + sub.RuleChain.ID
+		if _, err := engine.LoadOrReload(subKey, []byte(conv.String(sub)), rulego.WithConfig(config)); err != nil {
+			return fmt.Errorf("load sub chain %s failed: %w", subKey, err)
 		}
 	}
 
@@ -172,7 +171,8 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 		config.OnDebug = commDebugFunction
 	}
 
-	rootChainDSL := []byte(conv.String(actConfig.RootChainDSL))
+	// flow 节点补 targetId 等配置（只改序列化结果，不动调用方/缓存共享的 DSL 对象）
+	rootChainDSL := engine.NormalizeFlowDSL([]byte(conv.String(actConfig.RootChainDSL)))
 
 	if engineIns == nil {
 		var err error
@@ -198,7 +198,7 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 		actConfig.MsgType = "ACTIVITY_EVENT"
 	}
 	if metaData.RedisConfig != nil {
-		envRedisConfigs.Store(envRedisConfigKey(metaData.Project, metaData.Env), metaData.RedisConfig)
+		engine.SetEnvRedisConfig(metaData.Project, metaData.Env, metaData.RedisConfig)
 	}
 	newMetadata := types.NewMetadata()
 	metaMap := make(map[string]any)
@@ -212,59 +212,58 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 	msg.SetType(actConfig.MsgType)
 	msg.SetMetadata(newMetadata)
 
-	var endOption, endCompletedOption types.RuleContextOption
 	flowStartTime := time.Now() // 流程发起时刻，用于计算整条流程总耗时（flow_total 汇总日志）
-	if hasEndNodeTag {
-		var ruleCompleteCtx context.Context
-		var ruleCompleteMsg types.RuleMsg
-		var ruleCompleteErr error
-		var ruleRelationType string
 
-		endOption = types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
-			ruleCompleteCtx = ruleCtx.GetContext()
-			ruleCompleteMsg = msg
-			ruleCompleteErr = err
-			ruleRelationType = relationType
-		})
-		endCompletedOption = types.WithOnAllNodeCompleted(func() {
+	// OnEnd 每个结束分支各回调一次（并行扇出、多条失败分支时会有多次），且可能并发。
+	// 这里只加锁收集结果：任一分支失败即取该失败分支，否则取第一个成功分支；
+	// 全部节点执行完后在 OnAllNodeCompleted 里只调用一次 EndFunc 和 FlowCompletedHook，
+	// 避免调用方被多次回调（例如重复 close channel）以及 flow_total 汇总日志重复写入。
+	var (
+		endMu        sync.Mutex
+		endGot       bool
+		endCtx       context.Context
+		endMsg       types.RuleMsg
+		endErr       error
+		endRelation  string
+		endCallOnce  sync.Once
+		endRecordOne = func(ruleCtx types.RuleContext, m types.RuleMsg, err error, relationType string) {
+			endMu.Lock()
+			defer endMu.Unlock()
+			// 已记录失败分支后不再覆盖；已记录成功分支后只允许失败分支覆盖
+			if endGot && (endErr != nil || err == nil) {
+				return
+			}
+			endGot = true
+			endCtx = ruleCtx.GetContext()
+			endMsg = m
+			endErr = err
+			endRelation = relationType
+		}
+	)
+	endOption := types.WithOnEnd(endRecordOne)
+	endCompletedOption := types.WithOnAllNodeCompleted(func() {
+		endCallOnce.Do(func() {
+			endMu.Lock()
+			gotCtx, gotMsg, gotErr, gotRelation := endCtx, endMsg, endErr, endRelation
+			endMu.Unlock()
+			if gotCtx == nil {
+				gotCtx = ctx
+			}
 			var resultParam = new(paramx.FlowContext)
-			_ = conv.Unmarshal(ruleCompleteMsg.GetData(), resultParam)
-			if ruleCompleteErr != nil {
-				actConfig.EndFunc(ruleCompleteCtx, ruleRelationType, resultParam, ruleCompleteErr)
-			} else {
-				actConfig.EndFunc(ruleCompleteCtx, ruleRelationType, resultParam, nil)
+			if gotMsg.GetData() != "" {
+				_ = conv.Unmarshal(gotMsg.GetData(), resultParam)
 			}
+			actConfig.EndFunc(gotCtx, gotRelation, resultParam, gotErr)
 			if FlowCompletedHook != nil {
-				FlowCompletedHook(metaData, time.Since(flowStartTime).Milliseconds(), ruleCompleteErr)
+				FlowCompletedHook(metaData, time.Since(flowStartTime).Milliseconds(), gotErr)
 			}
 		})
-	} else {
-		endOption = types.WithOnEnd(func(ruleCtx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
-			var resultParam = new(paramx.FlowContext)
-			_ = conv.Unmarshal(msg.GetData(), resultParam)
-			if err != nil {
-				actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, err)
-			} else {
-				actConfig.EndFunc(ruleCtx.GetContext(), relationType, resultParam, nil)
-			}
-			if FlowCompletedHook != nil {
-				FlowCompletedHook(metaData, time.Since(flowStartTime).Milliseconds(), err)
-			}
-		})
-	}
+	})
 
 	if actConfig.IsAsync {
-		if hasEndNodeTag {
-			engineIns.OnMsg(msg, endOption, endCompletedOption, types.WithContext(ctx))
-		} else {
-			engineIns.OnMsg(msg, endOption, types.WithContext(ctx))
-		}
+		engineIns.OnMsg(msg, endOption, endCompletedOption, types.WithContext(ctx))
 	} else {
-		if hasEndNodeTag {
-			engineIns.OnMsgAndWait(msg, endOption, endCompletedOption, types.WithContext(ctx))
-		} else {
-			engineIns.OnMsgAndWait(msg, endOption, types.WithContext(ctx))
-		}
+		engineIns.OnMsgAndWait(msg, endOption, endCompletedOption, types.WithContext(ctx))
 	}
 	return nil
 }

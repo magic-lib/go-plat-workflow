@@ -17,6 +17,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
 	"go.uber.org/multierr"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/conv"
@@ -543,16 +544,34 @@ func (x *ActivityNode) execParallelStage(ctx types.RuleContext, nodeSpanId strin
 		return nil
 	}
 
-	var retErr error
-
-	_, _ = goroutines.AsyncExecuteDataList[*activity.Activity](30*time.Second, stage, func(value *activity.Activity, key int) (breakFlag bool, err error) {
-		if err := x.execOneActivity(ctx, nodeSpanId, metaData, value, stepFlowCtx); err != nil {
-			// 执行失败，别的并行的程序不能退出，继续执行完成
-			retErr = multierr.Append(retErr, err)
-			return false, err
-		}
-		return false, nil
-	})
+	// 等全部并行 activity 执行完再返回：每个 activity 都受 MQ 请求超时约束，不会无限等待；
+	// 原先用 30s 总超时且丢弃了超时错误，慢 activity（MQ 超时 60s）会被当成成功，
+	// 而它的 goroutine 还在继续写 stepFlowCtx。错误收集加锁，避免并发 Append 丢错误。
+	var (
+		mu     sync.Mutex
+		retErr error
+		wg     sync.WaitGroup
+	)
+	for _, act := range stage {
+		wg.Add(1)
+		go func(act *activity.Activity) {
+			defer wg.Done()
+			var err error
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("activity %s/%s panic: %v", act.ActNamespace, act.ActName, r)
+				}
+				if err != nil {
+					// 执行失败，别的并行的程序不能退出，继续执行完成
+					mu.Lock()
+					retErr = multierr.Append(retErr, err)
+					mu.Unlock()
+				}
+			}()
+			err = x.execOneActivity(ctx, nodeSpanId, metaData, act, stepFlowCtx)
+		}(act)
+	}
+	wg.Wait()
 
 	return retErr
 }
@@ -702,7 +721,7 @@ func getActionMeta(msg types.RuleMsg) *rulegox.ActivityMetaData {
 	actMetaData := new(rulegox.ActivityMetaData)
 	_ = conv.Unmarshal(metaDataMap, actMetaData)
 	if actMetaData.RedisConfig == nil {
-		actMetaData.RedisConfig = rulegox.EnvRedisConfig(actMetaData.Project, actMetaData.Env)
+		actMetaData.RedisConfig = engine.EnvRedisConfig(actMetaData.Project, actMetaData.Env)
 	}
 	return actMetaData
 }

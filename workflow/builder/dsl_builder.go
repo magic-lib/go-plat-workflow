@@ -702,7 +702,9 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 		}
 		idMap[flowNodeID] = true
 
-		// ruleChainId 必须与 engine 加载子链时用的 pool key 一致：project:chainID
+		// 子链引用必须与 engine 加载子链时用的 pool key 一致：project:chainID。
+		// rulego 的 flow 组件只认 targetId；ruleChainId 保留给发布检查、前端解析使用。
+		// extend=true：子链输出原样转发给下游（合并模式会把输出包成数组，下游无法按 FlowContext 解析）。
 		poolKey := req.Project + ":" + sc.ChainID
 		flowNode := &types.RuleNode{
 			Id:   flowNodeID,
@@ -710,6 +712,8 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 			Name: sc.Name,
 			Configuration: types.Configuration{
 				"ruleChainId": poolKey,
+				"targetId":    poolKey,
+				"extend":      true,
 			},
 		}
 		ruleNodes = append(ruleNodes, flowNode)

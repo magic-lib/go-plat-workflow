@@ -362,8 +362,9 @@ func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName
 	if err != nil {
 		return nil, err
 	}
+	// 没拿到响应按失败处理：返回 (nil, nil) 会让调用方直接访问 resp.Data 时空指针
 	if resp == nil {
-		return nil, nil
+		return nil, fmt.Errorf("activity %s/%s returned empty response", actNamespace, actName)
 	}
 	ev := new(mq.Event)
 	err = conv.Unmarshal(resp.Params, ev)
