@@ -328,10 +328,8 @@ func (s *WorkflowService) DeleteProjectSecret(ctx context.Context, project, secr
 }
 
 // AuthProjectSecret 校验项目密钥（API_TOKEN）。
-// 支持两种鉴权方式：
-//  1. 带 timestamp（推荐）：校验时间戳 ±5 分钟内且 MD5 恒定时间比对一致。
-//     其中"存储密钥"为列表接口返回的哈希串（id.GetUUID 结果），对外当作明文密钥使用，避免用户录入弱口令被暴力破解。
-//  2. 不带 timestamp（兼容旧调用）：直接恒定时间比对存储密钥与传入值。
+// 只支持带 timestamp 的签名方式：校验时间戳 ±5 分钟内且签名恒定时间比对一致。
+// 其中"存储密钥"为列表接口返回的哈希串（id.GetUUID 结果），对外当作明文密钥使用，避免用户录入弱口令被暴力破解。
 //
 // 匹配返回 nil，否则返回错误。
 func (s *WorkflowService) AuthProjectSecret(ctx context.Context, project, key string, timestamp int64) error {
@@ -350,28 +348,21 @@ func (s *WorkflowService) AuthProjectSecret(ctx context.Context, project, key st
 		return fmt.Errorf("project has no secret_key configured, please set it first")
 	}
 
-	// 时间戳签名模式：校验时效并比对
-	if timestamp > 0 {
-		now := time.Now().Unix()
-		if diff := now - timestamp; diff > 300 || diff < -300 {
-			return fmt.Errorf("timestamp expired or invalid (allowed ±5min)")
-		}
-		for _, k := range storedKeys {
-			expected := httputil.GenFeiShuSign(timestamp, k)
-			if subtle.ConstantTimeCompare([]byte(expected), []byte(key)) == 1 {
-				return nil
-			}
-		}
-		return fmt.Errorf("token mismatch")
+	// 只接受时间戳签名模式。已下线「直接传原始密钥」的旧模式：密钥明文随请求传输，被截获即可长期冒用。
+	if timestamp <= 0 {
+		return fmt.Errorf("timestamp is required: sign with timestamp (raw secret_key is no longer accepted)")
 	}
-
-	// 兼容旧模式：直接比对存储密钥
+	now := time.Now().Unix()
+	if diff := now - timestamp; diff > 300 || diff < -300 {
+		return fmt.Errorf("timestamp expired or invalid (allowed ±5min)")
+	}
 	for _, k := range storedKeys {
-		if subtle.ConstantTimeCompare([]byte(k), []byte(key)) == 1 {
+		expected := httputil.GenFeiShuSign(timestamp, k)
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(key)) == 1 {
 			return nil
 		}
 	}
-	return fmt.Errorf("secret_key mismatch")
+	return fmt.Errorf("token mismatch")
 }
 
 // GetProjectConfig 对外配置查询：根据项目密钥鉴权后，
@@ -404,14 +395,16 @@ func (s *WorkflowService) GetProjectConfig(ctx context.Context, project string) 
 		})
 	}
 
-	if envConfigs == nil {
-		envConfigs = []*workflow.EnvConfigDef{}
+	// 对外返回时 Redis / MySQL 密码脱敏：调用方需要 Redis 连接时走 redis-config 接口
+	maskedEnvs := make([]*workflow.EnvConfigDef, 0, len(envConfigs))
+	for _, c := range envConfigs {
+		maskedEnvs = append(maskedEnvs, c.MaskSecrets())
 	}
 	return &workflow.ProjectConfigResponse{
 		Project:     proj.Project,
 		Name:        proj.Name,
 		Description: proj.Description,
-		EnvConfigs:  envConfigs,
+		EnvConfigs:  maskedEnvs,
 		RootChains:  summaries,
 	}, nil
 }
@@ -814,8 +807,8 @@ func (s *WorkflowService) CreateRootChain(ctx context.Context, project, chainKey
 }
 
 // GetRootChain 获取指定项目下的单个根链（按 ChainID）。
-func (s *WorkflowService) GetRootChain(ctx context.Context, chainID string) (*workflow.RootChainDef, error) {
-	return s.rootChainRepo.GetByID(ctx, chainID)
+func (s *WorkflowService) GetRootChain(ctx context.Context, project, chainID string) (*workflow.RootChainDef, error) {
+	return s.rootChainRepo.GetByProjectID(ctx, project, chainID)
 }
 
 // GetRootChainByKey 按项目+ChainKey 获取根链（project 与 chain_key 联合唯一，方便用业务键直接调用主链）。
@@ -865,7 +858,7 @@ func (s *WorkflowService) DeleteRootChain(ctx context.Context, project, chainID 
 	}
 	// 删除前先取回 ChainKey（删除后就查不到了），用于后续清理缓存与引擎池实例。
 	var chainKey string
-	if rc, qerr := s.rootChainRepo.GetByID(ctx, chainID); qerr == nil {
+	if rc, qerr := s.rootChainRepo.GetByProjectID(ctx, project, chainID); qerr == nil {
 		chainKey = rc.ChainKey
 	}
 	if err := s.rootChainRepo.Delete(ctx, project, chainID); err != nil {
@@ -974,7 +967,7 @@ func (s *WorkflowService) DeleteEnvConfig(ctx context.Context, project, envName 
 
 // PublishRootChain 发布根链：将当前草稿快照为新版本，并设为生产环境当前版本。
 func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID string) (*workflow.RootChainReleaseDef, error) {
-	draft, err := s.rootChainRepo.GetByID(ctx, chainID)
+	draft, err := s.rootChainRepo.GetByProjectID(ctx, project, chainID)
 	if err != nil {
 		return nil, err
 	}
@@ -2405,6 +2398,7 @@ func (s *WorkflowService) UserRepo() *repo.UserRepo {
 }
 
 // ensureBootstrapAdmin 在 wf_users 为空时，按环境变量创建一个管理员账号（幂等）。
+// 不再提供默认密码：未设置 WF_BOOTSTRAP_PASSWORD 时不创建，只打告警，避免新环境默认 admin/admin123 可登录。
 func ensureBootstrapAdmin(userRepo *repo.UserRepo) error {
 	ctx := context.Background()
 	cnt, err := userRepo.CountUsers(ctx)
@@ -2415,7 +2409,11 @@ func ensureBootstrapAdmin(userRepo *repo.UserRepo) error {
 		return nil
 	}
 	username := osGetenv("WF_BOOTSTRAP_USER", "admin")
-	rawPwd := osGetenv("WF_BOOTSTRAP_PASSWORD", "admin123")
+	rawPwd := os.Getenv("WF_BOOTSTRAP_PASSWORD")
+	if rawPwd == "" {
+		log.Warn().Msg("wf_users is empty and WF_BOOTSTRAP_PASSWORD is not set, bootstrap admin not created; set WF_BOOTSTRAP_PASSWORD and restart")
+		return nil
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(rawPwd), bcrypt.DefaultCost)
 	if err != nil {
 		return err
@@ -2430,7 +2428,7 @@ func ensureBootstrapAdmin(userRepo *repo.UserRepo) error {
 	if err != nil {
 		return err
 	}
-	log.Info().Msgf("bootstrap admin user created: %s", username, " password:", rawPwd)
+	log.Info().Str("username", username).Msg("bootstrap admin user created")
 	return nil
 }
 

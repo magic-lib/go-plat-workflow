@@ -82,11 +82,26 @@ func (r *RootChainRepo) GetByKey(ctx context.Context, project, chainKey string) 
 	return m.ToDef(), nil
 }
 
-// GetByID 按项目 + 根链 ID 查询。
+// GetByID 按根链 ID 查询（不限项目，供 engine 等只有 chainID 的场景使用）。
 func (r *RootChainRepo) GetByID(ctx context.Context, chainID string) (*workflow.RootChainDef, error) {
 	var m models.RootChainModel
 	err := r.db.WithContext(ctx).
 		Where("chain_id = ? AND status = ?", chainID, models.NodeStatusEnabled).
+		First(&m).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, workflow.ErrRootChainNotFound
+		}
+		return nil, err
+	}
+	return m.ToDef(), nil
+}
+
+// GetByProjectID 按项目 + 根链 ID 查询；chain_id 属于其它项目时按不存在处理，避免跨项目读取或发布。
+func (r *RootChainRepo) GetByProjectID(ctx context.Context, project, chainID string) (*workflow.RootChainDef, error) {
+	var m models.RootChainModel
+	err := r.db.WithContext(ctx).
+		Where("project = ? AND chain_id = ? AND status = ?", project, chainID, models.NodeStatusEnabled).
 		First(&m).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

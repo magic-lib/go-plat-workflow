@@ -14,8 +14,29 @@ import (
 	"github.com/rulego/rulego/api/types"
 	"github.com/samber/lo"
 	"log"
+	"sync"
 	"time"
 )
+
+// envRedisConfigs 进程内按 project+env 保存 Redis 连接配置（含密码）。
+// Redis 配置不再随 msg.Metadata 透传：Metadata 会被调试日志、出错日志整份写进 MySQL，密码会一起落库。
+// 节点通过 EnvRedisConfig 按 metadata 里的 project/env 取回。
+var envRedisConfigs sync.Map
+
+func envRedisConfigKey(project, env string) string {
+	return project + "|" + env
+}
+
+// EnvRedisConfig 返回 StartWorkFlow 登记的 project+env 的 Redis 配置，未登记返回 nil。
+func EnvRedisConfig(project, env string) *conn.Connect {
+	if v, ok := envRedisConfigs.Load(envRedisConfigKey(project, env)); ok {
+		return v.(*conn.Connect)
+	}
+	return nil
+}
+
+// metadataRedisConfigKey ActivityMetaData.RedisConfig 的 json 字段名，写入 msg.Metadata 时剔除。
+const metadataRedisConfigKey = "redis_config"
 
 // FlowCompletedHook 在整条流程（每次 StartWorkFlow 执行的根链/子链）执行结束时触发，
 // 入参为流程级元数据、总耗时（毫秒）、流程级错误。由 commnode 包在注入 NodeLogSaver 时注册，
@@ -176,9 +197,13 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 	if actConfig.MsgType == "" {
 		actConfig.MsgType = "ACTIVITY_EVENT"
 	}
+	if metaData.RedisConfig != nil {
+		envRedisConfigs.Store(envRedisConfigKey(metaData.Project, metaData.Env), metaData.RedisConfig)
+	}
 	newMetadata := types.NewMetadata()
 	metaMap := make(map[string]any)
 	_ = conv.Unmarshal(metaData, &metaMap)
+	delete(metaMap, metadataRedisConfigKey)
 	for k, v := range metaMap {
 		newMetadata.PutValue(k, conv.String(v))
 	}

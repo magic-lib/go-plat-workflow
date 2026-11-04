@@ -5,10 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/models"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
@@ -23,10 +26,81 @@ const sessionDuration = 24 * time.Hour
 // ctxUserKey 用于把当前登录用户存入 request context 的 key。
 type ctxUserKey struct{}
 
+// 登录失败限流：同一用户名或同一 IP 在 loginFailWindow 内失败 loginFailLimit 次后，锁定到窗口结束。
+// 计数在进程内，多副本时每个副本各自计数，用于挡住暴力猜密码已足够。
+const (
+	loginFailLimit  = 5
+	loginFailWindow = 15 * time.Minute
+)
+
+type loginFailEntry struct {
+	count int
+	first time.Time
+}
+
+type loginLimiter struct {
+	mu      sync.Mutex
+	entries map[string]*loginFailEntry
+}
+
+var loginFails = &loginLimiter{entries: map[string]*loginFailEntry{}}
+
+// blocked 返回 keys 中是否有任一个已达失败上限（顺带清理过期计数）。
+func (l *loginLimiter) blocked(keys ...string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	for k, e := range l.entries {
+		if now.Sub(e.first) > loginFailWindow {
+			delete(l.entries, k)
+		}
+	}
+	for _, k := range keys {
+		if e, ok := l.entries[k]; ok && e.count >= loginFailLimit {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *loginLimiter) fail(keys ...string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, k := range keys {
+		if e, ok := l.entries[k]; ok {
+			e.count++
+		} else {
+			l.entries[k] = &loginFailEntry{count: 1, first: time.Now()}
+		}
+	}
+}
+
+func (l *loginLimiter) reset(keys ...string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, k := range keys {
+		delete(l.entries, k)
+	}
+}
+
+// clientIP 取客户端 IP：优先 X-Forwarded-For 第一个地址（服务部署在网关之后），否则取 RemoteAddr。
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return strings.TrimSpace(strings.Split(xff, ",")[0])
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// isHTTPS 判断请求是否经 HTTPS 到达（直连 TLS 或网关透传 X-Forwarded-Proto），用于决定 Cookie 是否加 Secure。
+func isHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
 // currentUserSafe 取当前登录用户：优先取中间件注入到 context 的用户；
-// 若为 nil（Go 1.22 ServeMux 在匹配带路径参数的路由时会重置 request context，
-// 导致中间件注入 context 的用户丢失），则从会话 Cookie 回查兜底，
-// 避免 admin 被误判为普通用户（isAdmin=false）。
+// 取不到时（如未经 authMiddleware 直接调用 mux 的测试代码）从会话 Cookie 回查兜底。
 func (ws *WebServer) currentUserSafe(r *http.Request) *models.UserModel {
 	if u, ok := r.Context().Value(ctxUserKey{}).(*models.UserModel); ok {
 		if u != nil {
@@ -54,31 +128,44 @@ func genToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// publicAPIMux 免登录的 API 路由（只用于匹配，不处理请求）：
+// 登录/健康检查，以及由 handler 自行按项目密钥签名校验的对外接口。
+// 用 ServeMux 的路由模式做精确匹配，避免按后缀放行把 /api/xxx/config 一类路径也放过去。
+var publicAPIMux = func() *http.ServeMux {
+	m := http.NewServeMux()
+	noop := func(http.ResponseWriter, *http.Request) {}
+	for _, pattern := range []string{
+		"POST /api/login",
+		"POST /api/logout",
+		"GET /api/health",
+		"GET /api/version",
+		// 对外项目配置查询（secret_key 签名校验）
+		"POST /api/projects/{project}/config",
+		// 对外 Redis 配置查询与工作流调用（secret_key 签名校验）
+		"POST " + workflow.ProjectRedisCfgPath,
+		"POST " + workflow.ProjectWorkflowInvoke,
+	} {
+		m.HandleFunc(pattern, noop)
+	}
+	return m
+}()
+
+// isPublicRequest 判断请求是否免登录：非 /api/ 的静态页面与资源（登录页本身也在其中），以及 publicAPIMux 中的接口。
+func isPublicRequest(r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") {
+		return true
+	}
+	_, pattern := publicAPIMux.Handler(r)
+	return pattern != ""
+}
+
 // authMiddleware 全局鉴权中间件：
-//   - 放行登录接口、健康检查、对外项目配置查询（secret_key）与静态首页。
+//   - 放行静态页面、登录接口、健康检查，以及按项目密钥签名校验的对外接口。
 //   - 其余请求必须携带有效且未过期的 wf_session Cookie。
 func (ws *WebServer) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		// 放行白名单
-		if p == "/api/login" || p == "/api/health" || p == "/api/version" || p == "/api/logout" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// 对外配置查询：POST /api/projects/{project}/config 使用 secret_key 校验，放行
-		if r.Method == "POST" && len(p) > len("/api/projects/") &&
-			hasSuffix(p, "/config") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// 对外 Redis 配置查询：POST /api/projects/{project}/redis-config 使用 secret_key 校验，放行
-		if r.Method == "POST" && len(p) > len("/api/projects/") &&
-			hasSuffix(p, "/redis-config") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// 对外工作流调用：POST /api/workflow/invoke 由外部系统按 project + chain_key 调用，放行
-		if r.Method == "POST" && p == "/api/workflow/invoke" {
+		if isPublicRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -195,11 +282,10 @@ func (ws *WebServer) requireAdmin(w http.ResponseWriter, r *http.Request) *model
 	return u
 }
 
-// requireProjectAccess 校验当前用户是否可访问指定 project。
-// admin 用户拥有全部项目权限；viewer 需在其 wf_user_projects 授权列表中。
+// requireProjectAccess 校验当前用户是否可访问指定 project：读操作 viewer 即可，写操作需 editor/admin。
+// 用于 project 在 path 中（不走中间件 ?project= 校验）的接口，如修改、删除项目。
 func (ws *WebServer) requireProjectAccess(w http.ResponseWriter, r *http.Request, project string) bool {
-	u := ws.currentUserSafe(r)
-	if u == nil {
+	if ws.currentUserSafe(r) == nil {
 		writeError(w, http.StatusUnauthorized, "未登录：缺少有效会话，请重新登录")
 		return false
 	}
@@ -207,21 +293,32 @@ func (ws *WebServer) requireProjectAccess(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "project is required")
 		return false
 	}
-	if u.Role == "admin" {
-		return true
-	}
-	projects, err := ws.svc.UserRepo().ListProjectsByUser(r.Context(), u.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return false
-	}
-	for _, p := range projects {
-		if p == project {
-			return true
+	return checkProjectAccessForRequest(ws, w, r, r, project)
+}
+
+// resolveProject 统一确定请求操作的 project，并保证该 project 做过权限校验：
+//   - 以 URL query 的 ?project= 为准（中间件已按它校验过权限）；
+//   - body 里也带了 project 且与 query 不一致时拒绝，避免「用 A 的权限改 B」；
+//   - query 未带时退回 body 里的 project，并在这里补做权限校验。
+//
+// 返回 ok=false 时已写出错误响应。project 为空时返回 ("", true)，由调用方决定是否必填。
+func (ws *WebServer) resolveProject(w http.ResponseWriter, r *http.Request, bodyProject string) (string, bool) {
+	q := projectParam(r)
+	bodyProject = strings.TrimSpace(bodyProject)
+	if q != "" {
+		if bodyProject != "" && bodyProject != q {
+			writeError(w, http.StatusBadRequest, "project in body does not match project query parameter")
+			return "", false
 		}
+		return q, true
 	}
-	writeError(w, http.StatusForbidden, "no permission for project: "+project)
-	return false
+	if bodyProject == "" {
+		return "", true
+	}
+	if !checkProjectAccessForRequest(ws, w, r, r, bodyProject) {
+		return "", false
+	}
+	return bodyProject, true
 }
 
 // ============================================================
@@ -241,17 +338,21 @@ func (ws *WebServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "username and password are required")
 		return
 	}
+	limitKeys := []string{"user:" + req.Username, "ip:" + clientIP(r)}
+	if loginFails.blocked(limitKeys...) {
+		writeError(w, http.StatusTooManyRequests, "登录失败次数过多，请 15 分钟后再试")
+		return
+	}
+	// 先校验密码再看账号状态：密码不对时不论账号是否存在、是否禁用都返回同一个错误，避免被用来探测账号
 	u, err := ws.svc.UserRepo().GetUserByUsername(r.Context(), req.Username)
-	if err != nil {
+	if err != nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) != nil {
+		loginFails.fail(limitKeys...)
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
+	loginFails.reset(limitKeys...)
 	if u.Status != 1 {
 		writeError(w, http.StatusForbidden, "account disabled")
-		return
-	}
-	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) != nil {
-		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
 	token, err := genToken()
@@ -267,11 +368,16 @@ func (ws *WebServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 顺带清理过期会话，避免 wf_user_sessions 只增不减（登录频率低，放这里足够）
+	if err := ws.svc.UserRepo().DeleteExpiredSessions(r.Context()); err != nil {
+		log.Warn().Err(err).Msg("delete expired sessions failed")
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Add(sessionDuration),
 		MaxAge:   int(sessionDuration.Seconds()),
@@ -370,6 +476,15 @@ func (ws *WebServer) handleChangeMyPassword(w http.ResponseWriter, r *http.Reque
 	full.PasswordHash = string(newHash)
 	if err := ws.svc.UserRepo().UpdateUser(r.Context(), full); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// 改密码后让该用户的其它会话失效，只保留当前这个
+	var currentToken string
+	if c, err := r.Cookie(sessionCookieName); err == nil {
+		currentToken = c.Value
+	}
+	if err := ws.svc.UserRepo().DeleteUserSessions(r.Context(), u.ID, currentToken); err != nil {
+		writeError(w, http.StatusInternalServerError, "密码已修改，但清理其它会话失败: "+err.Error())
 		return
 	}
 	log.Info().Uint("user_id", u.ID).Msg("user changed own password")
@@ -516,6 +631,13 @@ func (ws *WebServer) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if err := ws.svc.UserRepo().UpdateUser(r.Context(), existing); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// 管理员重置了密码：该用户已有的会话全部失效
+	if req.Password != "" {
+		if err := ws.svc.UserRepo().DeleteUserSessions(r.Context(), uid, ""); err != nil {
+			writeError(w, http.StatusInternalServerError, "用户已更新，但清理会话失败: "+err.Error())
+			return
+		}
 	}
 	// 当传入 projects 字段时，重建授权关系（先解绑全部再按角色绑定）
 	if req.Projects != nil {

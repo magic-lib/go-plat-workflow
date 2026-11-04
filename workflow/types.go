@@ -499,6 +499,64 @@ type EnvConfigDef struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// MaskedSecret 接口返回环境配置时，已设置的密码 / DSN 用它代替；保存时原样传回表示「沿用库里的值」。
+const MaskedSecret = "******"
+
+func maskSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	return MaskedSecret
+}
+
+// MaskSecrets 返回脱敏副本：Redis / MySQL 密码和 MySQL DSN（含密码）替换为 MaskedSecret，供管理后台与对外配置接口展示。
+func (c *EnvConfigDef) MaskSecrets() *EnvConfigDef {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	if c.RedisConfig != nil {
+		rc := *c.RedisConfig
+		rc.Password = maskSecret(rc.Password)
+		cp.RedisConfig = &rc
+	}
+	if c.MySQLConfig != nil {
+		mc := *c.MySQLConfig
+		mc.Password = maskSecret(mc.Password)
+		mc.DSN = maskSecret(mc.DSN)
+		cp.MySQLConfig = &mc
+	}
+	return &cp
+}
+
+// RestoreMaskedSecrets 把 c 中仍为 MaskedSecret 的字段还原为 existing 里的真实值（existing 为空时置空），
+// 用于保存脱敏后回传的配置时不把 "******" 写进库。
+func (c *EnvConfigDef) RestoreMaskedSecrets(existing *EnvConfigDef) {
+	if c == nil {
+		return
+	}
+	if c.RedisConfig != nil && c.RedisConfig.Password == MaskedSecret {
+		c.RedisConfig.Password = ""
+		if existing != nil && existing.RedisConfig != nil {
+			c.RedisConfig.Password = existing.RedisConfig.Password
+		}
+	}
+	if c.MySQLConfig != nil {
+		if c.MySQLConfig.Password == MaskedSecret {
+			c.MySQLConfig.Password = ""
+			if existing != nil && existing.MySQLConfig != nil {
+				c.MySQLConfig.Password = existing.MySQLConfig.Password
+			}
+		}
+		if c.MySQLConfig.DSN == MaskedSecret {
+			c.MySQLConfig.DSN = ""
+			if existing != nil && existing.MySQLConfig != nil {
+				c.MySQLConfig.DSN = existing.MySQLConfig.DSN
+			}
+		}
+	}
+}
+
 // EnvConfigStore 环境配置仓储接口。
 type EnvConfigStore interface {
 	// Upsert 创建或更新环境配置（按 project + env_name 冲突时更新）

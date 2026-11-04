@@ -1029,7 +1029,7 @@ func (ws *WebServer) handleGetRootChain(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "chain_id path parameter is required")
 		return
 	}
-	chain, err := ws.svc.GetRootChain(r.Context(), chainID)
+	chain, err := ws.svc.GetRootChain(r.Context(), project, chainID)
 	if err != nil {
 		if errors.Is(err, workflow.ErrRootChainNotFound) {
 			writeError(w, http.StatusNotFound, "root chain not found")
@@ -1066,9 +1066,11 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
-	if req.Project == "" {
-		req.Project = projectParam(r)
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
+		return
 	}
+	req.Project = project
 	if req.Project == "" {
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
@@ -1123,9 +1125,9 @@ func (ws *WebServer) handleCreateRootChain(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
-	project := projectParam(r)
-	if project == "" {
-		project = strings.TrimSpace(req.Project)
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
+		return
 	}
 	if project == "" {
 		writeError(w, http.StatusBadRequest, "project required")
@@ -1187,9 +1189,11 @@ func (ws *WebServer) handleBuildSubChain(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
-	if req.Project == "" {
-		req.Project = projectParam(r)
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
+		return
 	}
+	req.Project = project
 	if req.Project == "" {
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
@@ -1215,9 +1219,11 @@ func (ws *WebServer) handleUpdateSubChainBuild(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
-	if req.Project == "" {
-		req.Project = projectParam(r)
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
+		return
 	}
+	req.Project = project
 	if req.Project == "" {
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
@@ -1254,7 +1260,7 @@ func (ws *WebServer) handlePublishRootChain(w http.ResponseWriter, r *http.Reque
 	}
 
 	// 发布成功，需要清理缓存更新
-	oneRoot, err := ws.svc.GetRootChain(r.Context(), chainID)
+	oneRoot, err := ws.svc.GetRootChain(r.Context(), project, chainID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1312,7 +1318,7 @@ func (ws *WebServer) handleRollbackRootChain(w http.ResponseWriter, r *http.Requ
 	// 回滚成功需要失效 InvokeRootChain 的 DSL 缓存，否则线上仍走老版本。
 	// 走 NotifyRootChainChanged：本地失效 + Redis pub/sub 广播，使多副本全部立即切换。
 	// 注意：这里不直接清理引擎实例，由错峰回收策略（数量 + 存活时间）优雅移除。
-	if oneRoot, gerr := ws.svc.GetRootChain(r.Context(), chainID); gerr == nil {
+	if oneRoot, gerr := ws.svc.GetRootChain(r.Context(), project, chainID); gerr == nil {
 		ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "rollback")
 	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", req.Version).Msg("root chain rolled back via web")
@@ -1373,7 +1379,7 @@ func (ws *WebServer) handleSetCurrentRelease(w http.ResponseWriter, r *http.Requ
 	}
 	// 设为生效成功后同样需要失效 InvokeRootChain 的 DSL 缓存。
 	// 走 NotifyRootChainChanged：本地失效 + Redis pub/sub 广播，使多副本全部立即切换。
-	if oneRoot, gerr := ws.svc.GetRootChain(r.Context(), chainID); gerr == nil {
+	if oneRoot, gerr := ws.svc.GetRootChain(r.Context(), project, chainID); gerr == nil {
 		ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "set_current")
 	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", req.Version).Msg("root chain current release set via web")
@@ -1458,6 +1464,11 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
+		return
+	}
+	req.Project = project
 	if req.Project == "" {
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
@@ -1515,7 +1526,7 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 草稿模式：按 ChainID 查 root chain DSL，解析后通过 ExecuteRootChainByID 执行
-	def, err := ws.svc.GetRootChain(r.Context(), req.ChainID)
+	def, err := ws.svc.GetRootChain(r.Context(), req.Project, req.ChainID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "root chain not found: "+err.Error())
 		return
@@ -1779,9 +1790,11 @@ func (ws *WebServer) handleSaveTestCase(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
-	if req.Project == "" {
-		req.Project = projectParam(r)
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
+		return
 	}
+	req.Project = project
 	if req.Project == "" {
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
@@ -1857,10 +1870,11 @@ func (ws *WebServer) handleListEnvConfigs(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if cfgs == nil {
-		cfgs = []*workflow.EnvConfigDef{}
+	out := make([]*workflow.EnvConfigDef, 0, len(cfgs))
+	for _, c := range cfgs {
+		out = append(out, c.MaskSecrets())
 	}
-	writeJSON(w, http.StatusOK, cfgs)
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (ws *WebServer) handleGetEnvConfig(w http.ResponseWriter, r *http.Request) {
@@ -1875,7 +1889,7 @@ func (ws *WebServer) handleGetEnvConfig(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, c.MaskSecrets())
 }
 
 func (ws *WebServer) handleSaveEnvConfig(w http.ResponseWriter, r *http.Request) {
@@ -1884,9 +1898,11 @@ func (ws *WebServer) handleSaveEnvConfig(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
-	if req.Project == "" {
-		req.Project = projectParam(r)
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
+		return
 	}
+	req.Project = project
 	if req.Project == "" {
 		writeError(w, http.StatusBadRequest, "project is required")
 		return
@@ -1895,13 +1911,21 @@ func (ws *WebServer) handleSaveEnvConfig(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "env_name is required")
 		return
 	}
-	def, err := ws.svc.SaveEnvConfig(r.Context(), req.toDef(req.Project))
+	newDef := req.toDef(req.Project)
+	// 列表/详情接口返回的密码是脱敏值，前端原样回传时沿用库里的真实密码
+	existing, err := ws.svc.GetEnvConfig(r.Context(), req.Project, req.EnvName)
+	if err != nil && !errors.Is(err, workflow.ErrProjectNotFound) {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	newDef.RestoreMaskedSecrets(existing)
+	def, err := ws.svc.SaveEnvConfig(r.Context(), newDef)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	log.Info().Str("project", def.Project).Str("env_name", def.EnvName).Msg("env config saved via web")
-	writeJSON(w, http.StatusOK, def)
+	writeJSON(w, http.StatusOK, def.MaskSecrets())
 }
 
 // redisTestTimeout 一次 Redis 连通性探测的整体超时（含拨号、鉴权、PING、INFO）。
@@ -1919,9 +1943,30 @@ func (ws *WebServer) handleTestEnvRedis(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
+	// 该接口会按请求里的地址主动发起连接，只允许项目的 editor/admin 调用（POST 按写操作校验），
+	// 避免被普通登录用户拿来探测内网端口
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
+		return
+	}
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	req.Project = project
 	if req.RedisConfig == nil || req.RedisConfig.Addr == "" {
 		writeError(w, http.StatusBadRequest, "redis_config.addr is required")
 		return
+	}
+	// 表单里的密码是脱敏值时，用已保存的环境配置里的真实密码去测
+	if req.RedisConfig.Password == workflow.MaskedSecret && req.EnvName != "" {
+		existing, err := ws.svc.GetEnvConfig(r.Context(), project, req.EnvName)
+		if err != nil && !errors.Is(err, workflow.ErrProjectNotFound) {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		probe := &workflow.EnvConfigDef{RedisConfig: req.RedisConfig}
+		probe.RestoreMaskedSecrets(existing)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), redisTestTimeout)
 	defer cancel()
@@ -2535,5 +2580,11 @@ func (ws *WebServer) ListenAndServe(addr string) error {
 		addr = config.DefaultListenAddr
 	}
 	log.Info().Str("addr", addr).Msg("workflow web server starting")
-	return http.ListenAndServe(addr, ws.mux)
+	srv := &http.Server{
+		Addr: addr,
+		// 必须用 Handler()（套了鉴权中间件），直接用 ws.mux 会让全部 /api 接口免登录
+		Handler:           ws.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return srv.ListenAndServe()
 }

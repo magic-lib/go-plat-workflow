@@ -2,6 +2,8 @@ package repo
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"time"
 
 	"github.com/magic-lib/go-plat-workflow/workflow/models"
@@ -89,15 +91,27 @@ func (r *UserRepo) DeleteUser(ctx context.Context, id uint) error {
 // 会话
 // ============================================================
 
-// CreateSession 写入一条登录会话。
+// hashSessionToken 会话 token 入库前做 sha256：库里只存摘要，库被读走也无法直接冒用会话。
+func hashSessionToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// CreateSession 写入一条登录会话（m.Token 传原始 token，入库的是其摘要）。
 func (r *UserRepo) CreateSession(ctx context.Context, m *models.UserSessionModel) error {
-	return r.db.WithContext(ctx).Create(m).Error
+	row := *m
+	row.Token = hashSessionToken(m.Token)
+	if err := r.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return err
+	}
+	m.ID = row.ID
+	return nil
 }
 
 // GetSession 按 token 查询未过期会话（带用户联表）。
 func (r *UserRepo) GetSession(ctx context.Context, token string) (*models.UserSessionModel, *models.UserModel, error) {
 	var s models.UserSessionModel
-	if err := r.db.WithContext(ctx).Where("token = ? AND expires_at > ?", token, time.Now()).First(&s).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("token = ? AND expires_at > ?", hashSessionToken(token), time.Now()).First(&s).Error; err != nil {
 		return nil, nil, err
 	}
 	var u models.UserModel
@@ -109,7 +123,16 @@ func (r *UserRepo) GetSession(ctx context.Context, token string) (*models.UserSe
 
 // DeleteSession 删除单条会话（登出）。
 func (r *UserRepo) DeleteSession(ctx context.Context, token string) error {
-	return r.db.WithContext(ctx).Where("token = ?", token).Delete(&models.UserSessionModel{}).Error
+	return r.db.WithContext(ctx).Where("token = ?", hashSessionToken(token)).Delete(&models.UserSessionModel{}).Error
+}
+
+// DeleteUserSessions 删除某用户的全部会话（改密码、重置密码后让旧会话失效）；exceptToken 非空时保留该会话。
+func (r *UserRepo) DeleteUserSessions(ctx context.Context, userID uint, exceptToken string) error {
+	q := r.db.WithContext(ctx).Where("user_id = ?", userID)
+	if exceptToken != "" {
+		q = q.Where("token <> ?", hashSessionToken(exceptToken))
+	}
+	return q.Delete(&models.UserSessionModel{}).Error
 }
 
 // DeleteExpiredSessions 清理过期会话（定时任务调用）。

@@ -236,7 +236,7 @@ func (x *ActivityNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			engine.MysqlLogErrorString("ActivityNode:", "OnMsg allParam:",
 				"allParam:", allParam,
 				"traceId:", actMetaData.TraceId, "allParamStr:", allParamStr,
-				"nodeSpanId:", nodeSpanId, "actMetaData:", actMetaData, "stepFlowCtx:", stepFlowCtx)
+				"nodeSpanId:", nodeSpanId, "actMetaData:", logSafeMeta(actMetaData), "stepFlowCtx:", stepFlowCtx)
 		} else {
 			engine.MysqlLogger.Info(logInfoStr)
 		}
@@ -701,7 +701,20 @@ func getActionMeta(msg types.RuleMsg) *rulegox.ActivityMetaData {
 	})
 	actMetaData := new(rulegox.ActivityMetaData)
 	_ = conv.Unmarshal(metaDataMap, actMetaData)
+	if actMetaData.RedisConfig == nil {
+		actMetaData.RedisConfig = rulegox.EnvRedisConfig(actMetaData.Project, actMetaData.Env)
+	}
 	return actMetaData
+}
+
+// logSafeMeta 返回去掉 Redis 配置（含密码）的元数据副本，用于写日志。
+func logSafeMeta(m *rulegox.ActivityMetaData) *rulegox.ActivityMetaData {
+	if m == nil {
+		return nil
+	}
+	cp := *m
+	cp.RedisConfig = nil
+	return &cp
 }
 
 // setActionMeta 将 Action 的元数据写入 msg.Metadata
