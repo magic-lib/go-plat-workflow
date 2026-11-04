@@ -3344,7 +3344,7 @@ async function loadNodeTestRecords(nodeId) {
           <span><b>${esc(r.record_id)}</b> <span class="badge ${r.status==='success'?'badge-on':'badge-off'}">${r.status==='success'?'成功':'失败'}</span> ${r.env_name?('· 环境 '+esc(r.env_name)):''}</span>
           <span>
             <button class="btn btn-sm btn-outline" onclick="copyNodeTestRecord('${esc(r.record_id)}')">复制</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteNodeTestRecord('${esc(r.record_id)}','${esc(nodeId)}')">删除</button>
+            <button class="btn btn-sm btn-danger edit-only" onclick="deleteNodeTestRecord('${esc(r.record_id)}','${esc(nodeId)}')">删除</button>
           </span>
         </div>
         <div style="color:var(--text-muted);margin:4px 0">${esc(r.created_at || '')}${(r.duration_ms !== undefined && r.duration_ms !== null)?((' · 耗时: ' + formatDuration(r.duration_ms))):''}${r.trace_id?(' · trace_id: <code style="font-size:.72rem">'+esc(r.trace_id)+'</code>'):''}</div>
@@ -5884,7 +5884,8 @@ async function executeWorkflow() {
     resultBox.textContent = resultStr;
     showToast('执行成功', 'success');
     // 若当前已选中某测试用例，将执行结果回写其 last_result，便于下次直接查看
-    if (window._currentTestCase) {
+    // （viewer 只读，不能保存测试用例，跳过回写）
+    if (window._currentTestCase && !document.body.classList.contains('is-project-viewer')) {
       const c = window._currentTestCase;
       try {
         await api('/api/test-cases', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
@@ -6058,7 +6059,7 @@ async function refreshTestCases() {
       row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid #eee';
       row.innerHTML = `
         <button class="btn btn-sm btn-outline" onclick="loadTestCase('${esc(c.case_id)}')" title="加载此用例到表单并执行">▸ ${esc(c.name)}</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteTestCase('${esc(c.case_id)}')" title="删除用例">✕</button>
+        <button class="btn btn-sm btn-danger edit-only" onclick="deleteTestCase('${esc(c.case_id)}')" title="删除用例">✕</button>
       `;
       listEl.appendChild(row);
     });

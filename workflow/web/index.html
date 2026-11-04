@@ -385,7 +385,7 @@
               <div id="test-case-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc;margin-bottom:8px">
                 <div id="test-case-empty" style="text-align:center;padding:12px;color:var(--text-muted);font-size:.85rem">暂无测试用例，测试后可点击"保存测试用例"</div>
               </div>
-              <div style="display:flex;gap:8px">
+              <div class="edit-only" style="display:flex;gap:8px">
                 <input id="test-case-name" placeholder="用例名称，如：测试账号A" style="flex:1">
                 <button class="btn btn-sm btn-primary" onclick="saveTestCase()" type="button">&#128190; 保存测试用例</button>
               </div>
@@ -632,7 +632,7 @@
     <div class="form-group">
       <label style="display:flex;justify-content:space-between;align-items:center">
         <span>历史测试记录</span>
-        <button class="btn btn-sm btn-outline" type="button" onclick="clearNodeTestRecords()">全部清除</button>
+        <button class="btn btn-sm btn-outline edit-only" type="button" onclick="clearNodeTestRecords()">全部清除</button>
       </label>
       <div id="test-node-records" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc"></div>
     </div>
