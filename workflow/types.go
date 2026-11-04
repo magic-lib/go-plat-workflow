@@ -531,20 +531,25 @@ func (c *EnvConfigDef) MaskSecrets() *EnvConfigDef {
 
 // RestoreMaskedSecrets 把 c 中仍为 MaskedSecret 的字段还原为 existing 里的真实值（existing 为空时置空），
 // 用于保存脱敏后回传的配置时不把 "******" 写进库。
+// 连接目标（地址、用户名）改了时不还原、置空，要求重新输入密码：
+// 否则把地址改成自己控制的机器再点「测试连接」/保存，就能把真实密码发过去。
 func (c *EnvConfigDef) RestoreMaskedSecrets(existing *EnvConfigDef) {
 	if c == nil {
 		return
 	}
 	if c.RedisConfig != nil && c.RedisConfig.Password == MaskedSecret {
 		c.RedisConfig.Password = ""
-		if existing != nil && existing.RedisConfig != nil {
+		if existing != nil && existing.RedisConfig != nil &&
+			existing.RedisConfig.Addr == c.RedisConfig.Addr && existing.RedisConfig.Username == c.RedisConfig.Username {
 			c.RedisConfig.Password = existing.RedisConfig.Password
 		}
 	}
 	if c.MySQLConfig != nil {
 		if c.MySQLConfig.Password == MaskedSecret {
 			c.MySQLConfig.Password = ""
-			if existing != nil && existing.MySQLConfig != nil {
+			if existing != nil && existing.MySQLConfig != nil &&
+				existing.MySQLConfig.Host == c.MySQLConfig.Host && existing.MySQLConfig.Port == c.MySQLConfig.Port &&
+				existing.MySQLConfig.User == c.MySQLConfig.User {
 				c.MySQLConfig.Password = existing.MySQLConfig.Password
 			}
 		}

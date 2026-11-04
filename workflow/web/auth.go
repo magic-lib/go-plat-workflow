@@ -26,11 +26,13 @@ const sessionDuration = 24 * time.Hour
 // ctxUserKey 用于把当前登录用户存入 request context 的 key。
 type ctxUserKey struct{}
 
-// 登录失败限流：同一用户名或同一 IP 在 loginFailWindow 内失败 loginFailLimit 次后，锁定到窗口结束。
-// 计数在进程内，多副本时每个副本各自计数，用于挡住暴力猜密码已足够。
+// 登录失败限流：同一「用户名 + 客户端 IP」在 loginFailWindow 内失败 loginFailLimit 次后，锁定到窗口结束。
+// 按组合计数而不是单按用户名：单按用户名的话，任何人连续输错就能把 admin 锁住。
+// 计数在进程内，多副本时每个副本各自计数；条目数设上限，防止用随机用户名/IP 把内存撑大。
 const (
-	loginFailLimit  = 5
-	loginFailWindow = 15 * time.Minute
+	loginFailLimit      = 5
+	loginFailWindow     = 15 * time.Minute
+	loginFailMaxEntries = 10000
 )
 
 type loginFailEntry struct {
@@ -69,7 +71,7 @@ func (l *loginLimiter) fail(keys ...string) {
 	for _, k := range keys {
 		if e, ok := l.entries[k]; ok {
 			e.count++
-		} else {
+		} else if len(l.entries) < loginFailMaxEntries {
 			l.entries[k] = &loginFailEntry{count: 1, first: time.Now()}
 		}
 	}
@@ -200,8 +202,10 @@ func (ws *WebServer) authMiddleware(next http.Handler) http.Handler {
 		// admin 拥有全部项目；普通用户按 wf_user_projects 中的角色授权：
 		//   - viewer（只读）：可查日志、执行单元测试等，不可编辑；
 		//   - editor（管理）：可编辑该项目所有功能。
-		// 用户管理接口（/api/users*）不走项目授权。
-		if strings.HasPrefix(p, "/api/") && !strings.HasPrefix(p, "/api/users") {
+		// 用户管理接口（/api/users*）、与项目无关的接口（项目列表、当前用户）不走项目授权：
+		// 前端会给所有请求自动拼上地址栏里的 ?project=，该项目无权限（被取消授权、已删除、别人分享的链接）时，
+		// 不能连项目列表都加载不出来。
+		if strings.HasPrefix(p, "/api/") && !isProjectAgnosticPath(p) {
 			if project := r.URL.Query().Get("project"); project != "" {
 				if !checkProjectAccessForRequest(ws, w, r.WithContext(ctx), r, project) {
 					return
@@ -211,6 +215,13 @@ func (ws *WebServer) authMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isProjectAgnosticPath 与具体项目无关、不需要按 ?project= 校验项目权限的接口（handler 内各自做 admin 等校验）。
+func isProjectAgnosticPath(p string) bool {
+	return strings.HasPrefix(p, "/api/users") ||
+		p == "/api/projects" ||
+		p == "/api/me" || strings.HasPrefix(p, "/api/me/")
 }
 
 // isWriteRequest 判断请求是否为「编辑类」写操作（需 editor/admin）。
@@ -338,7 +349,7 @@ func (ws *WebServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "username and password are required")
 		return
 	}
-	limitKeys := []string{"user:" + req.Username, "ip:" + clientIP(r)}
+	limitKeys := []string{req.Username + "|" + clientIP(r)}
 	if loginFails.blocked(limitKeys...) {
 		writeError(w, http.StatusTooManyRequests, "登录失败次数过多，请 15 分钟后再试")
 		return
@@ -632,9 +643,15 @@ func (ws *WebServer) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 管理员重置了密码：该用户已有的会话全部失效
+	// 管理员重置了密码：该用户已有的会话全部失效（重置的是自己时保留当前会话，避免把自己踢下线）
 	if req.Password != "" {
-		if err := ws.svc.UserRepo().DeleteUserSessions(r.Context(), uid, ""); err != nil {
+		var keepToken string
+		if uid == admin.ID {
+			if c, err := r.Cookie(sessionCookieName); err == nil {
+				keepToken = c.Value
+			}
+		}
+		if err := ws.svc.UserRepo().DeleteUserSessions(r.Context(), uid, keepToken); err != nil {
 			writeError(w, http.StatusInternalServerError, "用户已更新，但清理会话失败: "+err.Error())
 			return
 		}

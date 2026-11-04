@@ -26,6 +26,13 @@ func TestEnvConfigMaskAndRestore(t *testing.T) {
 		t.Fatalf("restore wrong: %+v %+v", posted.RedisConfig, posted.MySQLConfig)
 	}
 
+	// 改了连接地址：不还原，防止把真实密码发到新地址
+	moved := &EnvConfigDef{RedisConfig: &RedisConfig{Addr: "evil:6379", Password: MaskedSecret}}
+	moved.RestoreMaskedSecrets(stored)
+	if moved.RedisConfig.Password != "" {
+		t.Fatalf("password restored for changed addr: %q", moved.RedisConfig.Password)
+	}
+
 	// 库里没有记录时，脱敏值不能被当成密码写进库
 	fresh := &EnvConfigDef{RedisConfig: &RedisConfig{Password: MaskedSecret}}
 	fresh.RestoreMaskedSecrets(nil)

@@ -68,17 +68,38 @@ func TestResolveProjectWithQuery(t *testing.T) {
 func TestLoginLimiter(t *testing.T) {
 	l := &loginLimiter{entries: map[string]*loginFailEntry{}}
 	for i := 0; i < loginFailLimit-1; i++ {
-		l.fail("user:a", "ip:1")
+		l.fail("admin|1.1.1.1")
 	}
-	if l.blocked("user:a") {
+	if l.blocked("admin|1.1.1.1") {
 		t.Fatal("should not block before limit")
 	}
-	l.fail("user:a", "ip:1")
-	if !l.blocked("user:a") || !l.blocked("user:x", "ip:1") {
-		t.Fatal("should block user and ip after limit")
+	l.fail("admin|1.1.1.1")
+	if !l.blocked("admin|1.1.1.1") {
+		t.Fatal("should block after limit")
 	}
-	l.reset("user:a", "ip:1")
-	if l.blocked("user:a", "ip:1") {
+	// 别的 IP 登录同一账号不受影响（不能被人拿来锁死 admin）
+	if l.blocked("admin|2.2.2.2") {
+		t.Fatal("other ip should not be blocked")
+	}
+	l.reset("admin|1.1.1.1")
+	if l.blocked("admin|1.1.1.1") {
 		t.Fatal("should unblock after reset")
+	}
+}
+
+func TestIsProjectAgnosticPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/api/projects":          true,
+		"/api/me":                true,
+		"/api/me/password":       true,
+		"/api/users/3":           true,
+		"/api/projects/a":        false,
+		"/api/projects/a/config": false,
+		"/api/nodes":             false,
+		"/api/menu":              false,
+	} {
+		if got := isProjectAgnosticPath(p); got != want {
+			t.Errorf("%s: got %v want %v", p, got, want)
+		}
 	}
 }

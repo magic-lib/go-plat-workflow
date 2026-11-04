@@ -445,7 +445,7 @@ func (ws *WebServer) handleDeleteProject(w http.ResponseWriter, r *http.Request)
 
 // handleGetProjectConfig 对外配置查询：需传入正确的项目密钥，
 // 返回项目下的环境配置与可执行的 RootChains 概要列表（不含 DSL 等敏感内容）。
-// 鉴权支持两种：直接传 secret_key（旧）；或传 token + timestamp 时间戳签名（推荐）。
+// 鉴权方式：传 sign + timestamp 时间戳签名（不再接受直接传原始密钥）。
 func (ws *WebServer) handleGetProjectConfig(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
 
