@@ -5260,13 +5260,11 @@ async function loadRootChains() {
     (currents || []).forEach(r => { curVerMap[r.chain_id] = r.version; });
     const tbody = document.querySelector('#root-table tbody');
     if (!chains.length) {
-      tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><div class="icon">🌳</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无根链数据，通过 Execute 页面执行工作流后会自动生成</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="icon">🌳</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无根链数据，通过 Execute 页面执行工作流后会自动生成</p></div></td></tr>';
       return;
     }
     window._rootChainsForEdit = chains; // 缓存供按钮索引使用
     tbody.innerHTML = chains.map((c, i) => {
-      let connCount = 0;
-      try { connCount = JSON.parse(c.connections_data || '[]').length; } catch(e){}
       const curVer = curVerMap[c.chain_id];
       // 必需入参：与 Activity 列表展示参数方式一致，用芯片展示每个 {{arguments.xxx}} 的参数名
       // 最多显示 2 个，多余数量用 "+N" 触发泡泡窗（复用 showHbPop/moveHbPop/hideHbPop 浮层）列出全部
@@ -5296,12 +5294,8 @@ async function loadRootChains() {
       <tr>
         <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
         <td class="code-cell" title="${esc(c.chain_key||'')}">${esc(c.chain_key||'')}</td>
-        <td style="min-width:7em">${esc(c.name)}</td>
-        <td style="min-width:6em" title="${esc(c.description||'')}">${esc(trunc(c.description, 40))}</td>
+        <td style="min-width:7em" title="${esc(c.description||'')}">${esc(c.name)}</td>
         <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
-        <td class="code-cell" title="${esc(c.node_ids||'')}">${esc(trunc(c.node_ids, 20))}</td>
-        <td class="code-cell" title="${esc(c.sub_chain_ids||'')}">${esc(trunc(c.sub_chain_ids, 20))}</td>
-        <td>${connCount} 条</td>
         <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
         <td>${paramsHtml}</td>
         <td><div class="actions">
