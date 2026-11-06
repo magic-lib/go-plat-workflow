@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/rulego/rulego/api/types"
 )
@@ -45,5 +46,13 @@ func TestCheckRootChainCalls_SelfAndEmptyTarget(t *testing.T) {
 	// 非调用根链节点不受影响
 	if err := s.checkRootChainCalls(context.Background(), "p", "R1", []*types.RuleNode{{Id: "N2", Type: common.ActivityNodeTypeName}}); err != nil {
 		t.Fatalf("unexpected err: %v", err)
+	}
+}
+
+func TestTestRootChainCallNode_RequiresTarget(t *testing.T) {
+	s := &WorkflowService{}
+	nodeDef := &workflow.NodeDef{Project: "p1", NodeID: "N000009", Type: common.RootChainCallNodeTypeName, Configuration: []byte(`{}`)}
+	if _, err := s.testRootChainCallNode(context.Background(), &TestNodeRequest{Project: "p1", NodeID: "N000009"}, nodeDef); err == nil || !strings.Contains(err.Error(), "未固定目标根链") {
+		t.Fatalf("expected missing target error, got %v", err)
 	}
 }

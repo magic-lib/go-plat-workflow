@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	param "github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow"
@@ -14,6 +16,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/models"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
+	"github.com/rs/zerolog/log"
 	"github.com/rulego/rulego/api/types"
 	"github.com/samber/lo"
 )
@@ -171,4 +174,103 @@ func missingRootChainCallArgs(n *types.RuleNode, required []string) []string {
 		}
 	}
 	return missing
+}
+
+// testRootChainCallNode 测试调用根链节点：把测试参数原样作为入参，执行节点定义固定的目标根链当前发布版本，
+// 同步拿到目标根链的完整输出；并在该节点的运行日志中记录本次输入（arguments）与完整输出（result），可按需保存测试记录。
+func (s *WorkflowService) testRootChainCallNode(ctx context.Context, req *TestNodeRequest, nodeDef *workflow.NodeDef) (*TestNodeResult, error) {
+	cfg := make(map[string]any)
+	if len(nodeDef.Configuration) > 0 {
+		if err := json.Unmarshal(nodeDef.Configuration, &cfg); err != nil {
+			return nil, fmt.Errorf("parse root chain call node configuration: %w", err)
+		}
+	}
+	target := strings.TrimSpace(conv.String(cfg[common.RootChainCallConfigKey]))
+	if target == "" {
+		return nil, fmt.Errorf("调用根链节点 %s 未固定目标根链，请在节点编辑页选择目标根链，或在根链编排中执行测试", nodeDef.NodeID)
+	}
+	input := req.InputParams
+	if input == nil {
+		input = map[string]any{}
+	}
+
+	traceID := id.NewUUID()
+	start := time.Now()
+	output, releaseID, runErr := s.invokeRootChainForTest(ctx, req.Project, target, req.EnvName, traceID, input)
+	durationMs := time.Since(start).Milliseconds()
+
+	result := &TestNodeResult{TraceID: traceID, DurationMs: durationMs}
+	if runErr != nil {
+		result.Status = "fail"
+		result.ErrorMsg = runErr.Error()
+	} else {
+		result.Status = "success"
+		result.Result = conv.String(output)
+	}
+
+	// 节点运行日志：输入为测试参数，输出为目标根链的完整输出
+	logDef := &workflow.NodeLogDef{
+		Project:            req.Project,
+		Env:                req.EnvName,
+		NodeID:             nodeDef.NodeID,
+		NodeName:           nodeDef.Name,
+		EventID:            result.Status,
+		Level:              "info",
+		Timestamp:          start.Unix(),
+		DurationMs:         durationMs,
+		Payload:            json.RawMessage(conv.String(input)),
+		Arguments:          json.RawMessage(conv.String(input)),
+		Result:             result.Result,
+		ErrorMsg:           result.ErrorMsg,
+		TraceID:            traceID,
+		RootChainID:        target,
+		RootChainReleaseID: releaseID,
+		SpanID:             id.GetUUID(nodeDef.NodeID + traceID),
+		RelationType:       types.Success,
+		CreatedAt:          time.Now(),
+	}
+	if runErr != nil {
+		logDef.Level = "error"
+		logDef.RelationType = types.Failure
+	}
+	if err := s.nodeLogRepo.Create(ctx, logDef); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("node_id", nodeDef.NodeID).Msg("save root chain call node test log failed")
+	}
+
+	if req.SaveRecord {
+		record := &workflow.NodeTestRecordDef{
+			Project:     req.Project,
+			NodeID:      req.NodeID,
+			NodeName:    nodeDef.Name,
+			EnvName:     req.EnvName,
+			TraceID:     traceID,
+			InputParams: mustJSON(input),
+			EnvVars:     mustJSON(map[string]string{}),
+			Status:      result.Status,
+			Result:      result.Result,
+			ErrorMsg:    result.ErrorMsg,
+			DurationMs:  durationMs,
+		}
+		if err := s.CreateNodeTestRecord(ctx, record); err == nil {
+			result.RecordID = record.RecordID
+		}
+	}
+	return result, nil
+}
+
+// invokeRootChainForTest 按根链 ID 执行其当前发布版本，返回完整输出与发布版本标识（形如 R000001@3）。
+func (s *WorkflowService) invokeRootChainForTest(ctx context.Context, project, chainID, env, traceID string, input map[string]any) (any, string, error) {
+	def, err := s.rootChainRepo.GetByProjectID(ctx, project, chainID)
+	if err != nil {
+		return nil, "", fmt.Errorf("目标根链 %s 不存在或已停用: %w", chainID, err)
+	}
+	releaseID := ""
+	if release, err := s.releaseRepo.GetCurrent(ctx, project, chainID); err == nil && release != nil {
+		releaseID = fmt.Sprintf("%s@%d", chainID, release.Version)
+	}
+	output, err := s.InvokeRootChain(ctx, project, def.ChainKey, env, traceID, input, false)
+	if err != nil {
+		return nil, releaseID, fmt.Errorf("执行目标根链 %s 失败: %w", chainID, err)
+	}
+	return output, releaseID, nil
 }
