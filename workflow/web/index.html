@@ -490,6 +490,14 @@
         </select>
       </div>
     </div>
+    <div class="form-group" id="node-chaincall-section" style="display:none">
+      <label style="display:block">目标根链 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（只列出已发布的根链；选择后自动加载该根链当前发布版本所需的全部参数和返回值定义）</span></label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="node-chaincall-target" style="flex:1" onchange="onNodeChainCallTargetChange()"></select>
+        <button type="button" class="btn btn-sm btn-outline" onclick="reloadNodeChainCallSignature()" title="按目标根链当前发布版本重新加载参数与返回值定义">重新加载参数</button>
+      </div>
+      <div id="node-chaincall-hint" style="font-size:.75rem;color:var(--text-muted);margin-top:6px">不选择时，在根链编排里添加该节点时再选择目标根链。</div>
+    </div>
     <div class="form-group" id="node-activity-section" style="display:none">
       <label style="display:block">
         <span>Activity 编排（二维数组：外层阶段<strong>串行</strong>执行，同阶段内活动<strong>并行</strong>执行）</span>

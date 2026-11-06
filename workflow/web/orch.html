@@ -223,9 +223,19 @@
           <option value="custom/Activity">custom/Activity（活动编排）</option>
           <option value="custom/CondSwitch">custom/CondSwitch（条件判断，仅做语法条件判断）</option>
           <option value="custom/ReturnValue">custom/ReturnValue（返回值节点）</option>
+          <option value="custom/RootChainCall">custom/RootChainCall（调用根链节点）</option>
+          <option value="custom/ParamInput">custom/ParamInput（参数输入节点）</option>
           <option value="end">end（结束节点）</option>
         </select>
       </div>
+    </div>
+    <div class="form-group" id="node-chaincall-section" style="display:none">
+      <label style="display:block">目标根链 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（只列出已发布的根链；选择后自动加载该根链当前发布版本所需的全部参数和返回值定义）</span></label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="node-chaincall-target" style="flex:1" onchange="onNodeChainCallTargetChange()"></select>
+        <button type="button" class="btn btn-sm btn-outline" onclick="reloadNodeChainCallSignature()" title="按目标根链当前发布版本重新加载参数与返回值定义">重新加载参数</button>
+      </div>
+      <div id="node-chaincall-hint" style="font-size:.75rem;color:var(--text-muted);margin-top:6px">不选择时，在根链编排里添加该节点时再选择目标根链。</div>
     </div>
     <div class="form-group" id="node-activity-section" style="display:none">
       <label style="display:block">
@@ -259,6 +269,9 @@
         <select id="node-kind">
           <option value="condition">查询获取</option>
           <option value="action" selected>策略执行</option>
+          <option value="return">返回值</option>
+          <option value="call">调用根链</option>
+          <option value="input">参数输入</option>
         </select>
       </div>
       <div class="form-group">
