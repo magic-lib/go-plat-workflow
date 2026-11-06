@@ -3974,19 +3974,23 @@ async function loadAllLogRootChainOptions() {
   } catch (e) { /* 选项可选，失败不影响日志查询 */ }
 }
 
-// ===================== 统计页：Node 日志按天统计 =====================
-// 加载「统计」页数据并渲染柱状图：每个 node 每天的访问量与错误量。
-async function loadStatistics() {
-  const statNode = document.getElementById('stat-node');
-  const statEnv = document.getElementById('stat-env');
-  const statDays = document.getElementById('stat-days');
-  const chart = document.getElementById('stat-chart');
-  if (!chart) return;
+// ===================== 统计页 =====================
+// 加载「统计」页：概览卡片、根链执行统计、错误排行（/api/stats/overview）与 Node 每日访问量柱状图。
+// 概览后端缓存 1 分钟；force=true（点「刷新」）时跳过缓存重新统计。
+async function loadStatistics(force) {
   const curProject = getProject();
+  const cards = document.getElementById('stat-cards');
+  if (!cards) return;
   if (!curProject) {
-    chart.innerHTML = '<div class="log-empty">请先在右上角选择一个项目</div>';
+    cards.innerHTML = '<div class="log-empty">请先在右上角选择一个项目</div>';
     return;
   }
+  await loadStatFilterOptions();
+  await Promise.all([loadStatOverview(force), loadStatChart()]);
+}
+
+// 重建统计页的环境与 Node 下拉（保留当前选中值）。
+async function loadStatFilterOptions() {
   // 确保 Node 缓存已加载（首次进入统计页时可能尚未访问 Nodes 页，下拉才会只有「全部 Node」）
   if (!window._nodesForEdit || window._nodesForEdit.length === 0) {
     try {
@@ -3994,10 +3998,11 @@ async function loadStatistics() {
       if (ns && ns.length) window._nodesForEdit = ns;
     } catch (e) { /* 忽略 */ }
   }
-  // 重建 Node 下拉（保留当前选中值）
+  const statNode = document.getElementById('stat-node');
   if (statNode) {
     const sel = statNode.value;
     statNode.innerHTML = '<option value="">全部 Node</option>';
+    // Node 列表即节点模板；日志里的实例（模板ID__后缀）由后端按模板归并
     (window._nodesForEdit || []).forEach(n => {
       if (n && n.node_id) {
         const o = document.createElement('option');
@@ -4008,12 +4013,12 @@ async function loadStatistics() {
     });
     if (sel) statNode.value = sel;
   }
-  // 重建 Env 下拉（保留当前选中值）
-  let envList = [];
-  try {
-    envList = await api('/api/env-configs');
-  } catch (e) { /* 忽略：env 可选 */ }
+  const statEnv = document.getElementById('stat-env');
   if (statEnv) {
+    let envList = [];
+    try {
+      envList = await api('/api/env-configs');
+    } catch (e) { /* 忽略：env 可选 */ }
     const sel = statEnv.value;
     statEnv.innerHTML = '<option value="">全部环境</option>';
     (envList || []).forEach(e => {
@@ -4026,11 +4031,198 @@ async function loadStatistics() {
     });
     if (sel) statEnv.value = sel;
   }
+}
+
+// 统计页公共查询参数：环境 + 天数。
+function statQueryParams() {
   const params = new URLSearchParams();
-  params.set('project', curProject);
-  if (statEnv && statEnv.value) params.set('env', statEnv.value);
+  const env = document.getElementById('stat-env');
+  const days = document.getElementById('stat-days');
+  if (env && env.value) params.set('env', env.value);
+  if (days && days.value) params.set('days', days.value);
+  return params;
+}
+
+// 毫秒耗时转可读文本。
+function fmtStatMs(ms) {
+  ms = Number(ms) || 0;
+  if (ms < 1000) return ms + ' ms';
+  const s = ms / 1000;
+  if (s < 60) return s.toFixed(1) + ' 秒';
+  if (s < 3600) return (s / 60).toFixed(1) + ' 分钟';
+  if (s < 86400) return (s / 3600).toFixed(1) + ' 小时';
+  return (s / 86400).toFixed(1) + ' 天';
+}
+
+// 比例转百分比文本。
+function fmtStatRate(r) {
+  return ((Number(r) || 0) * 100).toFixed(1) + '%';
+}
+
+// 毫秒时间戳转 MM-DD HH:mm:ss。
+function fmtStatTime(ms) {
+  if (!ms) return '-';
+  const d = new Date(ms);
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+let _statOverview = null;
+
+// 加载并渲染概览卡片、根链统计、错误排行。
+async function loadStatOverview(force) {
+  const cards = document.getElementById('stat-cards');
+  const chainTable = document.getElementById('stat-chain-table');
+  const errTable = document.getElementById('stat-error-table');
+  const updated = document.getElementById('stat-updated');
+  cards.innerHTML = '<div class="log-empty">加载中…</div>';
+  chainTable.innerHTML = '';
+  errTable.innerHTML = '';
+  let data;
+  try {
+    const params = statQueryParams();
+    if (force) params.set('refresh', '1');
+    data = await api('/api/stats/overview?' + params.toString());
+  } catch (e) {
+    cards.innerHTML = '<div class="log-empty">加载失败：' + escHtml(String((e && e.message) || e)) + '</div>';
+    return;
+  }
+  _statOverview = data || {};
+  if (updated) updated.textContent = '更新于 ' + fmtStatTime(Date.now()) + '（切换条件时最多复用 1 分钟内的结果，点刷新取最新）';
+  renderStatCards(cards, _statOverview.summary || {});
+  renderStatChainTable(chainTable, _statOverview.root_chains || []);
+  renderStatErrorTable(errTable, _statOverview.errors || []);
+}
+
+// 渲染概览卡片。
+function renderStatCards(container, s) {
+  const card = (label, value, sub, bad) =>
+    '<div class="stat-card"><div class="stat-card-label">' + escHtml(label) + '</div>' +
+    '<div class="stat-card-value' + (bad ? ' bad' : '') + '">' + escHtml(String(value)) + '</div>' +
+    (sub ? '<div class="stat-card-sub">' + escHtml(sub) + '</div>' : '') + '</div>';
+  const exec = s.executions || 0;
+  const failed = s.failed_executions || 0;
+  let html = '';
+  html += card('根链执行次数', exec.toLocaleString(), 'trace_id + 根链 + 10 分钟窗口');
+  html += card('失败执行', failed.toLocaleString(), '成功率 ' + (exec ? fmtStatRate(s.success_rate) : '-'), failed > 0);
+  html += card('Node 执行 / 报错', (s.node_total || 0).toLocaleString() + ' / ' + (s.node_errors || 0).toLocaleString(), '含节点单测等非根链执行', (s.node_errors || 0) > 0);
+  html += card('平均耗时', exec ? fmtStatMs(s.avg_ms) : '-', '根链端到端');
+  html += card('P95 耗时', exec ? '≈ ' + fmtStatMs(s.p95_ms) : '-', '95% 的执行不超过该值');
+  if (s.activity_published !== undefined && s.activity_published !== null) {
+    const off = (s.activity_published || 0) - (s.activity_online || 0);
+    html += card('Activity 在线 / 已发布', (s.activity_online || 0) + ' / ' + s.activity_published, off > 0 ? off + ' 个当前无心跳' : '全部在线', off > 0);
+  } else {
+    html += card('Activity 在线 / 已发布', '-', '选择具体环境后显示');
+  }
+  container.innerHTML = html;
+}
+
+// 失败率文本：大于 0 标红。
+function statRateCell(stat) {
+  if (!stat.executions) return '-';
+  const cls = stat.failed > 0 ? ' class="stat-rate-bad"' : '';
+  return '<span' + cls + '>' + fmtStatRate(stat.fail_rate) + '</span>';
+}
+
+// 渲染根链执行统计表（点击行展开各发布版本）。
+function renderStatChainTable(table, list) {
+  let html = '<thead><tr><th>根链</th><th class="num">执行次数</th><th class="num">失败</th><th class="num">失败率</th>' +
+    '<th class="num">平均耗时</th><th class="num">P95 耗时</th><th class="num">最近执行</th><th>日志</th></tr></thead><tbody>';
+  if (!list.length) {
+    html += '<tr><td colspan="8"><div class="log-empty">所选条件下暂无根链执行记录</div></td></tr>';
+  }
+  list.forEach((c, i) => {
+    const vers = c.versions || [];
+    html += '<tr class="stat-chain-row" onclick="toggleStatChainVersions(' + i + ')">' +
+      '<td><span id="stat-chain-arrow-' + i + '" style="display:inline-block;width:14px;color:var(--text-muted)">' + (vers.length ? '▸' : '') + '</span>' +
+      escHtml(c.name || c.chain_id) + ' <span style="color:var(--text-muted);font-size:.75rem">' + escHtml(c.chain_id) + '</span></td>' +
+      '<td class="num">' + (c.executions || 0).toLocaleString() + '</td>' +
+      '<td class="num">' + (c.failed || 0).toLocaleString() + '</td>' +
+      '<td class="num">' + statRateCell(c) + '</td>' +
+      '<td class="num">' + fmtStatMs(c.avg_ms) + '</td>' +
+      '<td class="num">' + fmtStatMs(c.p95_ms) + '</td>' +
+      '<td class="num">' + fmtStatTime(c.last_at) + '</td>' +
+      '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();gotoLogsFromStats({rootChainId:\'' + esc(c.chain_id) + '\'})">查看</button></td></tr>';
+    vers.forEach(v => {
+      html += '<tr class="stat-ver-row stat-ver-of-' + i + '" style="display:none">' +
+        '<td>' + (v.version ? 'v' + v.version : '草稿执行') + '</td>' +
+        '<td class="num">' + (v.executions || 0).toLocaleString() + '</td>' +
+        '<td class="num">' + (v.failed || 0).toLocaleString() + '</td>' +
+        '<td class="num">' + statRateCell(v) + '</td>' +
+        '<td class="num">' + fmtStatMs(v.avg_ms) + '</td>' +
+        '<td class="num">' + fmtStatMs(v.p95_ms) + '</td>' +
+        '<td class="num">' + fmtStatTime(v.last_at) + '</td><td></td></tr>';
+    });
+  });
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+// 展开 / 收起某根链的版本明细行。
+function toggleStatChainVersions(i) {
+  const rows = document.querySelectorAll('.stat-ver-of-' + i);
+  if (!rows.length) return;
+  const show = rows[0].style.display === 'none';
+  rows.forEach(r => { r.style.display = show ? '' : 'none'; });
+  const arrow = document.getElementById('stat-chain-arrow-' + i);
+  if (arrow) arrow.textContent = show ? '▾' : '▸';
+}
+
+// 渲染错误排行表。
+function renderStatErrorTable(table, list) {
+  let html = '<thead><tr><th class="num">#</th><th>节点</th><th>错误信息</th><th class="num">次数</th><th class="num">最近出现</th><th>日志</th></tr></thead><tbody>';
+  if (!list.length) {
+    html += '<tr><td colspan="6"><div class="log-empty">所选条件下没有报错</div></td></tr>';
+  }
+  list.forEach((e, i) => {
+    html += '<tr><td class="num">' + (i + 1) + '</td>' +
+      '<td>' + escHtml(e.node_name || e.node_id) + '<div style="color:var(--text-muted);font-size:.72rem">' + escHtml(e.node_id) + '</div></td>' +
+      '<td class="stat-err-msg">' + escHtml(e.message) + '</td>' +
+      '<td class="num">' + (e.count || 0).toLocaleString() + '</td>' +
+      '<td class="num">' + fmtStatTime(e.last_at) + '</td>' +
+      '<td>' + (e.trace_id ? '<button class="btn btn-sm btn-outline" onclick="gotoLogsFromStats({traceId:\'' + esc(e.trace_id) + '\',level:\'error\'})">样例</button>' : '') + '</td></tr>';
+  });
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+// 从统计页跳到日志页并带上筛选条件（环境沿用统计页所选）。opts: rootChainId / traceId / level。
+// 日志页切换时会重建下拉并保留当前值，这里先塞入对应选项，避免值因选项尚未加载而丢失。
+function gotoLogsFromStats(opts) {
+  opts = opts || {};
+  const presetSelect = (id, value) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    if (value && !Array.from(sel.options).some(o => o.value === value)) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = value;
+      sel.appendChild(o);
+    }
+    sel.value = value || '';
+  };
+  const typeSel = document.getElementById('all-log-type');
+  if (typeSel) typeSel.value = 'node';
+  _allLogType = 'node';
+  _allLogPage = 1;
+  const statEnv = document.getElementById('stat-env');
+  presetSelect('all-log-env', statEnv ? statEnv.value : '');
+  presetSelect('all-log-level', opts.level || '');
+  presetSelect('all-log-root-chain-id', opts.rootChainId || '');
+  const trace = document.getElementById('all-log-trace-id');
+  if (trace) trace.value = opts.traceId || '';
+  const payload = document.getElementById('all-log-payload');
+  if (payload) payload.value = '';
+  switchTab('logs');
+}
+
+// 加载 Node 每日访问量柱状图（只受 Node、环境、天数筛选影响）。
+async function loadStatChart() {
+  const chart = document.getElementById('stat-chart');
+  if (!chart) return;
+  const statNode = document.getElementById('stat-node');
+  const params = statQueryParams();
   if (statNode && statNode.value) params.set('node_id', statNode.value);
-  if (statDays && statDays.value) params.set('days', statDays.value);
   chart.innerHTML = '<div class="log-empty">加载中…</div>';
   let data;
   try {
@@ -4039,50 +4231,51 @@ async function loadStatistics() {
     chart.innerHTML = '<div class="log-empty">加载失败：' + escHtml(String((e && e.message) || e)) + '</div>';
     return;
   }
-  const list = (data && data.list) || [];
-  renderStatChart(chart, list, statNode && statNode.value);
+  renderStatChart(chart, (data && data.list) || []);
 }
 
-// 纯 CSS 柱状图渲染：横轴为日期，每日期两根柱（访问量蓝 / 错误量红）。
-function renderStatChart(container, list, singleNode) {
+// 纯 CSS 柱状图渲染：横轴为日期，每日期两根柱（访问量蓝 / 错误量红），悬停显示当天明细。
+function renderStatChart(container, list) {
   if (!list.length) {
     container.innerHTML = '<div class="log-empty">所选条件下暂无统计数据</div>';
     return;
   }
-  // 按日期聚合（全部 Node 模式需对多 node 同日求和）
+  // 按日期聚合（同一天多个 node / 多个实例求和）
   const byDate = {};
+  const nodeIds = {};
   list.forEach(s => {
-    const d = s.date || '';
+    const d = String(s.date || '').slice(0, 10);
     if (!byDate[d]) byDate[d] = { date: d, total: 0, errors: 0 };
     byDate[d].total += (s.total || 0);
     byDate[d].errors += (s.errors || 0);
+    nodeIds[s.node_id] = true;
   });
   const dates = Object.keys(byDate).sort();
   let maxV = 1;
   dates.forEach(d => { if (byDate[d].total > maxV) maxV = byDate[d].total; });
+  // 日期多时隔几个显示一个刻度，柱顶数字也只在 31 天以内显示，避免文字挤在一起
+  const labelStep = Math.max(1, Math.ceil(dates.length / 15));
+  const showValues = dates.length <= 31;
   const h = 200;
-  let html = '<div style="display:flex;align-items:flex-end;gap:12px;min-height:' + (h + 40) + 'px;padding:14px 6px 6px;border-bottom:1px solid var(--border)">';
-  dates.forEach(d => {
+  let html = '<div style="display:flex;align-items:flex-end;gap:' + (dates.length > 31 ? 4 : 10) + 'px;min-height:' + (h + 40) + 'px;padding:14px 6px 6px;border-bottom:1px solid var(--border)">';
+  dates.forEach((d, i) => {
     const item = byDate[d];
     const totalH = Math.max(2, Math.round((item.total / maxV) * h));
     const errH = Math.max(0, Math.round((item.errors / maxV) * h));
-    html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;flex:1 1 40px;min-width:36px">';
-    html += '<div style="font-size:.7rem;color:var(--text-muted);margin-bottom:3px">' + item.total + '</div>';
-    html += '<div style="display:flex;align-items:flex-end;height:' + h + 'px;width:100%;justify-content:center;gap:4px">';
-    html += '<div title="访问量: ' + item.total + '" style="width:16px;background:#3b82f6;border-radius:3px 3px 0 0;height:' + totalH + 'px"></div>';
-    html += '<div title="错误量: ' + item.errors + '" style="width:16px;background:#ef4444;border-radius:3px 3px 0 0;height:' + errH + 'px"></div>';
+    const tip = d + '\n访问量: ' + item.total + '\n错误量: ' + item.errors;
+    const barW = dates.length > 31 ? 6 : 14;
+    html += '<div title="' + esc(tip) + '" style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;flex:1 1 ' + (barW * 2 + 6) + 'px;min-width:' + (barW * 2 + 4) + 'px">';
+    html += '<div style="font-size:.68rem;color:var(--text-muted);margin-bottom:3px;min-height:1em">' + (showValues ? item.total : '') + '</div>';
+    html += '<div style="display:flex;align-items:flex-end;height:' + h + 'px;width:100%;justify-content:center;gap:2px">';
+    html += '<div style="width:' + barW + 'px;background:#3b82f6;border-radius:3px 3px 0 0;height:' + totalH + 'px"></div>';
+    html += '<div style="width:' + barW + 'px;background:#ef4444;border-radius:3px 3px 0 0;height:' + errH + 'px"></div>';
     html += '</div>';
-    html += '<div style="font-size:.68rem;color:var(--text-muted);margin-top:5px;white-space:nowrap">' + escHtml(String(d).slice(5)) + '</div>';
+    html += '<div style="font-size:.68rem;color:var(--text-muted);margin-top:5px;white-space:nowrap;min-height:1em">' + (i % labelStep === 0 ? escHtml(d.slice(5)) : '') + '</div>';
     html += '</div>';
   });
   html += '</div>';
-  if (!singleNode) {
-    const nodeNames = {};
-    list.forEach(s => { nodeNames[s.node_id] = s.node_name || s.node_id; });
-    const names = Object.keys(nodeNames).map(k => escHtml(nodeNames[k])).join('、');
-    html += '<div style="font-size:.75rem;color:var(--text-muted);margin-top:10px;line-height:1.6">统计范围：全部 Node（共 ' +
-      Object.keys(nodeNames).length + ' 个：' + names + '），按天汇总各 Node 的访问量与错误量。</div>';
-  }
+  html += '<div style="font-size:.75rem;color:var(--text-muted);margin-top:8px">共 ' + Object.keys(nodeIds).length +
+    ' 个节点实例有记录，按天汇总；鼠标悬停柱子查看当天明细。</div>';
   container.innerHTML = html;
 }
 
