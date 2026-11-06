@@ -5277,14 +5277,17 @@ async function loadRootChains() {
       } else {
         const shown = params.slice(0, 2);
         const chip = k => '<span style="font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
-        const shownHtml = shown.map(chip).join('');
+        // 列表里的参数名可能是多级私有参数（如 N000002__fim5n.N000001__eka03.phone），过长时截断显示，悬停看全名，
+        // 避免撑宽「必需参数」列把名称、描述挤成竖排；泡泡窗里仍用完整芯片列出全部参数
+        const shortChip = k => '<span title="' + esc(k) + '" style="display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
+        const shownHtml = shown.map(shortChip).join('');
         const moreHtml = params.length > 2
           ? '<span class="param-more" style="font-family:monospace;font-size:.74rem;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;white-space:nowrap;cursor:pointer" ' +
             'onmouseenter="showHbPop(event,this)" onmousemove="moveHbPop(event)" onmouseleave="hideHbPop()">+' + (params.length - 2) + '</span>'
           : '';
         const popItems = params.map(k => '<div class="hb-pop-item">' + chip(k) + '</div>').join('');
         const popHtml = '<div class="hb-pop-title">必需入参（共 ' + params.length + ' 个）</div>' + popItems;
-        paramsHtml = '<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:4px 8px;display:flex;flex-wrap:wrap;gap:4px;max-width:260px">' +
+        paramsHtml = '<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:4px 8px;display:flex;flex-wrap:wrap;align-items:center;gap:4px;width:max-content;max-width:240px">' +
           shownHtml + moreHtml +
           (moreHtml ? '<span style="display:none" data-pop="' + encodeURIComponent(popHtml) + '"></span>' : '') +
           '</div>';
@@ -5293,8 +5296,8 @@ async function loadRootChains() {
       <tr>
         <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
         <td class="code-cell" title="${esc(c.chain_key||'')}">${esc(c.chain_key||'')}</td>
-        <td>${esc(c.name)}</td>
-        <td title="${esc(c.description||'')}">${esc(trunc(c.description, 40))}</td>
+        <td style="min-width:7em">${esc(c.name)}</td>
+        <td style="min-width:6em" title="${esc(c.description||'')}">${esc(trunc(c.description, 40))}</td>
         <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
         <td class="code-cell" title="${esc(c.node_ids||'')}">${esc(trunc(c.node_ids, 20))}</td>
         <td class="code-cell" title="${esc(c.sub_chain_ids||'')}">${esc(trunc(c.sub_chain_ids, 20))}</td>
