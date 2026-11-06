@@ -752,13 +752,9 @@ function filterNodes() {
     let show = true;
     if (q && !r.textContent.toLowerCase().includes(q)) show = false;
     if (show && kind) {
-      // 第4列是"大类"列（0-based index 3），badge 文本为"查询获取"或"策略执行"
+      // 第4列是"大类"列（0-based index 3），按 data-kind 记录的大类值比较
       const kindCell = r.cells[3];
-      if (kindCell) {
-        const kindText = kindCell.textContent.trim();
-        if (kind === 'condition' && kindText !== '查询获取') show = false;
-        if (kind === 'action' && kindText !== '策略执行') show = false;
-      }
+      if (kindCell && kindCell.getAttribute('data-kind') !== kind) show = false;
     }
     if (show && tag) {
       // 第5列是"标签"列（0-based index 4），取所有 chip 文本
@@ -947,7 +943,7 @@ async function loadNodes() {
         <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
         <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
         <td><span class="code-cell">${esc(n.type)}</span></td>
-        <td><span class="badge ${n.kind==='condition'?'badge-warning':'badge-info'}">${n.kind==='condition'?'查询获取':'策略执行'}</span></td>
+        <td data-kind="${esc(nodeKindMeta(n.kind).kind)}"><span class="badge ${nodeKindMeta(n.kind).cls}">${nodeKindMeta(n.kind).label}</span></td>
         <td>${renderTagChipsHtml(n.tags)}</td>
         <td>${esc(n.namespace || '-')}</td>
         <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
@@ -1098,8 +1094,42 @@ function closeNodeModal() {
 }
 
 // 类型切换为 activity 时显示命名空间/活动名称区域
+// 节点大类的显示名与徽标样式；未知或为空的大类按「策略执行」处理
+const NODE_KIND_META = {
+  condition: { label: '查询获取', cls: 'badge-warning' },
+  action:    { label: '策略执行', cls: 'badge-info' },
+  return:    { label: '返回值',   cls: 'badge-return' },
+  call:      { label: '调用根链', cls: 'badge-call' },
+  input:     { label: '参数输入', cls: 'badge-input' },
+};
+function nodeKindMeta(kind) {
+  const k = NODE_KIND_META[kind] ? kind : 'action';
+  return Object.assign({ kind: k }, NODE_KIND_META[k]);
+}
+
+// 内置节点类型对应的固定大类；其它类型只能选「查询获取 / 策略执行」
+const NODE_TYPE_FIXED_KIND = {
+  'custom/ReturnValue': 'return',
+  'custom/RootChainCall': 'call',
+  'custom/ParamInput': 'input',
+};
+
+// 按节点类型同步「节点大类」：内置类型锁定为对应大类；普通类型若当前是内置大类则回到「策略执行」
+function syncNodeKindByType(type) {
+  const kindEl = document.getElementById('node-kind');
+  if (!kindEl) return;
+  const fixed = NODE_TYPE_FIXED_KIND[type];
+  Array.from(kindEl.options).forEach(o => {
+    const builtin = Object.values(NODE_TYPE_FIXED_KIND).includes(o.value);
+    o.disabled = fixed ? o.value !== fixed : builtin;
+  });
+  if (fixed) kindEl.value = fixed;
+  else if (!kindEl.value || Object.values(NODE_TYPE_FIXED_KIND).includes(kindEl.value)) kindEl.value = 'action';
+}
+
 function onNodeTypeChange() {
   const type = document.getElementById('node-type').value;
+  syncNodeKindByType(type);
   const isActivity = type === 'custom/Activity';
   document.getElementById('node-activity-section').style.display = isActivity ? '' : 'none';
   if (!isActivity) {
