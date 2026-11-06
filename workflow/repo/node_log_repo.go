@@ -126,12 +126,18 @@ func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(s)
 }
 
+// statsNodeLogTable 统计查询用的表名：忽略 (project, node_id) 索引。
+// 统计按「项目 + 时间范围」扫大量日志，走该索引会对每行回表随机读，
+// 正式库约 100 万行时比全表顺序扫描慢约一倍（30 天 8s vs 5.5s，7 天 4.3s vs 2.1s）。
+// idx_node_proj 由 NodeLogModel 的 gorm 标签维护，AutoMigrate 保证其存在。
+const statsNodeLogTable = "wf_node_logs IGNORE INDEX (idx_node_proj)"
+
 // ExecBuckets 按执行聚合 node 日志后，再按（根链、发布版本、耗时分桶）汇总执行次数、失败次数与耗时。
 // 一次执行 = 同一 trace_id + 根链 + 10 分钟窗口（见 workflow.StatsExecWindow）。
 // ts 为节点结束时间（秒），开始时间取 ts*1000 - duration_ms。未带 trace_id 的日志不计入。
 // 只返回分桶汇总而不是逐次执行明细，避免大流量项目把几十万行搬到应用层。
 func (r *NodeLogRepo) ExecBuckets(ctx context.Context, project, env string, since time.Time) ([]workflow.StatsExecBucketRow, error) {
-	inner := r.db.WithContext(ctx).Model(&models.NodeLogModel{}).
+	inner := r.db.WithContext(ctx).Table(statsNodeLogTable).
 		Select("root_chain_id, MAX(root_chain_release_id) as release_id, "+
 			"MAX(ts*1000) - MIN(ts*1000 - duration_ms) as dur, MAX(ts*1000) as end_ms, "+
 			"SUM(CASE WHEN error_msg <> '' THEN 1 ELSE 0 END) as errors").
@@ -158,7 +164,7 @@ func (r *NodeLogRepo) NodeTotals(ctx context.Context, project, env string, since
 		Total  int64 `gorm:"column:total"`
 		Errors int64 `gorm:"column:errors"`
 	}
-	query := r.db.WithContext(ctx).Model(&models.NodeLogModel{}).
+	query := r.db.WithContext(ctx).Table(statsNodeLogTable).
 		Select("COUNT(*) as total, COALESCE(SUM(CASE WHEN error_msg <> '' THEN 1 ELSE 0 END), 0) as errors").
 		Where("project = ? AND ts >= ?", project, since.Unix())
 	if env != "" {
@@ -177,7 +183,7 @@ func (r *NodeLogRepo) ErrorGroups(ctx context.Context, project, env string, sinc
 		limit = 500
 	}
 	var rows []workflow.StatsErrorRow
-	query := r.db.WithContext(ctx).Model(&models.NodeLogModel{}).
+	query := r.db.WithContext(ctx).Table(statsNodeLogTable).
 		Select("SUBSTRING_INDEX(node_id, '__', 1) as node_id, node_name, LEFT(error_msg, 300) as error_msg, "+
 			"COUNT(*) as count, MAX(ts) as last_ts, MAX(trace_id) as trace_id").
 		Where("project = ? AND ts >= ? AND error_msg <> ''", project, since.Unix())
