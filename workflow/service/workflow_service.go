@@ -1190,7 +1190,25 @@ func (s *WorkflowService) SetCurrentRelease(ctx context.Context, project, chainI
 	return release, nil
 }
 
-// DeleteRootChainRelease 删除指定发布版本（当前生效版本不允许删除）。
+// SetRootChainReleaseStable 标记 / 取消指定发布版本为线上稳定版本，返回更新后的版本记录。
+func (s *WorkflowService) SetRootChainReleaseStable(ctx context.Context, project, chainID string, version int, stable bool, note string) (*workflow.RootChainReleaseDef, error) {
+	note = strings.TrimSpace(note)
+	if len([]rune(note)) > 200 {
+		return nil, fmt.Errorf("稳定版本备注不能超过 200 个字")
+	}
+	if err := s.releaseRepo.SetStable(ctx, project, chainID, version, stable, note); err != nil {
+		return nil, err
+	}
+	log.Ctx(ctx).Info().
+		Str("project", project).
+		Str("chain_id", chainID).
+		Int("version", version).
+		Bool("stable", stable).
+		Msg("root chain release stable flag updated")
+	return s.releaseRepo.GetByVersion(ctx, project, chainID, version)
+}
+
+// DeleteRootChainRelease 删除指定发布版本（当前生效版本、稳定版本不允许删除）。
 func (s *WorkflowService) DeleteRootChainRelease(ctx context.Context, project, chainID string, version int) error {
 	if err := s.releaseRepo.DeleteByVersion(ctx, project, chainID, version); err != nil {
 		return err

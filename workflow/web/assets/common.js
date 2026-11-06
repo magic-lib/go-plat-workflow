@@ -5393,36 +5393,94 @@ function closeReleaseModal() {
 async function loadReleaseTable() {
   const tbody = document.querySelector('#release-table tbody');
   tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">加载中...</td></tr>';
+  window._releaseList = [];
   try {
     const releases = await api('/api/root-chains/' + encodeURIComponent(_releaseChainId) + '/releases');
-    if (!releases.length) {
-      tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="icon">🚀</div><p>暂无发布记录，点击行内"发布"按钮创建第一个版本</p></div></td></tr>';
-      return;
-    }
+    window._releaseList = releases || [];
     window._releasesCache = {}; // 先清空旧缓存，避免历史版本残留
-    tbody.innerHTML = releases.map(r => {
-      // 缓存该版本完整记录（含 dsl_json），Execute 时直接使用，避免再次请求加载更多内容到内存
-      if (window._releasesCache) window._releasesCache[r.version] = r;
-      return `
-      <tr>
+    // 缓存每个版本完整记录（含 dsl_json），Execute / 对比时直接使用，避免再次请求加载更多内容到内存
+    window._releaseList.forEach(r => { window._releasesCache[r.version] = r; });
+    renderReleaseRows();
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:#ef4444">加载失败: ' + esc(e.message) + '</td></tr>';
+  }
+}
+
+// 渲染发布记录行；勾选「只看稳定版本」时只显示稳定版本和当前生效版本
+function renderReleaseRows() {
+  const tbody = document.querySelector('#release-table tbody');
+  if (!tbody) return;
+  const all = window._releaseList || [];
+  if (!all.length) {
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="icon">🚀</div><p>暂无发布记录，点击行内"发布"按钮创建第一个版本</p></div></td></tr>';
+    return;
+  }
+  const onlyStable = !!(document.getElementById('release-only-stable') || {}).checked;
+  const releases = onlyStable ? all.filter(r => r.is_stable || r.is_current) : all;
+  if (!releases.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">暂无稳定版本，可在版本行点击"标记稳定"</td></tr>';
+    return;
+  }
+  tbody.innerHTML = releases.map(r => {
+    const statusHtml = (r.is_current ? '<span class="badge badge-on">当前生效</span>' : '<span class="badge badge-off">历史</span>') +
+      (r.is_stable ? ' <span class="badge badge-stable" title="线上稳定版本">稳定</span>' : '') +
+      (r.is_stable && r.stable_note ? '<div style="margin-top:4px;font-size:.74rem;color:var(--text-muted);max-width:220px;white-space:normal" title="' + esc(r.stable_note) + '">' + esc(r.stable_note) + '</div>' : '');
+    const stableBtn = r.is_stable
+      ? `<button class="btn btn-sm btn-outline edit-only" onclick="setReleaseStable(${r.version}, false)">取消稳定</button>`
+      : `<button class="btn btn-sm btn-outline edit-only" onclick="setReleaseStable(${r.version}, true)">标记稳定</button>`;
+    return `
+      <tr${r.is_stable ? ' style="background:#f0fdf4"' : ''}>
         <td><b>v${r.version}</b></td>
         <td>${esc(r.name)}</td>
         <td style="white-space:nowrap">${esc(fmtTime(r.published_at))}</td>
         <td>${(r.dsl_json||'').length} chars</td>
-        <td>${r.is_current ? '<span class="badge badge-on">当前生效</span>' : '<span class="badge badge-off">历史</span>'}</td>
-        <td class="actions">
+        <td>${statusHtml}</td>
+        <td><div class="actions">
           <button class="btn btn-sm btn-outline" onclick="viewReleaseDsl(${r.version})">查看 DSL</button>
           <button class="btn btn-sm btn-primary" onclick="executeRelease(${r.version})">Execute</button>
-          ${r.is_current
-            ? ''
-            : `<button class="btn btn-sm btn-primary" onclick="setCurrentRelease(${r.version})">设为生效</button>
-               <button class="btn btn-sm btn-danger" onclick="deleteReleaseVersion(${r.version})">删除</button>`}
-        </td>
+          ${stableBtn}
+          ${r.is_current ? '' : `<button class="btn btn-sm btn-primary" onclick="setCurrentRelease(${r.version})">设为生效</button>`}
+          ${r.is_current || r.is_stable ? '' : `<button class="btn btn-sm btn-danger" onclick="deleteReleaseVersion(${r.version})">删除</button>`}
+        </div></td>
       </tr>`;
-    }).join('');
-  } catch (e) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color:#ef4444">加载失败: ' + esc(e.message) + '</td></tr>';
+  }).join('');
+}
+
+// 标记 / 取消稳定版本；标记时可填写备注（如上线时间、验证情况）
+async function setReleaseStable(version, stable) {
+  let note = '';
+  if (stable) {
+    const input = prompt('将 v' + version + ' 标记为线上稳定版本。\n可填写备注（选填，如上线时间、验证情况）：', '');
+    if (input === null) return; // 取消
+    note = input.trim();
+  } else if (!confirm('确定取消 v' + version + ' 的稳定标记吗？取消后该版本可以被删除。')) {
+    return;
   }
+  try {
+    await api('/api/root-chains/' + encodeURIComponent(_releaseChainId) + '/releases/' + version + '/stable', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ stable: stable, note: note }),
+    });
+    showToast(stable ? '已将 v' + version + ' 标记为稳定版本' : '已取消 v' + version + ' 的稳定标记', 'success');
+    loadReleaseTable();
+  } catch (e) { showToast('操作失败: ' + e.message, 'error'); }
+}
+
+// 回退到最近稳定版：取除当前生效版本外、版本号最大的稳定版本，确认后设为生效
+async function rollbackToLatestStable() {
+  const list = window._releaseList || [];
+  const target = list.filter(r => r.is_stable && !r.is_current).sort((a, b) => b.version - a.version)[0];
+  if (!target) {
+    const cur = list.find(r => r.is_current);
+    showToast(cur && cur.is_stable ? '当前生效的 v' + cur.version + ' 已是稳定版本，没有其它稳定版本可回退' : '没有可回退的稳定版本，请先标记稳定版本', 'error');
+    return;
+  }
+  const cur = list.find(r => r.is_current);
+  const msg = '确定将生产环境从 ' + (cur ? 'v' + cur.version : '当前版本') + ' 回退到稳定版本 v' + target.version + ' 吗？' +
+    (target.stable_note ? '\n稳定备注：' + target.stable_note : '') + '\n回退后生产环境将使用该版本的 DSL 快照。';
+  if (!confirm(msg)) return;
+  await applyCurrentRelease(target.version);
 }
 
 // ===================== 发布记录版本 DSL 对比 =====================
@@ -5549,6 +5607,11 @@ async function executeRelease(version) {
 
 async function setCurrentRelease(version) {
   if (!confirm('确定将 v' + version + ' 设为生产环境当前生效版本吗？')) return;
+  await applyCurrentRelease(version);
+}
+
+// 将指定版本设为生产环境当前生效版本（调用方负责确认）
+async function applyCurrentRelease(version) {
   try {
     await api('/api/root-chains/' + encodeURIComponent(_releaseChainId) + '/set-current', {
       method: 'POST',

@@ -153,9 +153,29 @@ func (r *RootChainReleaseRepo) DeleteByVersion(ctx context.Context, project, cha
 		if m.IsCurrent {
 			return workflow.ErrReleaseInUse
 		}
+		if m.IsStable {
+			return workflow.ErrReleaseStable
+		}
 		return tx.Where("project = ? AND chain_id = ? AND version = ?", project, chainID, version).
 			Delete(&models.RootChainReleaseModel{}).Error
 	})
+}
+
+// SetStable 标记 / 取消指定版本为线上稳定版本，同时更新稳定备注（取消时清空备注）。
+func (r *RootChainReleaseRepo) SetStable(ctx context.Context, project, chainID string, version int, stable bool, note string) error {
+	if !stable {
+		note = ""
+	}
+	result := r.db.WithContext(ctx).Model(&models.RootChainReleaseModel{}).
+		Where("project = ? AND chain_id = ? AND version = ?", project, chainID, version).
+		Updates(map[string]any{"is_stable": stable, "stable_note": note})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return workflow.ErrReleaseNotFound
+	}
+	return nil
 }
 
 // SetCurrent 将指定版本设为当前生产版本（同事务内清除同链其他版本的当前标记）。
