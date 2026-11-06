@@ -1993,6 +1993,11 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 		return nil, err
 	}
 
+	// 调用根链节点：不走 MQ worker，直接把测试参数传给目标根链当前发布版本执行，并记录节点日志
+	if nodeDef.Type == common.RootChainCallNodeTypeName {
+		return s.testRootChainCallNode(ctx, req, nodeDef)
+	}
+
 	// 4. 构建环境变量（可选）
 	envVars := make(map[string]string)
 	if req.EnvName != "" {
