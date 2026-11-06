@@ -554,7 +554,7 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 				config[common.ParamInputConfigKey] = defs
 				inputParamLabels = make(map[string]string, len(defs))
 				for _, d := range defs {
-					inputParamLabels[d.Key] = d.Description
+					inputParamLabels[d.Key] = d.Label
 				}
 			}
 			delete(frontendMap, common.ParamInputDefsKey)
@@ -826,6 +826,10 @@ func parseParamInputDefs(raw any) []*workflow.ParamInputDef {
 			continue
 		}
 		d.Key = strings.TrimSpace(d.Key)
+		if d.Label == "" {
+			d.Label = d.Description // 兼容旧数据：只有说明时作为名称
+		}
+		d.Description = ""
 		if d.Key == "" || seen[d.Key] {
 			continue
 		}

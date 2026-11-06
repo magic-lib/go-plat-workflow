@@ -2,7 +2,9 @@ package builder
 
 import (
 	"regexp"
+	"strings"
 
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/rulego/rulego/api/types"
 )
 
@@ -39,10 +41,20 @@ func ExtractArgumentKeys(s string) []string {
 // 结构约定（节点配置第一层）：
 //   - arguments：param.BindConfig 数组，元素形如 {"key":..., "value":..., "policy":...}
 //   - responses：返回值定义数组（outputs 转换而来），元素形如 {"key":..., "value":..., ...}
-//   两者的 value 均为字符串，可能包含 {{arguments.xxx}} 形式的入参引用。
+//     两者的 value 均为字符串，可能包含 {{arguments.xxx}} 形式的入参引用。
 //
 // 仅提取 value 为字符串且含 {{arguments.}} 的项；非字符串值（固定字面量/引用路径）不会误判为入参。
 func CollectAllInputArguments(nodes []*types.RuleNode) []string {
+	return collectInputArguments(nodes, false)
+}
+
+// CollectRequiredInputArguments 与 CollectAllInputArguments 相同，但不含可不传的入参：
+// 参数输入节点（custom/ParamInput）中配置了默认值的参数，调用方不传时使用默认值，不算必须传入。
+func CollectRequiredInputArguments(nodes []*types.RuleNode) []string {
+	return collectInputArguments(nodes, true)
+}
+
+func collectInputArguments(nodes []*types.RuleNode, onlyRequired bool) []string {
 	seen := make(map[string]bool)
 	keys := make([]string, 0)
 
@@ -58,7 +70,7 @@ func CollectAllInputArguments(nodes []*types.RuleNode) []string {
 			}
 		}
 	}
-	scanArray := func(arr any) {
+	scanArray := func(arr any, skipKeys map[string]bool) {
 		list, ok := arr.([]any)
 		if !ok {
 			return
@@ -66,6 +78,9 @@ func CollectAllInputArguments(nodes []*types.RuleNode) []string {
 		for _, item := range list {
 			m, ok := item.(map[string]any)
 			if !ok {
+				continue
+			}
+			if k, _ := m["key"].(string); skipKeys[k] {
 				continue
 			}
 			addFromValue(m["value"])
@@ -76,9 +91,33 @@ func CollectAllInputArguments(nodes []*types.RuleNode) []string {
 		if node == nil {
 			continue
 		}
-		scanArray(node.Configuration["arguments"])
-		scanArray(node.Configuration["responses"])
+		var skipKeys map[string]bool
+		if onlyRequired && node.Type == common.ParamInputNodeTypeName {
+			skipKeys = paramInputDefaultKeys(node.Configuration[common.ParamInputConfigKey])
+		}
+		scanArray(node.Configuration["arguments"], skipKeys)
+		scanArray(node.Configuration["responses"], nil)
 	}
 	return keys
 }
 
+// paramInputDefaultKeys 返回参数输入节点 input_params 中配置了默认值的参数名。
+func paramInputDefaultKeys(raw any) map[string]bool {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	keys := make(map[string]bool, len(list))
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		k, _ := m["key"].(string)
+		v, _ := m["value"].(string)
+		if k != "" && strings.TrimSpace(v) != "" {
+			keys[k] = true
+		}
+	}
+	return keys
+}

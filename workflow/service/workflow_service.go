@@ -879,7 +879,7 @@ func (s *WorkflowService) ListRootChains(ctx context.Context, project string) ([
 		var rc types.RuleChain
 		if c.DSLJSON != "" {
 			if err := json.Unmarshal([]byte(c.DSLJSON), &rc); err == nil {
-				c.MustInputParams = builder.CollectAllInputArguments(rc.Metadata.Nodes)
+				c.MustInputParams = builder.CollectRequiredInputArguments(rc.Metadata.Nodes)
 			}
 		}
 	}
@@ -1404,7 +1404,7 @@ func (s *WorkflowService) getParamContext(ruleChain *types.RuleChain, jsonPayloa
 //  2. 未找到则视为 "." 被当作整体字符串键传入，从 jsonPayloadMap（conv.KeyListFromMap 扁平化结果）中再查；
 //  3. 都未找到 → 该入参未传，报错。
 func (s *WorkflowService) checkAllNodesArguments(nodes []*types.RuleNode, jsonPayload map[string]any) error {
-	allInputArguments := builder.CollectAllInputArguments(nodes)
+	allInputArguments := builder.CollectRequiredInputArguments(nodes)
 	jsonPayloadMap := conv.KeyListFromMap(jsonPayload)
 	jsonPayloadStr := conv.String(jsonPayload)
 	var firstErr []string
