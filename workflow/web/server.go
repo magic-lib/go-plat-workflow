@@ -211,6 +211,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("POST /api/root-chains", ws.handleSaveRootChain)
 	ws.mux.HandleFunc("POST /api/root-chains/create", ws.handleCreateRootChain)
 	ws.mux.HandleFunc("DELETE /api/root-chains/{chain_id}", ws.handleDeleteRootChain)
+	ws.mux.HandleFunc("POST /api/root-chains/{chain_id}/copy", ws.handleCopyRootChain)
 
 	// RootChains 发布与回滚
 	ws.mux.HandleFunc("POST /api/root-chains/{chain_id}/publish", ws.handlePublishRootChain)
@@ -1106,6 +1107,24 @@ func (ws *WebServer) handleSaveRootChain(w http.ResponseWriter, r *http.Request)
 	}
 
 	log.Info().Str("project", def.Project).Str("chain_id", def.ChainID).Msg("root chain saved via web")
+	writeJSON(w, http.StatusOK, def)
+}
+
+// handleCopyRootChain 复制根链：新建一条内容与原链草稿一致的根链（名称加「-副本」，不复制发布记录）。
+// POST /api/root-chains/{chain_id}/copy?project=xxx
+func (ws *WebServer) handleCopyRootChain(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	chainID := r.PathValue("chain_id")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	def, err := ws.svc.CopyRootChain(r.Context(), project, chainID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Info().Str("project", project).Str("from", chainID).Str("chain_id", def.ChainID).Msg("root chain copied via web")
 	writeJSON(w, http.StatusOK, def)
 }
 
