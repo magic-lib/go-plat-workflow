@@ -2,6 +2,7 @@ package commnode
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -103,6 +104,10 @@ type RootChainCallNode struct {
 	ruleObj       *templates.RuleExprEngine
 	nodeLogCli    *redis.Client
 	nodeName      string
+	// responseKeys 节点定义的返回值 key（configuration.responses）；hasResponseDefs 为 true 时
+	// 只输出这些 key（未定义任何返回值则输出 {}），为 false（编排时才选目标根链的节点）时输出目标根链的全部返回值
+	responseKeys    []string
+	hasResponseDefs bool
 }
 
 func (x *RootChainCallNode) Type() string {
@@ -136,6 +141,10 @@ func (x *RootChainCallNode) Init(_ types.Config, configuration types.Configurati
 	x.Configuration.TargetChainID = strings.TrimSpace(x.Configuration.TargetChainID)
 	if x.Configuration.TargetChainID == "" {
 		return fmt.Errorf("调用根链节点未选择目标根链")
+	}
+	if raw, ok := cfg["responses"]; ok {
+		x.hasResponseDefs = true
+		x.responseKeys = RootChainCallResponseKeys(raw)
 	}
 	if ruleNode.Name != "" {
 		x.nodeName = ruleNode.Name
@@ -171,6 +180,9 @@ func (x *RootChainCallNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		return
 	}
 
+	if x.hasResponseDefs {
+		responses = PickRootChainCallResponses(responses, x.responseKeys)
+	}
 	nodeStep.Responses = responses
 	nodeStep.Status = paramx.StepStatusSuccess
 	nodeStep.EndTimeMs = time.Now().UnixMilli()
@@ -273,6 +285,43 @@ func (x *RootChainCallNode) fail(ctx types.RuleContext, msg types.RuleMsg, allPa
 		x.nodeLogCli = nodeCli
 	}
 	ctx.TellFailure(msg, err)
+}
+
+// RootChainCallResponseKeys 从节点 configuration.responses（返回值定义数组，元素含 key）中取出返回值 key 列表。
+func RootChainCallResponseKeys(raw any) []string {
+	var items []struct {
+		Key string `json:"key"`
+	}
+	if b, err := json.Marshal(raw); err == nil {
+		_ = json.Unmarshal(b, &items)
+	}
+	keys := make([]string, 0, len(items))
+	for _, it := range items {
+		if k := strings.TrimSpace(it.Key); k != "" {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// PickRootChainCallResponses 按节点定义的返回值 key 从目标根链返回值中取值，只输出这些 key（取不到的为 nil）；
+// 没有定义任何返回值时返回空对象 {}，不把目标根链的其它内部结果带出来。
+func PickRootChainCallResponses(resp any, keys []string) map[string]any {
+	out := make(map[string]any, len(keys))
+	if len(keys) == 0 {
+		return out
+	}
+	src, ok := resp.(map[string]any)
+	if !ok && resp != nil {
+		src = make(map[string]any)
+		if b, err := json.Marshal(resp); err == nil {
+			_ = json.Unmarshal(b, &src)
+		}
+	}
+	for _, k := range keys {
+		out[k] = src[k]
+	}
+	return out
 }
 
 func init() {

@@ -530,6 +530,12 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		// 调用根链节点：选中的目标根链 ID 以保留 key 存在参数覆盖里，移到 configuration.target_chain_id，
 		// 不作为入参传给目标根链。
 		if node.Type == common.RootChainCallNodeTypeName {
+			// 节点定义固定了目标根链：返回值以节点定义为准，没定义返回值时写空数组，运行时输出 {}
+			if strings.TrimSpace(conv.String(config[common.RootChainCallConfigKey])) != "" {
+				if _, ok := config[activity.Responses]; !ok {
+					config[activity.Responses] = []any{}
+				}
+			}
 			if v, ok := frontendMap[common.RootChainCallTargetKey].(string); ok && strings.TrimSpace(v) != "" {
 				config[common.RootChainCallConfigKey] = strings.TrimSpace(v)
 			}
