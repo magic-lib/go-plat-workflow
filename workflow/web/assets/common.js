@@ -10374,7 +10374,7 @@ function confirmOrchInputParamEditor() {
 // Node 弹框：调用根链节点（custom/RootChainCall）选择目标根链
 // ============================================================
 // 选中的目标根链写入 configuration.target_chain_id；参数定义取该根链当前发布版本所需的全部入参
-// （默认值 {{arguments.<入参名>}}，即调用方同名传入），返回值定义取其返回值定义。
+// （默认值留空，可手动填写），返回值定义取其返回值定义。
 // 节点定义固定目标根链后，编排时按普通节点添加，不再弹出根链选择框。
 
 function readNodeConfigJSON() {
@@ -10468,7 +10468,7 @@ async function loadNodeChainCallSignature(chainId) {
   }
   clearParamRows();
   (sig.arguments || []).filter(Boolean).forEach(k => {
-    addParamRow(k, k, 'string', true, '{{arguments.' + k + '}}', '目标根链 ' + chainId + ' 的入参', 'frontend+');
+    addParamRow(k, k, 'string', true, '', '目标根链 ' + chainId + ' 的入参', 'frontend+');
   });
   clearOutputRows();
   (sig.responses || []).filter(r => r && r.key).forEach(r => {
