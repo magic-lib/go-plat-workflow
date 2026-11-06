@@ -332,6 +332,16 @@ type RootChainCallSignature struct {
 	Responses []RootResponseItem `json:"responses"`
 }
 
+// ParamInputDef 参数输入节点的一个参数定义（编排时动态配置）。
+type ParamInputDef struct {
+	// Key 参数名
+	Key string `json:"key"`
+	// Type 参数类型（string/int64/float64/bool/slice/map）
+	Type string `json:"type"`
+	// Description 参数说明
+	Description string `json:"description"`
+}
+
 // RootChainReleaseDef 根链发布版本定义。
 // 每次发布将根链草稿快照为一个不可变版本，生产环境使用 IsCurrent=true 的版本。
 // 发布记录只增不改，保留完整历史以便回滚。

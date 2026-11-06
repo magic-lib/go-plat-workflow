@@ -472,6 +472,31 @@ func (s *WorkflowService) ensureBuiltinReturnNode(ctx context.Context, project s
 	return s.nodeRepo.Create(ctx, def)
 }
 
+// ensureBuiltinParamInputNode 幂等确保项目下存在内置「参数输入节点」（custom/ParamInput）定义，
+// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由 NextNodeID 生成。
+func (s *WorkflowService) ensureBuiltinParamInputNode(ctx context.Context, project string) error {
+	exists, err := s.nodeRepo.ExistsByType(ctx, project, common.ParamInputNodeTypeName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	nodeID, err := s.nodeRepo.NextNodeID(ctx)
+	if err != nil {
+		return err
+	}
+	def := &workflow.NodeDef{
+		Project: project,
+		NodeID:  nodeID,
+		Name:    "参数输入节点",
+		Type:    common.ParamInputNodeTypeName,
+		Kind:    "input",
+		Status:  models.NodeStatusEnabled,
+	}
+	return s.nodeRepo.Create(ctx, def)
+}
+
 // BatchRegisterNodes 批量注册节点（upsert：project+node_id 冲突则更新，否则插入）。
 func (s *WorkflowService) BatchRegisterNodes(ctx context.Context, defs []*workflow.NodeDef) error {
 	return s.nodeRepo.BatchUpsert(ctx, defs)
@@ -500,6 +525,9 @@ func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag
 	}
 	if err := s.ensureBuiltinRootChainCallNode(ctx, project); err != nil {
 		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin root chain call node failed")
+	}
+	if err := s.ensureBuiltinParamInputNode(ctx, project); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin param input node failed")
 	}
 	all, err := s.nodeRepo.List(ctx, project, namespace, onlyEnabled)
 	if err != nil {

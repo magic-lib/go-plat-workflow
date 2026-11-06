@@ -14,4 +14,12 @@ const (
 	RootChainCallTargetKey = "__target_chain_id"
 	// RootChainCallConfigKey 调用根链节点 DSL configuration 中目标根链 ID 的字段名。
 	RootChainCallConfigKey = "target_chain_id"
+	// ParamInputNodeTypeName 参数输入节点类型标识：编排时为每个实例动态定义参数列表（参数名/类型/说明），
+	// 运行时按各参数配置的来源解析出值，写入本节点的 steps.<实例ID>.arguments 与 responses，供下游节点引用。
+	ParamInputNodeTypeName = "custom/ParamInput"
+	// ParamInputDefsKey 编排时参数输入节点的参数定义（JSON 数组）在 node_param_overrides 中的保留 key，
+	// 组装 DSL 时移到节点 configuration 的 ParamInputConfigKey，不作为参数解析。
+	ParamInputDefsKey = "__input_params"
+	// ParamInputConfigKey 参数输入节点 DSL configuration 中参数定义的字段名。
+	ParamInputConfigKey = "input_params"
 )

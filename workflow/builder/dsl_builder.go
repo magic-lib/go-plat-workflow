@@ -545,6 +545,30 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			privateKeys = keptKeys
 		}
 
+		// 参数输入节点：参数定义（参数名/类型/说明）以保留 key 存在参数覆盖里，移到 configuration.input_params，
+		// 不作为参数解析；参数说明同时写入 additionalInfo.node_param_labels 供执行页展示。
+		var inputParamLabels map[string]string
+		if node.Type == common.ParamInputNodeTypeName {
+			if raw, ok := frontendMap[common.ParamInputDefsKey]; ok {
+				defs := parseParamInputDefs(raw)
+				config[common.ParamInputConfigKey] = defs
+				inputParamLabels = make(map[string]string, len(defs))
+				for _, d := range defs {
+					inputParamLabels[d.Key] = d.Description
+				}
+			}
+			delete(frontendMap, common.ParamInputDefsKey)
+			delete(frontendSrc, common.ParamInputDefsKey)
+			delete(frontendType, common.ParamInputDefsKey)
+			keptKeys := privateKeys[:0]
+			for _, k := range privateKeys {
+				if k != common.ParamInputDefsKey {
+					keptKeys = append(keptKeys, k)
+				}
+			}
+			privateKeys = keptKeys
+		}
+
 		// 编排参数来源对应的 DSL policy（不改节点参数定义本身，仅在此处改写 DSL）：
 		//  - ref_node（调用传入）：调用方本身就是来源，保留节点定义默认 policy（调用方优先）
 		//  - ref_act（引用前序）：已配置来源 → 强制后台 PolicyBackendOnly，调用方同名不可覆盖
@@ -648,6 +672,11 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 				labelJSON, _ := json.Marshal(labelMap)
 				addInfo["node_param_labels"] = string(labelJSON)
 			}
+		}
+
+		if len(inputParamLabels) > 0 {
+			labelJSON, _ := json.Marshal(inputParamLabels)
+			addInfo["node_param_labels"] = string(labelJSON)
 		}
 
 		// 将私有参数 key 注入 additionalInfo，随 DSL 持久化，便于编排回显时恢复「是否私有」状态
@@ -774,4 +803,34 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 			Connections:    connections,
 		},
 	}
+}
+
+// parseParamInputDefs 解析参数输入节点的参数定义：前端以 JSON 字符串保存，也兼容直接是数组；
+// 去掉空参数名和重复参数名，解析失败返回空列表。
+func parseParamInputDefs(raw any) []*workflow.ParamInputDef {
+	var b []byte
+	if str, ok := raw.(string); ok {
+		b = []byte(str)
+	} else {
+		b, _ = json.Marshal(raw)
+	}
+	var defs []*workflow.ParamInputDef
+	if err := json.Unmarshal(b, &defs); err != nil {
+		log.Ctx(context.Background()).Warn().Err(err).Msg("parse param input defs failed")
+		return []*workflow.ParamInputDef{}
+	}
+	out := make([]*workflow.ParamInputDef, 0, len(defs))
+	seen := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		if d == nil {
+			continue
+		}
+		d.Key = strings.TrimSpace(d.Key)
+		if d.Key == "" || seen[d.Key] {
+			continue
+		}
+		seen[d.Key] = true
+		out = append(out, d)
+	}
+	return out
 }
