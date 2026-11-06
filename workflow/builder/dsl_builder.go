@@ -527,6 +527,24 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			}
 		}
 
+		// 调用根链节点：选中的目标根链 ID 以保留 key 存在参数覆盖里，移到 configuration.target_chain_id，
+		// 不作为入参传给目标根链。
+		if node.Type == common.RootChainCallNodeTypeName {
+			if v, ok := frontendMap[common.RootChainCallTargetKey].(string); ok && strings.TrimSpace(v) != "" {
+				config[common.RootChainCallConfigKey] = strings.TrimSpace(v)
+			}
+			delete(frontendMap, common.RootChainCallTargetKey)
+			delete(frontendSrc, common.RootChainCallTargetKey)
+			delete(frontendType, common.RootChainCallTargetKey)
+			keptKeys := privateKeys[:0]
+			for _, k := range privateKeys {
+				if k != common.RootChainCallTargetKey {
+					keptKeys = append(keptKeys, k)
+				}
+			}
+			privateKeys = keptKeys
+		}
+
 		// 编排参数来源对应的 DSL policy（不改节点参数定义本身，仅在此处改写 DSL）：
 		//  - ref_node（调用传入）：调用方本身就是来源，保留节点定义默认 policy（调用方优先）
 		//  - ref_act（引用前序）：已配置来源 → 强制后台 PolicyBackendOnly，调用方同名不可覆盖

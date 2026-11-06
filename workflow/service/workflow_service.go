@@ -37,6 +37,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow/models"
 	"github.com/magic-lib/go-plat-workflow/workflow/repo"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 )
@@ -258,6 +259,9 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	} else {
 		log.Info().Msg("Root chain invalidate broadcast disabled (single-instance mode)")
 	}
+
+	// 注入根链调用实现，使「调用根链节点」能在链中同步调用另一条根链的当前发布版本。
+	commnode.SetRootChainInvoker(rootChainCallInvoker{s: s})
 
 	log.Info().Msg("WorkflowService initialized, tables migrated")
 	return s, nil
@@ -493,6 +497,9 @@ func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag
 	// 这样编排页添加时 instanceId = node_id__rand，与其它类型生成方式完全一致。
 	if err := s.ensureBuiltinReturnNode(ctx, project); err != nil {
 		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin return node failed")
+	}
+	if err := s.ensureBuiltinRootChainCallNode(ctx, project); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin root chain call node failed")
 	}
 	all, err := s.nodeRepo.List(ctx, project, namespace, onlyEnabled)
 	if err != nil {
@@ -983,7 +990,12 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		if err := json.Unmarshal([]byte(draft.DSLJSON), draftChain); err != nil {
 			return nil, fmt.Errorf("parse root chain dsl failed: %w", err)
 		}
-		if _, _, err := s.collectSubChains(ctx, project, draftChain.Metadata.Nodes); err != nil {
+		_, subNodes, err := s.collectSubChains(ctx, project, draftChain.Metadata.Nodes)
+		if err != nil {
+			return nil, err
+		}
+		// 调用根链节点：目标根链必须已发布、入参配置齐全，且不能形成循环调用
+		if err := s.checkRootChainCalls(ctx, project, chainID, append(draftChain.Metadata.Nodes, subNodes...)); err != nil {
 			return nil, err
 		}
 	}

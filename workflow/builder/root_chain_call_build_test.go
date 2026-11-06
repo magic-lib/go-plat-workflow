@@ -1,0 +1,36 @@
+package builder
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/magic-lib/go-plat-workflow/workflow"
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
+)
+
+func TestBuildRuleNodes_RootChainCallTarget(t *testing.T) {
+	b := &DSLBuilder{}
+	defs := map[string]*workflow.NodeDef{
+		"N000009": {NodeID: "N000009", Name: "调用根链节点", Type: common.RootChainCallNodeTypeName},
+	}
+	overrides := map[string]map[string]interface{}{
+		"N000009__abc": {
+			common.RootChainCallTargetKey: map[string]any{"src": "value", "value": " R000002 "},
+			"user_id":                     map[string]any{"src": "ref_node", "value": "{{arguments.uid}}", "type": "string"},
+		},
+	}
+	nodes := b.buildRuleNodes([]instanceRef{{baseId: "N000009", instanceId: "N000009__abc"}}, defs, overrides, nil, nil)
+	if len(nodes) != 1 {
+		t.Fatalf("nodes=%d", len(nodes))
+	}
+	cfg := nodes[0].Configuration
+	if cfg[common.RootChainCallConfigKey] != "R000002" {
+		t.Fatalf("target_chain_id=%v", cfg[common.RootChainCallConfigKey])
+	}
+	raw, _ := json.Marshal(cfg["arguments"])
+	var args []map[string]any
+	_ = json.Unmarshal(raw, &args)
+	if len(args) != 1 || args[0]["key"] != "user_id" {
+		t.Fatalf("arguments=%s", raw)
+	}
+}

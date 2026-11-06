@@ -6273,8 +6273,8 @@ function renderOrchNodeListPage() {
     return;
   }
   container.innerHTML = pageItems.map(n => {
-    const kindClass = n.kind === 'condition' ? 'badge-warning' : (n.kind === 'return' ? 'badge-return' : 'badge-info');
-    const kindLabel = n.kind === 'condition' ? '查询' : (n.kind === 'return' ? '返回值' : '执行');
+    const kindClass = n.kind === 'condition' ? 'badge-warning' : (n.kind === 'return' ? 'badge-return' : (n.kind === 'call' ? 'badge-call' : 'badge-info'));
+    const kindLabel = n.kind === 'condition' ? '查询' : (n.kind === 'return' ? '返回值' : (n.kind === 'call' ? '调用根链' : '执行'));
     let outputsJson = '[]';
     try { outputsJson = JSON.stringify(n.outputs || []); } catch(e) {}
     const outCount = (function(){
@@ -6322,6 +6322,11 @@ function addOrchNodeInstance(nodeId) {
   // end 节点只能添加一个，避免多个不好控制
   if (nodeType === 'end' && window._orchNodeInstances.some(i => i.type === 'end')) {
     showToast('end 节点只能添加一个，如需调整请先删除已添加的 end 节点', 'error');
+    return;
+  }
+  // 调用根链节点：先选择目标根链，选定后再创建实例（见 confirmOrchCallChainPicker）
+  if (nodeType === ORCH_CALL_NODE_TYPE) {
+    openOrchCallChainPicker({ nodeId: nodeId });
     return;
   }
   // 用随机短码代替序号，避免删除导致空洞、跨子链序号碰撞
@@ -6473,7 +6478,7 @@ function renderOrchNodeSelected() {
           : `<button class="btn btn-sm btn-danger" type="button" onclick="removeOrchNodeInstance('${esc(i.instanceId)}')">删除</button>`;
         return `<tr title="${esc(i.instanceId)}">
           <td>${idx + 1}</td>
-          <td>${nodeRouteBadge(def)}${esc(i.name)}</td>
+          <td>${nodeRouteBadge(def)}${esc(i.name)}${isOrchCallInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ 调用根链：${esc(getOrchCallTargetLabel(i.instanceId) || '未选择')} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchCallChainPicker({ instanceId: '${esc(i.instanceId)}' })">更换根链</button></div>` : ''}</td>
           <td class="code-cell">${esc(i.nodeId)}</td>
           <td class="code-cell">${esc(i.instanceId)}</td>
           <td style="text-align:right">${delCell}</td>
@@ -6998,7 +7003,8 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     const labelLine = `<b>${orchNodeRouteMark(n)}⚙ ${esc(cnName)}</b>`;
     const idLine = `<small>NodeId: ${esc(baseId)}</small>`;
     const instLine = inst && inst.instanceId !== baseId ? `<small>Id: ${esc(inst.instanceId)}</small>` : '';
-    lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}"]`);
+    const callLine = isOrchCallInst(inst) ? `<small>→ 调用根链: ${esc(getOrchCallTargetLabel(inst.instanceId) || '未选择')}</small>` : '';
+    lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}${callLine ? '<br/>'+callLine : ''}"]`);
     (kindSafeIds[clsName] = kindSafeIds[clsName] || []).push(safe);
     // 记录该实例生效的 switch_condition 表达式（覆盖值优先，其次节点默认），供悬停弹层与点击编辑展示。
     // 仅对具备 switch_condition 能力的节点类型（Activity / CondSwitch）有意义。
@@ -7049,6 +7055,7 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     condition: { fill: '#dcfce7', stroke: '#16a34a', color: '#14532d' }, // 查询获取=浅绿
     action:    { fill: '#fee2e2', stroke: '#dc2626', color: '#7f1d1d' }, // 策略执行=淡红
     return:    { fill: '#fef9c3', stroke: '#ca8a04', color: '#713f12' }, // 返回值节点=浅黄（区别于其它节点）
+    call:      { fill: '#e0f2fe', stroke: '#0891b2', color: '#164e63' }, // 调用根链节点=浅青
   };
   const kindFallback = { fill: '#f3f4f6', stroke: '#9ca3af', color: '#374151' }; // 未知 kind 默认灰
   const routeFill = { fill: '#dbeafe', stroke: '#2563eb', color: '#1e3a8a' }; // 路由=淡蓝
@@ -7240,6 +7247,7 @@ function parseNodeParams(node) {
 // 内置返回值节点（custom/ReturnValue）无节点定义，参数即根链返回值定义里的 key（Label/Type 同定义）。
 function getOrchInstanceParams(inst) {
   if (!inst) return [];
+  if (isOrchCallInst(inst)) return getOrchCallParams(inst);
   if (inst.type === 'custom/ReturnValue') {
     return (_orchRootResponses || [])
       .filter(rr => (rr.key || '').trim())
@@ -7674,6 +7682,10 @@ function getOrchRefNodeCandidates(excludeId) {
     if (!ancestorIds.has(inst.instanceId)) return;
     const def = (_orchNodes || []).find(n => n.node_id === inst.nodeId);
     if (!def) return;
+    if (isOrchCallInst(inst)) {
+      cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: getOrchCallParams(inst), outputs: getOrchCallOutputs(inst) });
+      return;
+    }
     cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: parseNodeParams(def), outputs: parseNodeOutputs(def) });
   });
   // 已选子链（按 chain_id 排除自身，且必须在祖先集合内）
@@ -8030,7 +8042,12 @@ function collectOrchParamOverrides() {
           const path = finalVal.replace(/^\{\{arguments\./, '').replace(/\}\}$/, '');
           // 裸 key 取最后一个 '.' 之后的部分，忽略所有前导的 nodeId 前缀，避免 nodeId 重复拼接
           const lastDot = path.lastIndexOf('.');
-          const bareKey = lastDot >= 0 ? path.slice(lastDot + 1) : path;
+          let bareKey = lastDot >= 0 ? path.slice(lastDot + 1) : path;
+          // 调用根链节点：参数名是目标根链的入参名，本身可能带 "."（目标根链的私有参数），只去掉本节点 id 前缀
+          if (isOrchCallInst((window._orchNodeInstances || []).find(i => i.instanceId === nodeId))) {
+            bareKey = path;
+            while (bareKey.startsWith(nodeId + '.')) bareKey = bareKey.slice(nodeId.length + 1);
+          }
           finalVal = '{{arguments.' + nodeId + '.' + bareKey + '}}';
         }
       }
@@ -9808,3 +9825,181 @@ async function orchLoadRootChainById(chainId) {
 
 // 启动：先鉴权，再加载主界面
 bootstrapAuth();
+
+// ============================================================
+// 调用根链节点（custom/RootChainCall）
+// ============================================================
+// 每个实例选中的目标根链 ID 存在 _orchParamPreset[instanceId][ORCH_CALL_TARGET_KEY]，随 node_param_overrides 保存，
+// 后端组装 DSL 时移到 configuration.target_chain_id；参数取目标根链当前发布版本的入参，返回值取其返回值定义。
+const ORCH_CALL_NODE_TYPE = 'custom/RootChainCall';
+const ORCH_CALL_TARGET_KEY = '__target_chain_id';
+const _orchCallSigCache = {}; // chainId -> { loading } | { sig } | { error }
+
+function isOrchCallInst(inst) {
+  return !!(inst && inst.type === ORCH_CALL_NODE_TYPE);
+}
+
+// 取实例选中的目标根链 ID
+function getOrchCallTarget(instanceId) {
+  const p = _orchParamPreset[instanceId] && _orchParamPreset[instanceId][ORCH_CALL_TARGET_KEY];
+  return p && p.value ? String(p.value).trim() : '';
+}
+
+// 取已加载的目标根链调用签名；未加载时异步拉取，拉取完成后刷新编排页
+function getOrchCallSig(chainId) {
+  if (!chainId) return null;
+  const c = _orchCallSigCache[chainId];
+  if (c && c.sig) return c.sig;
+  if (!c) {
+    _orchCallSigCache[chainId] = { loading: true };
+    fetchOrchCallSig(chainId).then(() => {
+      renderOrchNodeSelected();
+      onOrchSelectionChange();
+    });
+  }
+  return null;
+}
+
+async function fetchOrchCallSig(chainId) {
+  try {
+    const sig = await api('/api/root-chains/' + encodeURIComponent(chainId) + '/call-signature');
+    _orchCallSigCache[chainId] = { sig: sig };
+    return sig;
+  } catch (e) {
+    _orchCallSigCache[chainId] = { error: e.message || String(e) };
+    showToast('获取根链 ' + chainId + ' 的参数失败：' + (e.message || e), 'error');
+    return null;
+  }
+}
+
+// 调用根链节点的参数：目标根链所需的入参
+function getOrchCallParams(inst) {
+  const sig = getOrchCallSig(getOrchCallTarget(inst.instanceId));
+  if (!sig) return [];
+  return (sig.arguments || []).filter(Boolean).map(k => ({ key: k, label: k, type: 'string', required: true }));
+}
+
+// 调用根链节点的返回值：目标根链的返回值定义（供下游「引用节点」选择）
+function getOrchCallOutputs(inst) {
+  const sig = getOrchCallSig(getOrchCallTarget(inst.instanceId));
+  if (!sig) return [];
+  return (sig.responses || []).filter(r => r && r.key)
+    .map(r => ({ key: r.key, label: r.label || r.key, type: r.type || '' }));
+}
+
+// 目标根链显示名（已加载签名用名称，否则用 ID）
+function getOrchCallTargetLabel(instanceId) {
+  const id = getOrchCallTarget(instanceId);
+  if (!id) return '';
+  const c = _orchCallSigCache[id];
+  return (c && c.sig && c.sig.name) ? (c.sig.name + '（' + id + '）') : id;
+}
+
+// 选中目标根链后重置实例参数：保留目标 key，其余参数按新根链入参预置为本节点私有的「调用传入」参数，
+// 即调用方传 {{arguments.<本节点实例ID>.<目标根链入参名>}}，同一根链被调用多次时各实例入参互不冲突。
+function seedOrchCallDefaults(instanceId, chainId, sig) {
+  const preset = {};
+  preset[ORCH_CALL_TARGET_KEY] = { src: PARAM_SRC_FIXED, value: chainId };
+  (sig.arguments || []).filter(Boolean).forEach(k => {
+    preset[k] = { src: PARAM_SRC_ENTRY, value: k, type: 'string', private: true };
+  });
+  _orchParamPreset[instanceId] = preset;
+}
+
+let _orchCallPickerCtx = null; // { nodeId } 新增实例 | { instanceId } 更换目标
+
+// 打开目标根链选择框：只列出已发布的根链，排除当前正在编辑的根链
+async function openOrchCallChainPicker(ctx) {
+  _orchCallPickerCtx = ctx;
+  let overlay = document.getElementById('orch-call-modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'orch-call-modal-overlay';
+    overlay.innerHTML = `<div class="modal" style="width:560px;max-width:96vw">
+      <h2>选择要调用的根链<button class="modal-close" onclick="closeOrchCallChainPicker()" title="关闭">&times;</button></h2>
+      <div class="form-group">
+        <input type="text" id="orch-call-search" placeholder="按名称 / ID 过滤" oninput="renderOrchCallChainOptions()">
+      </div>
+      <div class="form-group">
+        <select id="orch-call-select" size="10" style="width:100%"></select>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">只列出已发布的根链；调用时使用目标根链的当前发布版本，参数和返回值也取自该版本。</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeOrchCallChainPicker()">取消</button>
+        <button class="btn btn-primary" onclick="confirmOrchCallChainPicker()">确定</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  }
+  document.getElementById('orch-call-search').value = '';
+  const sel = document.getElementById('orch-call-select');
+  sel.innerHTML = '<option value="">加载中…</option>';
+  overlay.classList.add('show');
+  try {
+    const list = await api('/api/root-chains');
+    const selfId = window._orchTarget !== 'sub' ? ((document.getElementById('orch-chain-id') || {}).value || '').trim() : '';
+    window._orchCallChainList = (list || []).filter(c => c && c.has_releases && c.status !== 0 && c.chain_id !== selfId);
+  } catch (e) {
+    window._orchCallChainList = [];
+    showToast('加载根链列表失败：' + (e.message || e), 'error');
+  }
+  renderOrchCallChainOptions();
+}
+
+function renderOrchCallChainOptions() {
+  const sel = document.getElementById('orch-call-select');
+  if (!sel) return;
+  const q = ((document.getElementById('orch-call-search') || {}).value || '').trim().toLowerCase();
+  const cur = _orchCallPickerCtx && _orchCallPickerCtx.instanceId ? getOrchCallTarget(_orchCallPickerCtx.instanceId) : '';
+  const items = (window._orchCallChainList || []).filter(c =>
+    !q || String(c.name || '').toLowerCase().includes(q) || String(c.chain_id || '').toLowerCase().includes(q)
+      || String(c.chain_key || '').toLowerCase().includes(q));
+  if (!items.length) {
+    sel.innerHTML = '<option value="">— 没有可调用的已发布根链 —</option>';
+    return;
+  }
+  sel.innerHTML = items.map(c =>
+    `<option value="${esc(c.chain_id)}"${c.chain_id === cur ? ' selected' : ''}>${esc(c.name || c.chain_id)}（${esc(c.chain_id)}）</option>`).join('');
+}
+
+function closeOrchCallChainPicker() {
+  const overlay = document.getElementById('orch-call-modal-overlay');
+  if (overlay) overlay.classList.remove('show');
+  _orchCallPickerCtx = null;
+}
+
+async function confirmOrchCallChainPicker() {
+  const sel = document.getElementById('orch-call-select');
+  const chainId = sel ? sel.value : '';
+  if (!chainId) { showToast('请选择要调用的根链', 'error'); return; }
+  const ctx = _orchCallPickerCtx || {};
+  const sig = await fetchOrchCallSig(chainId);
+  if (!sig) return;
+  if (ctx.instanceId) {
+    const inst = (window._orchNodeInstances || []).find(i => i.instanceId === ctx.instanceId);
+    if (!inst) { closeOrchCallChainPicker(); return; }
+    const oldSig = getOrchCallSig(getOrchCallTarget(ctx.instanceId));
+    const curName = _orchNameOverrides[ctx.instanceId] || '';
+    // 名称仍是自动生成的（空或等于旧根链名）时跟随新根链改名，用户手动改过的名称保留
+    if (!curName || (oldSig && curName === oldSig.name)) _orchNameOverrides[ctx.instanceId] = sig.name || chainId;
+    seedOrchCallDefaults(ctx.instanceId, chainId, sig);
+  } else if (ctx.nodeId) {
+    const n = (_orchNodes || []).find(x => x.node_id === ctx.nodeId);
+    const instanceId = genOrchInstanceId(ctx.nodeId);
+    if (!window._orchNodeInstances) window._orchNodeInstances = [];
+    window._orchNodeInstances.push({
+      instanceId: instanceId,
+      nodeId: ctx.nodeId,
+      name: sig.name || chainId,
+      type: ORCH_CALL_NODE_TYPE,
+      kind: n ? (n.kind || 'call') : 'call',
+      outputs: [],
+    });
+    _orchNameOverrides[instanceId] = sig.name || chainId;
+    seedOrchCallDefaults(instanceId, chainId, sig);
+  }
+  closeOrchCallChainPicker();
+  renderOrchNodeSelected();
+  onOrchSelectionChange();
+}
