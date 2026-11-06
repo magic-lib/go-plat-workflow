@@ -8334,6 +8334,11 @@ async function orchOpenNodeSwitchEditor(instanceId) {
   const isSwitchable = (nodeType === 'custom/Activity' || nodeType === 'custom/CondSwitch');
   const condWrap = document.getElementById('orch-switch-cond-wrap');
   if (condWrap) condWrap.style.display = isSwitchable ? 'block' : 'none';
+  // 参数输入节点：查出已添加的参数列表，可继续新增、修改、删除
+  const inputWrap = document.getElementById('orch-switch-input-wrap');
+  const isInput = nodeType === ORCH_INPUT_NODE_TYPE;
+  if (inputWrap) inputWrap.style.display = isInput ? 'block' : 'none';
+  if (isInput) fillOrchInputParamRows(instanceId, ORCH_INPUT_SWITCH_BOX_ID);
 
   const ta = document.getElementById('orch-switch-text');
   ta.value = isSwitchable ? ((curExpr === undefined || curExpr === null) ? '' : curExpr) : '';
@@ -8386,6 +8391,9 @@ function saveOrchSwitchOverride() {
   if (!id) { showToast('未指定编辑节点', 'error'); return; }
   const inst = (window._orchNodeInstances || []).find(x => x.instanceId === id);
   const isSwitchable = inst && (inst.type === 'custom/Activity' || inst.type === 'custom/CondSwitch');
+  // 参数输入节点：先校验参数列表，不通过时不关闭弹框
+  const inputDefs = isOrchInputInst(inst) ? collectOrchInputParamRows(ORCH_INPUT_SWITCH_BOX_ID) : null;
+  if (isOrchInputInst(inst) && !inputDefs) return;
   const ta = document.getElementById('orch-switch-text');
   const val = (ta.value || '').trim();
   // 路由条件仅在 Activity / CondSwitch 节点写入；其它节点忽略，并清除可能残留的覆盖
@@ -8414,7 +8422,13 @@ function saveOrchSwitchOverride() {
   refreshOrchConnOptions();
   // 同步刷新「节点参数配置」列表：其标题用实例生效名，改名后必须重渲染才不会残留旧名
   renderOrchParamOverrides();
-  showToast(isSwitchable ? '已更新该节点名称与路由条件（仅本链生效）' : '已更新该节点名称（仅本链实例生效）', 'success');
+  if (inputDefs) {
+    applyOrchInputDefs(id, inputDefs);
+    renderOrchNodeSelected();
+    onOrchSelectionChange();
+  }
+  showToast(isSwitchable ? '已更新该节点名称与路由条件（仅本链生效）'
+    : (inputDefs ? '已更新该节点名称与参数列表（仅本链实例生效）' : '已更新该节点名称（仅本链实例生效）'), 'success');
 }
 
 // 根据参数值推断来源（调用传入/引用节点/固定配置），用于从 DSL arguments 兜底回显
@@ -10122,7 +10136,23 @@ function orchInputDefsSummary(instanceId) {
 
 let _orchInputEditInstId = '';
 
-// 打开参数定义编辑框
+// 参数列表（字段名 / 名称 / 转换类型 / 默认值）的公共编辑区：添加节点时的「编辑输入参数」弹框，
+// 以及点击 Live Preview 节点打开的「编辑节点」弹框都用它，boxId 为行容器 id，其 data-count 指向计数元素 id。
+const ORCH_INPUT_BOX_ID = 'orch-input-rows';
+const ORCH_INPUT_SWITCH_BOX_ID = 'orch-switch-input-rows';
+
+// 用实例已有的参数定义填充编辑区；没有参数时放一行空行方便直接填写
+function fillOrchInputParamRows(instanceId, boxId) {
+  const box = document.getElementById(boxId);
+  if (!box) return;
+  box.innerHTML = '';
+  const defs = getOrchInputDefs(instanceId);
+  if (defs.length) defs.forEach(d => addOrchInputParamRow(d, boxId));
+  else addOrchInputParamRow(null, boxId);
+  refreshOrchInputParamCount(boxId);
+}
+
+// 打开参数定义编辑框（添加节点时自动打开，也可从已选列表的「编辑参数」打开）
 function openOrchInputParamEditor(instanceId) {
   _orchInputEditInstId = instanceId;
   let overlay = document.getElementById('orch-input-modal-overlay');
@@ -10132,12 +10162,12 @@ function openOrchInputParamEditor(instanceId) {
     overlay.id = 'orch-input-modal-overlay';
     overlay.innerHTML = `<div class="modal" style="width:680px;max-width:96vw">
       <h2>编辑输入参数<button class="modal-close" onclick="closeOrchInputParamEditor()" title="关闭">&times;</button></h2>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">定义本节点输出的参数，确定后在「节点参数配置」里为每个参数配置来源；下游节点可通过「引用节点」直接引用这些参数。字段名只能包含字母、数字和下划线，且不能以数字开头；来源取不到值（为空）时使用默认值。</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">定义本节点输出的参数，确定后在「节点参数配置」里为每个参数配置来源；下游节点可通过「引用节点」直接引用这些参数。字段名只能包含字母、数字和下划线，且不能以数字开头；来源取不到值（为空）时使用默认值。之后点击 Live Preview 中的该节点也可以继续编辑参数。</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
         <span id="orch-input-count" style="color:var(--text-muted);font-size:.78rem">0 个参数</span>
-        <button class="btn btn-sm btn-outline" type="button" onclick="addOrchInputParamRow()">+ 添加参数</button>
+        <button class="btn btn-sm btn-outline" type="button" onclick="addOrchInputParamRow(null, '${ORCH_INPUT_BOX_ID}')">+ 添加参数</button>
       </div>
-      <div id="orch-input-rows" style="max-height:50vh;overflow-y:auto"></div>
+      <div id="${ORCH_INPUT_BOX_ID}" data-count="orch-input-count" style="max-height:50vh;overflow-y:auto"></div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="closeOrchInputParamEditor()">取消</button>
         <button class="btn btn-primary" onclick="confirmOrchInputParamEditor()">确定</button>
@@ -10145,18 +10175,14 @@ function openOrchInputParamEditor(instanceId) {
     </div>`;
     document.body.appendChild(overlay);
   }
-  document.getElementById('orch-input-rows').innerHTML = '';
-  const defs = getOrchInputDefs(instanceId);
-  if (defs.length) defs.forEach(d => addOrchInputParamRow(d));
-  else addOrchInputParamRow();
-  refreshOrchInputParamCount();
+  fillOrchInputParamRows(instanceId, ORCH_INPUT_BOX_ID);
   overlay.classList.add('show');
 }
 
 // 新增一行参数定义（字段名 / 名称 / 转换类型 / 默认值，与根节点返回值定义一致）；
 // data-orig 记录原字段名，改名时把已配置的来源迁移到新名字下
-function addOrchInputParamRow(def) {
-  const box = document.getElementById('orch-input-rows');
+function addOrchInputParamRow(def, boxId) {
+  const box = document.getElementById(boxId || ORCH_INPUT_BOX_ID);
   if (!box) return;
   const d = def || { key: '', label: '', type: '', value: '' };
   const inputStyle = 'min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem';
@@ -10170,20 +10196,23 @@ function addOrchInputParamRow(def) {
     <input class="orch-input-value" placeholder="默认值" title="来源取不到值时使用，可填固定值或 {{arguments.xxx}} 等表达式" value="${esc(d.value || '')}" style="flex:1 1 180px;${inputStyle};font-family:monospace">
     <button class="btn btn-sm btn-danger" type="button" title="删除该参数" onclick="removeOrchInputParamRow(this)">✕</button>`;
   box.appendChild(row);
-  refreshOrchInputParamCount();
+  refreshOrchInputParamCount(box.id);
   const keyEl = row.querySelector('.orch-input-key');
   if (!def && keyEl) keyEl.focus();
 }
 
 function removeOrchInputParamRow(btn) {
   const row = btn.closest('.orch-input-row');
+  const box = row ? row.parentElement : null;
   if (row) row.remove();
-  refreshOrchInputParamCount();
+  if (box) refreshOrchInputParamCount(box.id);
 }
 
-function refreshOrchInputParamCount() {
-  const cnt = document.getElementById('orch-input-count');
-  if (cnt) cnt.textContent = document.querySelectorAll('#orch-input-rows .orch-input-row').length + ' 个参数';
+function refreshOrchInputParamCount(boxId) {
+  const box = document.getElementById(boxId || ORCH_INPUT_BOX_ID);
+  if (!box) return;
+  const cnt = document.getElementById(box.getAttribute('data-count') || '');
+  if (cnt) cnt.textContent = box.querySelectorAll('.orch-input-row').length + ' 个参数';
 }
 
 function closeOrchInputParamEditor() {
@@ -10192,11 +10221,9 @@ function closeOrchInputParamEditor() {
   _orchInputEditInstId = '';
 }
 
-// 确定：校验参数名，更新参数定义，并同步参数来源配置（新增参数默认「调用传入」同名公共参数，删除参数清掉配置）
-function confirmOrchInputParamEditor() {
-  const instanceId = _orchInputEditInstId;
-  if (!instanceId) { closeOrchInputParamEditor(); return; }
-  const rows = Array.from(document.querySelectorAll('#orch-input-rows .orch-input-row'));
+// 读取编辑区里的参数定义并校验字段名；校验不通过时提示并返回 null
+function collectOrchInputParamRows(boxId) {
+  const rows = Array.from(document.querySelectorAll('#' + boxId + ' .orch-input-row'));
   const defs = [];
   const seen = {};
   for (const row of rows) {
@@ -10206,13 +10233,18 @@ function confirmOrchInputParamEditor() {
     const value = (row.querySelector('.orch-input-value').value || '').trim();
     const orig = row.getAttribute('data-orig') || '';
     if (!key && !label && !value) continue; // 空行忽略
-    if (!key) { showToast('有参数未填写字段名', 'error'); return; }
-    if (!ORCH_INPUT_KEY_RE.test(key)) { showToast('字段名 ' + key + ' 不合法：只能包含字母、数字和下划线，且不能以数字开头', 'error'); return; }
-    if (seen[key]) { showToast('字段名 ' + key + ' 重复', 'error'); return; }
+    if (!key) { showToast('有参数未填写字段名', 'error'); return null; }
+    if (!ORCH_INPUT_KEY_RE.test(key)) { showToast('字段名 ' + key + ' 不合法：只能包含字母、数字和下划线，且不能以数字开头', 'error'); return null; }
+    if (seen[key]) { showToast('字段名 ' + key + ' 重复', 'error'); return null; }
     seen[key] = true;
     defs.push({ key, label, type, value, orig });
   }
+  return defs;
+}
 
+// 应用新的参数定义：同步参数来源配置（新增参数默认「调用传入」同名公共参数，删除参数清掉配置，
+// 改名保留已配置的来源），并替换其它节点对改名参数的引用
+function applyOrchInputDefs(instanceId, defs) {
   storeParamPreset(); // 先把参数配置区当前的编辑结果写回暂存
   const oldPreset = _orchParamPreset[instanceId] || {};
   const newPreset = {};
@@ -10243,7 +10275,15 @@ function confirmOrchInputParamEditor() {
       });
     });
   });
+}
 
+// 「编辑输入参数」弹框确定
+function confirmOrchInputParamEditor() {
+  const instanceId = _orchInputEditInstId;
+  if (!instanceId) { closeOrchInputParamEditor(); return; }
+  const defs = collectOrchInputParamRows(ORCH_INPUT_BOX_ID);
+  if (!defs) return;
+  applyOrchInputDefs(instanceId, defs);
   closeOrchInputParamEditor();
   renderOrchNodeSelected();
   onOrchSelectionChange();
