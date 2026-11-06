@@ -6273,8 +6273,8 @@ function renderOrchNodeListPage() {
     return;
   }
   container.innerHTML = pageItems.map(n => {
-    const kindClass = n.kind === 'condition' ? 'badge-warning' : (n.kind === 'return' ? 'badge-return' : (n.kind === 'call' ? 'badge-call' : 'badge-info'));
-    const kindLabel = n.kind === 'condition' ? '查询' : (n.kind === 'return' ? '返回值' : (n.kind === 'call' ? '调用根链' : '执行'));
+    const kindClass = n.kind === 'condition' ? 'badge-warning' : (n.kind === 'return' ? 'badge-return' : (n.kind === 'call' ? 'badge-call' : (n.kind === 'input' ? 'badge-input' : 'badge-info')));
+    const kindLabel = n.kind === 'condition' ? '查询' : (n.kind === 'return' ? '返回值' : (n.kind === 'call' ? '调用根链' : (n.kind === 'input' ? '参数输入' : '执行')));
     let outputsJson = '[]';
     try { outputsJson = JSON.stringify(n.outputs || []); } catch(e) {}
     const outCount = (function(){
@@ -6327,6 +6327,23 @@ function addOrchNodeInstance(nodeId) {
   // 调用根链节点：先选择目标根链，选定后再创建实例（见 confirmOrchCallChainPicker）
   if (nodeType === ORCH_CALL_NODE_TYPE) {
     openOrchCallChainPicker({ nodeId: nodeId });
+    return;
+  }
+  // 参数输入节点：先创建实例（参数列表为空），再弹框定义参数
+  if (nodeType === ORCH_INPUT_NODE_TYPE) {
+    const inputInstId = genOrchInstanceId(nodeId);
+    window._orchNodeInstances.push({
+      instanceId: inputInstId,
+      nodeId: nodeId,
+      name: n ? (n.name || n.node_id) : nodeId,
+      type: nodeType,
+      kind: n ? (n.kind || 'input') : 'input',
+      outputs: [],
+    });
+    setOrchInputDefs(inputInstId, []);
+    renderOrchNodeSelected();
+    onOrchSelectionChange();
+    openOrchInputParamEditor(inputInstId);
     return;
   }
   // 用随机短码代替序号，避免删除导致空洞、跨子链序号碰撞
@@ -6478,7 +6495,7 @@ function renderOrchNodeSelected() {
           : `<button class="btn btn-sm btn-danger" type="button" onclick="removeOrchNodeInstance('${esc(i.instanceId)}')">删除</button>`;
         return `<tr title="${esc(i.instanceId)}">
           <td>${idx + 1}</td>
-          <td>${nodeRouteBadge(def)}${esc(i.name)}${isOrchCallInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ 调用根链：${esc(getOrchCallTargetLabel(i.instanceId) || '未选择')} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchCallChainPicker({ instanceId: '${esc(i.instanceId)}' })">更换根链</button></div>` : ''}</td>
+          <td>${nodeRouteBadge(def)}${esc(i.name)}${isOrchCallInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ 调用根链：${esc(getOrchCallTargetLabel(i.instanceId) || '未选择')} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchCallChainPicker({ instanceId: '${esc(i.instanceId)}' })">更换根链</button></div>` : ''}${isOrchInputInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ ${esc(orchInputDefsSummary(i.instanceId))} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchInputParamEditor('${esc(i.instanceId)}')">编辑参数</button></div>` : ''}</td>
           <td class="code-cell">${esc(i.nodeId)}</td>
           <td class="code-cell">${esc(i.instanceId)}</td>
           <td style="text-align:right">${delCell}</td>
@@ -7003,7 +7020,8 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     const labelLine = `<b>${orchNodeRouteMark(n)}⚙ ${esc(cnName)}</b>`;
     const idLine = `<small>NodeId: ${esc(baseId)}</small>`;
     const instLine = inst && inst.instanceId !== baseId ? `<small>Id: ${esc(inst.instanceId)}</small>` : '';
-    const callLine = isOrchCallInst(inst) ? `<small>→ 调用根链: ${esc(getOrchCallTargetLabel(inst.instanceId) || '未选择')}</small>` : '';
+    const callLine = isOrchCallInst(inst) ? `<small>→ 调用根链: ${esc(getOrchCallTargetLabel(inst.instanceId) || '未选择')}</small>`
+      : (isOrchInputInst(inst) ? `<small>→ ${esc(orchInputDefsSummary(inst.instanceId))}</small>` : '');
     lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}${callLine ? '<br/>'+callLine : ''}"]`);
     (kindSafeIds[clsName] = kindSafeIds[clsName] || []).push(safe);
     // 记录该实例生效的 switch_condition 表达式（覆盖值优先，其次节点默认），供悬停弹层与点击编辑展示。
@@ -7056,6 +7074,7 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     action:    { fill: '#fee2e2', stroke: '#dc2626', color: '#7f1d1d' }, // 策略执行=淡红
     return:    { fill: '#fef9c3', stroke: '#ca8a04', color: '#713f12' }, // 返回值节点=浅黄（区别于其它节点）
     call:      { fill: '#e0f2fe', stroke: '#0891b2', color: '#164e63' }, // 调用根链节点=浅青
+    input:     { fill: '#f3e8ff', stroke: '#9333ea', color: '#581c87' }, // 参数输入节点=浅紫
   };
   const kindFallback = { fill: '#f3f4f6', stroke: '#9ca3af', color: '#374151' }; // 未知 kind 默认灰
   const routeFill = { fill: '#dbeafe', stroke: '#2563eb', color: '#1e3a8a' }; // 路由=淡蓝
@@ -7248,6 +7267,7 @@ function parseNodeParams(node) {
 function getOrchInstanceParams(inst) {
   if (!inst) return [];
   if (isOrchCallInst(inst)) return getOrchCallParams(inst);
+  if (isOrchInputInst(inst)) return getOrchInputParams(inst.instanceId);
   if (inst.type === 'custom/ReturnValue') {
     return (_orchRootResponses || [])
       .filter(rr => (rr.key || '').trim())
@@ -7686,6 +7706,12 @@ function getOrchRefNodeCandidates(excludeId) {
       cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: getOrchCallParams(inst), outputs: getOrchCallOutputs(inst) });
       return;
     }
+    if (isOrchInputInst(inst)) {
+      // 参数输入节点：参数值同时写入 arguments 与 responses，两处都可引用
+      const ps = getOrchInputParams(inst.instanceId);
+      cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: ps, outputs: ps.map(p => ({ key: p.key, label: p.label, type: p.type })) });
+      return;
+    }
     cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: parseNodeParams(def), outputs: parseNodeOutputs(def) });
   });
   // 已选子链（按 chain_id 排除自身，且必须在祖先集合内）
@@ -8003,6 +8029,11 @@ function storeParamPreset() {
       pdesc = rr ? (rr.description || '') : '';
       // 非固定配置时类型还原为返回值定义默认类型（typeSel 已在此前 onParamSrcChange 中重置）
       if (src !== PARAM_SRC_FIXED && rr && rr.type) ptype = rr.type;
+    } else if (isOrchInputInst(inst)) {
+      const d = getOrchInputDefs(nodeId).find(x => x.key === key);
+      pdesc = d ? (d.description || '') : '';
+      plabel = pdesc;
+      if (src !== PARAM_SRC_FIXED && d && d.type) ptype = d.type;
     }
     if (!_orchParamPreset[nodeId]) _orchParamPreset[nodeId] = {};
     _orchParamPreset[nodeId][key] = {
@@ -10000,6 +10031,172 @@ async function confirmOrchCallChainPicker() {
     seedOrchCallDefaults(instanceId, chainId, sig);
   }
   closeOrchCallChainPicker();
+  renderOrchNodeSelected();
+  onOrchSelectionChange();
+}
+
+// ============================================================
+// 参数输入节点（custom/ParamInput）
+// ============================================================
+// 每个实例的参数定义（[{key, type, description}]）以 JSON 字符串存在 _orchParamPreset[instanceId][ORCH_INPUT_DEFS_KEY]，
+// 随 node_param_overrides 保存，后端组装 DSL 时移到 configuration.input_params。
+// 各参数的来源仍按普通节点参数配置（固定配置 / 引用节点 / 调用传入），运行时解析出的值写入
+// steps.<实例ID>.arguments 与 steps.<实例ID>.responses，下游「引用节点」可直接选这些参数。
+const ORCH_INPUT_NODE_TYPE = 'custom/ParamInput';
+const ORCH_INPUT_DEFS_KEY = '__input_params';
+const ORCH_INPUT_PARAM_TYPES = ['string', 'int64', 'float64', 'bool', 'slice', 'map'];
+const ORCH_INPUT_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function isOrchInputInst(inst) {
+  return !!(inst && inst.type === ORCH_INPUT_NODE_TYPE);
+}
+
+// 取实例的参数定义
+function getOrchInputDefs(instanceId) {
+  const p = _orchParamPreset[instanceId] && _orchParamPreset[instanceId][ORCH_INPUT_DEFS_KEY];
+  if (!p || !p.value) return [];
+  try {
+    const arr = typeof p.value === 'string' ? JSON.parse(p.value) : p.value;
+    return Array.isArray(arr) ? arr.filter(d => d && d.key) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// 保存实例的参数定义（空数组也保存，表示已添加但尚未定义参数）
+function setOrchInputDefs(instanceId, defs) {
+  if (!_orchParamPreset[instanceId]) _orchParamPreset[instanceId] = {};
+  _orchParamPreset[instanceId][ORCH_INPUT_DEFS_KEY] = {
+    src: PARAM_SRC_FIXED,
+    value: JSON.stringify((defs || []).map(d => ({ key: d.key, type: d.type || 'string', description: d.description || '' }))),
+  };
+}
+
+// 参数配置区与引用候选使用的参数列表
+function getOrchInputParams(instanceId) {
+  return getOrchInputDefs(instanceId).map(d => ({
+    key: d.key, label: d.description || '', type: d.type || 'string', required: false, description: d.description || '',
+  }));
+}
+
+// 已选列表 / 预览图里展示的参数摘要
+function orchInputDefsSummary(instanceId) {
+  const defs = getOrchInputDefs(instanceId);
+  return defs.length ? '参数：' + defs.map(d => d.key).join(', ') : '尚未定义参数';
+}
+
+let _orchInputEditInstId = '';
+
+// 打开参数定义编辑框
+function openOrchInputParamEditor(instanceId) {
+  _orchInputEditInstId = instanceId;
+  let overlay = document.getElementById('orch-input-modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'orch-input-modal-overlay';
+    overlay.innerHTML = `<div class="modal" style="width:680px;max-width:96vw">
+      <h2>编辑输入参数<button class="modal-close" onclick="closeOrchInputParamEditor()" title="关闭">&times;</button></h2>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">定义本节点输出的参数，确定后在「节点参数配置」里为每个参数配置来源；下游节点可通过「引用节点」直接引用这些参数。参数名只能包含字母、数字和下划线，且不能以数字开头。</div>
+      <div id="orch-input-rows" style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto"></div>
+      <button class="btn btn-sm btn-outline" type="button" style="margin-top:8px" onclick="addOrchInputParamRow()">+ 添加参数</button>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeOrchInputParamEditor()">取消</button>
+        <button class="btn btn-primary" onclick="confirmOrchInputParamEditor()">确定</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  }
+  document.getElementById('orch-input-rows').innerHTML = '';
+  const defs = getOrchInputDefs(instanceId);
+  if (defs.length) defs.forEach(d => addOrchInputParamRow(d));
+  else addOrchInputParamRow();
+  overlay.classList.add('show');
+}
+
+// 新增一行参数定义；data-orig 记录原参数名，改名时把已配置的来源迁移到新名字下
+function addOrchInputParamRow(def) {
+  const box = document.getElementById('orch-input-rows');
+  if (!box) return;
+  const d = def || { key: '', type: 'string', description: '' };
+  const row = document.createElement('div');
+  row.className = 'orch-input-row';
+  row.style.cssText = 'display:flex;gap:6px;align-items:center';
+  row.setAttribute('data-orig', d.key || '');
+  row.innerHTML = `<input class="orch-input-key" placeholder="参数名" value="${esc(d.key || '')}" style="flex:0 1 180px;min-width:120px">
+    <select class="orch-input-type" style="flex:0 1 100px;min-width:90px">
+      ${ORCH_INPUT_PARAM_TYPES.map(t => `<option value="${t}" ${t === (d.type || 'string') ? 'selected' : ''}>${t}</option>`).join('')}
+    </select>
+    <input class="orch-input-desc" placeholder="说明" value="${esc(d.description || '')}" style="flex:1 1 200px;min-width:120px">
+    <button class="btn-remove-param" type="button" onclick="removeOrchInputParamRow(this)" title="删除此参数">&times;</button>`;
+  box.appendChild(row);
+  const keyEl = row.querySelector('.orch-input-key');
+  if (!def && keyEl) keyEl.focus();
+}
+
+function removeOrchInputParamRow(btn) {
+  const row = btn.closest('.orch-input-row');
+  if (row) row.remove();
+}
+
+function closeOrchInputParamEditor() {
+  const overlay = document.getElementById('orch-input-modal-overlay');
+  if (overlay) overlay.classList.remove('show');
+  _orchInputEditInstId = '';
+}
+
+// 确定：校验参数名，更新参数定义，并同步参数来源配置（新增参数默认「调用传入」同名公共参数，删除参数清掉配置）
+function confirmOrchInputParamEditor() {
+  const instanceId = _orchInputEditInstId;
+  if (!instanceId) { closeOrchInputParamEditor(); return; }
+  const rows = Array.from(document.querySelectorAll('#orch-input-rows .orch-input-row'));
+  const defs = [];
+  const seen = {};
+  for (const row of rows) {
+    const key = (row.querySelector('.orch-input-key').value || '').trim();
+    const type = row.querySelector('.orch-input-type').value || 'string';
+    const description = (row.querySelector('.orch-input-desc').value || '').trim();
+    const orig = row.getAttribute('data-orig') || '';
+    if (!key && !description) continue; // 空行忽略
+    if (!key) { showToast('有参数未填写参数名', 'error'); return; }
+    if (!ORCH_INPUT_KEY_RE.test(key)) { showToast('参数名 ' + key + ' 不合法：只能包含字母、数字和下划线，且不能以数字开头', 'error'); return; }
+    if (seen[key]) { showToast('参数名 ' + key + ' 重复', 'error'); return; }
+    seen[key] = true;
+    defs.push({ key, type, description, orig });
+  }
+
+  storeParamPreset(); // 先把参数配置区当前的编辑结果写回暂存
+  const oldPreset = _orchParamPreset[instanceId] || {};
+  const newPreset = {};
+  defs.forEach(d => {
+    const prev = oldPreset[d.orig || d.key] || null;
+    let p;
+    if (prev) {
+      p = Object.assign({}, prev, { key: d.key });
+      // 来源不是固定配置时类型跟随参数定义；调用传入的同名参数随改名一起改
+      if (p.src !== PARAM_SRC_FIXED) p.type = d.type;
+      if (p.src === PARAM_SRC_ENTRY && !p.private && d.orig && d.orig !== d.key && String(p.value || '').trim() === d.orig) p.value = d.key;
+    } else {
+      p = { src: PARAM_SRC_ENTRY, value: d.key, private: false, type: d.type, key: d.key, required: false, policy: 'frontend' };
+    }
+    p.label = d.description;
+    p.description = d.description;
+    newPreset[d.key] = p;
+  });
+  _orchParamPreset[instanceId] = newPreset;
+  setOrchInputDefs(instanceId, defs);
+  // 改名的参数：同步替换其它节点里对它的引用 {{steps.<本实例>.arguments|responses.<旧名>}}
+  defs.filter(d => d.orig && d.orig !== d.key).forEach(d => {
+    const from = new RegExp('\\{\\{steps\\.' + instanceId + '\\.(arguments|responses)\\.' + d.orig + '\\}\\}', 'g');
+    Object.keys(_orchParamPreset).forEach(nid => {
+      if (nid === instanceId) return;
+      Object.values(_orchParamPreset[nid] || {}).forEach(p => {
+        if (p && typeof p.value === 'string') p.value = p.value.replace(from, '{{steps.' + instanceId + '.$1.' + d.key + '}}');
+      });
+    });
+  });
+
+  closeOrchInputParamEditor();
   renderOrchNodeSelected();
   onOrchSelectionChange();
 }
