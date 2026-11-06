@@ -36,10 +36,7 @@ func (a rootChainCallInvoker) InvokeRootChainForNode(ctx context.Context, req *c
 	if err != nil {
 		return nil, err
 	}
-	if flowCtx, ok := result.(*paramx.FlowContext); ok && flowCtx != nil {
-		return flowCtx.GetResponses(), nil
-	}
-	return result, nil
+	return rootChainResponses(result), nil
 }
 
 // ensureBuiltinRootChainCallNode 幂等确保项目下存在内置「调用根链节点」（custom/RootChainCall）定义，
@@ -177,7 +174,8 @@ func missingRootChainCallArgs(n *types.RuleNode, required []string) []string {
 }
 
 // testRootChainCallNode 测试调用根链节点：把测试参数原样作为入参，执行节点定义固定的目标根链当前发布版本，
-// 同步拿到目标根链的完整输出；并在该节点的运行日志中记录本次输入（arguments）与完整输出（result），可按需保存测试记录。
+// 输出只取节点定义的返回值（没有定义返回值时为 {}），不带出目标根链的内部执行结果；
+// 并在该节点的运行日志中记录本次输入（arguments）与输出（result），可按需保存测试记录。
 func (s *WorkflowService) testRootChainCallNode(ctx context.Context, req *TestNodeRequest, nodeDef *workflow.NodeDef) (*TestNodeResult, error) {
 	cfg := make(map[string]any)
 	if len(nodeDef.Configuration) > 0 {
@@ -205,7 +203,7 @@ func (s *WorkflowService) testRootChainCallNode(ctx context.Context, req *TestNo
 		result.ErrorMsg = runErr.Error()
 	} else {
 		result.Status = "success"
-		result.Result = conv.String(output)
+		result.Result = conv.String(commnode.PickRootChainCallResponses(rootChainResponses(output), commnode.RootChainCallResponseKeys(cfg["responses"])))
 	}
 
 	// 节点运行日志：输入为测试参数，输出为目标根链的完整输出
@@ -256,6 +254,14 @@ func (s *WorkflowService) testRootChainCallNode(ctx context.Context, req *TestNo
 		}
 	}
 	return result, nil
+}
+
+// rootChainResponses 取根链执行结果中的返回值（FlowContext.Responses）；非 FlowContext 时原样返回。
+func rootChainResponses(output any) any {
+	if flowCtx, ok := output.(*paramx.FlowContext); ok && flowCtx != nil {
+		return flowCtx.GetResponses()
+	}
+	return output
 }
 
 // invokeRootChainForTest 按根链 ID 执行其当前发布版本，返回完整输出与发布版本标识（形如 R000001@3）。
