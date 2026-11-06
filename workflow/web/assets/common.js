@@ -5304,14 +5304,14 @@ async function loadRootChains() {
         <td>${connCount} 条</td>
         <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
         <td>${paramsHtml}</td>
-        <td class="actions">
+        <td><div class="actions">
           <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
           <button class="btn btn-sm btn-primary edit-only" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
           <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
           <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
           <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
           ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>`}
-        </td>
+        </div></td>
       </tr>`;
     }).join('');
   } catch (e) { showToast('加载根链失败: ' + e.message, 'error'); }
