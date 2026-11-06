@@ -604,6 +604,13 @@
     <div style="margin:0 0 8px;font-size:.78rem;color:#92400e" id="orch-switch-override-flag"></div>
     <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">节点名称（仅本链实例生效，不影响节点定义）</label>
     <input id="orch-switch-name" type="text" style="width:100%;font-size:.85rem;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:10px" placeholder="节点显示名称" />
+    <div id="orch-switch-input-wrap" style="display:none;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <label style="font-size:.72rem;color:var(--text-muted)">输入参数（字段名 / 名称 / 转换类型 / 默认值，仅本链实例生效）<span id="orch-switch-input-count" style="margin-left:6px">0 个参数</span></label>
+        <button class="btn btn-sm btn-outline" type="button" onclick="addOrchInputParamRow(null, 'orch-switch-input-rows')">+ 添加参数</button>
+      </div>
+      <div id="orch-switch-input-rows" data-count="orch-switch-input-count" style="max-height:40vh;overflow-y:auto"></div>
+    </div>
     <div id="orch-switch-cond-wrap">
       <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">路由条件（switch_condition，仅 Activity / CondSwitch 适用）</label>
       <textarea id="orch-switch-text" rows="5" style="width:100%;font-family:var(--font-mono);font-size:.82rem;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical" placeholder="例如：In('K1', [responses.tag_list])"></textarea>
