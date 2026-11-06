@@ -215,6 +215,7 @@ func (ws *WebServer) registerRoutes() {
 	// RootChains 发布与回滚
 	ws.mux.HandleFunc("POST /api/root-chains/{chain_id}/publish", ws.handlePublishRootChain)
 	ws.mux.HandleFunc("GET /api/root-chains/{chain_id}/releases", ws.handleListRootChainReleases)
+	ws.mux.HandleFunc("GET /api/root-chains/{chain_id}/call-signature", ws.handleGetRootChainCallSignature)
 	ws.mux.HandleFunc("POST /api/root-chains/{chain_id}/rollback", ws.handleRollbackRootChain)
 	ws.mux.HandleFunc("POST /api/root-chains/{chain_id}/set-current", ws.handleSetCurrentRelease)
 	ws.mux.HandleFunc("DELETE /api/root-chains/{chain_id}/releases/{version}", ws.handleDeleteRootChainRelease)
@@ -1288,6 +1289,31 @@ func (ws *WebServer) handleListRootChainReleases(w http.ResponseWriter, r *http.
 		releases = []*workflow.RootChainReleaseDef{}
 	}
 	writeJSON(w, http.StatusOK, releases)
+}
+
+// handleGetRootChainCallSignature 获取根链当前发布版本的调用签名（入参列表 + 返回值定义），
+// 编排页添加「调用根链节点」时据此生成参数配置与可引用的返回值字段。
+func (ws *WebServer) handleGetRootChainCallSignature(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	chainID := r.PathValue("chain_id")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	if chainID == "" {
+		writeError(w, http.StatusBadRequest, "chain_id path parameter is required")
+		return
+	}
+	sig, err := ws.svc.GetRootChainCallSignature(r.Context(), project, chainID)
+	if err != nil {
+		if errors.Is(err, workflow.ErrRootChainNotFound) || errors.Is(err, workflow.ErrReleaseNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sig)
 }
 
 type rollbackRequest struct {

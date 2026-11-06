@@ -316,6 +316,22 @@ type RootChainDef struct {
 	MustInputParams []string `json:"must_input_params"`
 }
 
+// RootChainCallSignature 根链当前发布版本的调用签名，供「调用根链节点」生成参数与返回值。
+type RootChainCallSignature struct {
+	// ChainID 根链 ID
+	ChainID string `json:"chain_id"`
+	// ChainKey 根链业务键
+	ChainKey string `json:"chain_key"`
+	// Name 根链名称（发布时快照）
+	Name string `json:"name"`
+	// Version 当前发布版本号
+	Version int `json:"version"`
+	// Arguments 调用该根链需要传入的入参名（发布 DSL 及其子链中所有 {{arguments.xxx}}）
+	Arguments []string `json:"arguments"`
+	// Responses 该根链的返回值定义（发布快照）
+	Responses []RootResponseItem `json:"responses"`
+}
+
 // RootChainReleaseDef 根链发布版本定义。
 // 每次发布将根链草稿快照为一个不可变版本，生产环境使用 IsCurrent=true 的版本。
 // 发布记录只增不改，保留完整历史以便回滚。
