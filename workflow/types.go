@@ -39,6 +39,8 @@ var (
 	ErrReleaseNotFound = fmt.Errorf("workflow: release not found")
 	// ErrReleaseInUse 当前生产版本不允许删除
 	ErrReleaseInUse = fmt.Errorf("workflow: current release in use, cannot delete")
+	// ErrReleaseStable 稳定版本不允许删除（需先取消稳定标记）
+	ErrReleaseStable = fmt.Errorf("workflow: stable release cannot be deleted, unmark stable first")
 	// ErrRootChainHasReleases 根链存在发布记录，不允许删除
 	ErrRootChainHasReleases = fmt.Errorf("workflow: root chain has releases, cannot delete")
 	// ErrActivityNotFound activity 未找到
@@ -380,6 +382,10 @@ type RootChainReleaseDef struct {
 	RootResponses string `json:"root_responses,omitempty"`
 	// IsCurrent 是否为生产环境当前使用的版本
 	IsCurrent bool `json:"is_current"`
+	// IsStable 是否标记为线上稳定版本（出问题时优先回退到稳定版本）
+	IsStable bool `json:"is_stable"`
+	// StableNote 稳定版本备注（选填，如上线时间、验证情况）
+	StableNote string `json:"stable_note,omitempty"`
 	// PublishedAt 发布时间
 	PublishedAt time.Time `json:"published_at"`
 }

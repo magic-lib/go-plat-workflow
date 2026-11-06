@@ -12,23 +12,26 @@ import (
 // 每次发布生成一条不可变快照记录，is_current=true 的版本为生产环境当前使用版本。
 // 发布记录只增不改，便于审计和回滚。
 type RootChainReleaseModel struct {
-	ID                 uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Project            string    `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_chain_version,priority:1;not null;index" json:"project"`
-	ChainID            string    `gorm:"column:chain_id;type:varchar(128);uniqueIndex:uk_project_chain_version,priority:2;not null;index" json:"chain_id"`
-	Version            int       `gorm:"column:version;uniqueIndex:uk_project_chain_version,priority:3;not null" json:"version"`
-	Name               string    `gorm:"type:varchar(255);not null" json:"name"`
-	Description        string    `gorm:"type:varchar(512)" json:"description"`
-	DSLJSON            string    `gorm:"type:json;not null" json:"dsl_json"`
-	NodeIDs            string    `gorm:"column:node_ids;type:text" json:"node_ids"`
-	SubChainIDs        string    `gorm:"column:sub_chain_ids;type:text" json:"sub_chain_ids"`
-	ConnectionsData    string    `gorm:"column:connections_data;type:text" json:"connections_data"`
-	NodeParamOverrides string    `gorm:"column:node_param_overrides;type:text" json:"node_param_overrides"`
+	ID                    uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Project               string `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_chain_version,priority:1;not null;index" json:"project"`
+	ChainID               string `gorm:"column:chain_id;type:varchar(128);uniqueIndex:uk_project_chain_version,priority:2;not null;index" json:"chain_id"`
+	Version               int    `gorm:"column:version;uniqueIndex:uk_project_chain_version,priority:3;not null" json:"version"`
+	Name                  string `gorm:"type:varchar(255);not null" json:"name"`
+	Description           string `gorm:"type:varchar(512)" json:"description"`
+	DSLJSON               string `gorm:"type:json;not null" json:"dsl_json"`
+	NodeIDs               string `gorm:"column:node_ids;type:text" json:"node_ids"`
+	SubChainIDs           string `gorm:"column:sub_chain_ids;type:text" json:"sub_chain_ids"`
+	ConnectionsData       string `gorm:"column:connections_data;type:text" json:"connections_data"`
+	NodeParamOverrides    string `gorm:"column:node_param_overrides;type:text" json:"node_param_overrides"`
 	NodeCollapseOverrides string `gorm:"column:node_collapse_overrides;type:text" json:"node_collapse_overrides"`
 	// RootResponses 根节点返回值定义 JSON（[]workflow.RootResponseItem），发布时快照
-	RootResponses      string    `gorm:"column:root_responses;type:text" json:"root_responses"`
-	IsCurrent          bool      `gorm:"column:is_current;default:false;index" json:"is_current"`
-	PublishedAt        time.Time `gorm:"column:published_at;not null" json:"published_at"`
-	CreatedAt          time.Time `json:"created_at"`
+	RootResponses string `gorm:"column:root_responses;type:text" json:"root_responses"`
+	IsCurrent     bool   `gorm:"column:is_current;default:false;index" json:"is_current"`
+	// IsStable 是否标记为线上稳定版本；StableNote 稳定版本备注。标记 / 取消只改这两列，不改快照内容
+	IsStable    bool      `gorm:"column:is_stable;default:false" json:"is_stable"`
+	StableNote  string    `gorm:"column:stable_note;type:varchar(512)" json:"stable_note"`
+	PublishedAt time.Time `gorm:"column:published_at;not null" json:"published_at"`
+	CreatedAt   time.Time `json:"created_at"`
 	// DeletedAt GORM 软删除字段：删除发布版本时只置该时间戳，不做物理删除。
 	// 前端/业务查询（ListByChain/GetByVersion/GetCurrent/ListCurrentByProject 等）自动过滤，
 	// 软删除的记录“前端永远查不出来”，但仍在库中、可直接查库查看/恢复。
@@ -43,20 +46,22 @@ func (RootChainReleaseModel) TableName() string {
 // ToDef 将数据库模型转换为 RootChainReleaseDef。
 func (m *RootChainReleaseModel) ToDef() *workflow.RootChainReleaseDef {
 	return &workflow.RootChainReleaseDef{
-		Project:            m.Project,
-		ChainID:            m.ChainID,
-		Version:            m.Version,
-		Name:               m.Name,
-		Description:        m.Description,
-		DSLJSON:            m.DSLJSON,
-		NodeIDs:            m.NodeIDs,
-		SubChainIDs:        m.SubChainIDs,
-		ConnectionsData:    m.ConnectionsData,
-		NodeParamOverrides: m.NodeParamOverrides,
+		Project:               m.Project,
+		ChainID:               m.ChainID,
+		Version:               m.Version,
+		Name:                  m.Name,
+		Description:           m.Description,
+		DSLJSON:               m.DSLJSON,
+		NodeIDs:               m.NodeIDs,
+		SubChainIDs:           m.SubChainIDs,
+		ConnectionsData:       m.ConnectionsData,
+		NodeParamOverrides:    m.NodeParamOverrides,
 		NodeCollapseOverrides: m.NodeCollapseOverrides,
-		RootResponses:      m.RootResponses,
-		IsCurrent:          m.IsCurrent,
-		PublishedAt:        m.PublishedAt,
+		RootResponses:         m.RootResponses,
+		IsCurrent:             m.IsCurrent,
+		IsStable:              m.IsStable,
+		StableNote:            m.StableNote,
+		PublishedAt:           m.PublishedAt,
 	}
 }
 
@@ -75,5 +80,7 @@ func (m *RootChainReleaseModel) FromDef(def *workflow.RootChainReleaseDef) {
 	m.NodeCollapseOverrides = def.NodeCollapseOverrides
 	m.RootResponses = def.RootResponses
 	m.IsCurrent = def.IsCurrent
+	m.IsStable = def.IsStable
+	m.StableNote = def.StableNote
 	m.PublishedAt = def.PublishedAt
 }

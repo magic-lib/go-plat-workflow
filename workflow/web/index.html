@@ -843,7 +843,13 @@
 <div class="modal-overlay" id="release-modal-overlay">
     <div class="modal" style="width:960px;max-width:96vw">
     <h2 id="release-modal-title">发布记录<button class="modal-close" onclick="closeReleaseModal()" title="关闭">&times;</button></h2>
-    <p style="margin:0 0 10px;color:var(--text-muted);font-size:.82rem">线上生效版本不允许删除；其余版本可直接删除。点击"设为生效"切换生产环境使用的版本（历史记录只增不改）。</p>
+    <p style="margin:0 0 10px;color:var(--text-muted);font-size:.82rem">线上生效版本、稳定版本不允许删除；其余版本可直接删除。点击"设为生效"切换生产环境使用的版本（历史记录只增不改）。线上验证过的版本可"标记稳定"，出问题时用"回退到最近稳定版"一键回退。</p>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 8px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted);cursor:pointer">
+        <input type="checkbox" id="release-only-stable" onchange="renderReleaseRows()"> 只看稳定版本（当前生效版本始终显示）
+      </label>
+      <button class="btn btn-sm btn-danger edit-only" id="release-rollback-stable" onclick="rollbackToLatestStable()">回退到最近稳定版</button>
+    </div>
     <div class="table-wrap" style="max-height:60vh;overflow-y:auto">
       <table id="release-table">
         <thead><tr><th>版本</th><th>名称</th><th>发布时间</th><th>DSL 大小</th><th>状态</th><th>操作</th></tr></thead>

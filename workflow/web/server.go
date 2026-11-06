@@ -219,6 +219,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("POST /api/root-chains/{chain_id}/rollback", ws.handleRollbackRootChain)
 	ws.mux.HandleFunc("POST /api/root-chains/{chain_id}/set-current", ws.handleSetCurrentRelease)
 	ws.mux.HandleFunc("DELETE /api/root-chains/{chain_id}/releases/{version}", ws.handleDeleteRootChainRelease)
+	ws.mux.HandleFunc("POST /api/root-chains/{chain_id}/releases/{version}/stable", ws.handleSetRootChainReleaseStable)
 	ws.mux.HandleFunc("GET /api/releases/current", ws.handleListCurrentReleases)
 
 	ws.mux.HandleFunc("POST /api/workflow/execute", ws.handleExecuteWorkflow)
@@ -1409,6 +1410,44 @@ func (ws *WebServer) handleSetCurrentRelease(w http.ResponseWriter, r *http.Requ
 		ws.svc.NotifyRootChainChanged(project, oneRoot.ChainKey, "set_current")
 	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", req.Version).Msg("root chain current release set via web")
+	writeJSON(w, http.StatusOK, release)
+}
+
+type setReleaseStableRequest struct {
+	// Stable true 标记为稳定版本，false 取消
+	Stable bool `json:"stable"`
+	// Note 稳定版本备注（选填）
+	Note string `json:"note"`
+}
+
+// handleSetRootChainReleaseStable 标记 / 取消发布版本为线上稳定版本。
+func (ws *WebServer) handleSetRootChainReleaseStable(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	chainID := r.PathValue("chain_id")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	version, err := strconv.Atoi(r.PathValue("version"))
+	if err != nil || version <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid version")
+		return
+	}
+	var req setReleaseStableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	release, err := ws.svc.SetRootChainReleaseStable(r.Context(), project, chainID, version, req.Stable, req.Note)
+	if err != nil {
+		if errors.Is(err, workflow.ErrReleaseNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Info().Str("project", project).Str("chain_id", chainID).Int("version", version).Bool("stable", req.Stable).Msg("root chain release stable flag set via web")
 	writeJSON(w, http.StatusOK, release)
 }
 
