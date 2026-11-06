@@ -87,6 +87,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .badge-off { background: #fee2e2; color: #991b1b; }
 .badge-warning { background: #fef3c7; color: #92400e; }
 .badge-info { background: #dbeafe; color: #1e40af; }
+.badge-return { background: #fef9c3; color: #713f12; }
 .badge-call { background: #e0f2fe; color: #155e75; }
 .badge-input { background: #f3e8ff; color: #6b21a8; }
 /* 已发布到根链（生产快照引用）的 node / activity 锁定标记 */

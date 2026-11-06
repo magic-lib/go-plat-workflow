@@ -250,6 +250,9 @@
         <option value="">全部大类</option>
         <option value="condition">查询获取</option>
         <option value="action">策略执行</option>
+        <option value="return">返回值</option>
+        <option value="call">调用根链</option>
+        <option value="input">参数输入</option>
       </select>
       <select id="node-namespace-filter" onchange="loadNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
         <option value="">全部命名空间</option>
@@ -481,6 +484,8 @@
           <option value="custom/Activity">custom/Activity（活动编排）</option>
           <option value="custom/CondSwitch">custom/CondSwitch（条件判断，仅做语法条件判断）</option>
           <option value="custom/ReturnValue">custom/ReturnValue（返回值节点）</option>
+          <option value="custom/RootChainCall">custom/RootChainCall（调用根链节点）</option>
+          <option value="custom/ParamInput">custom/ParamInput（参数输入节点）</option>
           <option value="end">end（结束节点）</option>
         </select>
       </div>
@@ -517,6 +522,9 @@
         <select id="node-kind">
           <option value="condition">查询获取</option>
           <option value="action" selected>策略执行</option>
+          <option value="return">返回值</option>
+          <option value="call">调用根链</option>
+          <option value="input">参数输入</option>
         </select>
       </div>
       <div class="form-group">
