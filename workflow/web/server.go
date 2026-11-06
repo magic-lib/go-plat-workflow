@@ -263,6 +263,8 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("GET /api/node-logs", ws.handleListNodeLogsGlobal)
 	// Node 日志按天统计（每个 node 每日访问量与错误量），用于「统计」页柱状图
 	ws.mux.HandleFunc("GET /api/node-logs/stats", ws.handleNodeLogStats)
+	// 统计页概览：汇总卡片、根链执行统计、错误排行
+	ws.mux.HandleFunc("GET /api/stats/overview", ws.handleStatsOverview)
 }
 
 // projectParam 从 URL query 中提取 project 参数，未传则返回空字符串。
@@ -2614,6 +2616,35 @@ func (ws *WebServer) handleNodeLogStats(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"list": stats,
 	})
+}
+
+// handleStatsOverview 统计页概览：汇总卡片、根链执行统计（按发布版本拆分）、错误排行。
+// 查询参数：project(必填)、env(可选，选了才统计 activity 在线数)、days(可选，默认 7，范围 1~90)、
+// refresh(可选，=1 时跳过 1 分钟缓存重新统计)。
+func (ws *WebServer) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	q := r.URL.Query()
+	env := q.Get("env")
+	days, _ := strconv.Atoi(q.Get("days"))
+	refresh := q.Get("refresh") == "1"
+	// 心跳按环境隔离，未选环境时不统计在线数（跨环境聚合会误导）
+	var online service.ActivityOnlineFunc
+	if ws.collector != nil && env != "" {
+		online = func(actNamespace, actName string) bool {
+			ratio, _ := ws.collector.HeartbeatRatio(project, env, actNamespace, actName)
+			return ratio > 0
+		}
+	}
+	ov, err := ws.svc.StatsOverview(r.Context(), project, env, days, refresh, online)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, ov)
 }
 
 // ============================================================

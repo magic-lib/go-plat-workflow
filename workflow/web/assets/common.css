@@ -499,3 +499,21 @@ body.is-project-viewer .edit-only { display: none !important; }
 #tab-logs .toolbar { flex: 0 0 auto; margin-bottom: 12px; }
 #tab-logs #all-log-list { flex: 1 1 auto; max-height: none; min-height: 0; overflow-y: auto; }
 #tab-logs #all-log-pager { flex: 0 0 auto; }
+
+/* 统计页 */
+.stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin: 4px 0 18px; }
+.stat-card { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; }
+.stat-card-label { font-size: .75rem; color: var(--text-muted); }
+.stat-card-value { font-size: 1.45rem; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.stat-card-sub { font-size: .72rem; color: var(--text-muted); margin-top: 2px; }
+.stat-card-value.bad { color: #dc2626; }
+.stat-section { margin-bottom: 22px; }
+.stat-section-title { font-size: .9rem; font-weight: 600; margin: 0 2px 8px; }
+.stat-hint { font-size: .72rem; font-weight: 400; color: var(--text-muted); margin-left: 6px; }
+#stat-chain-table td.num, #stat-chain-table th.num, #stat-error-table td.num, #stat-error-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#stat-chain-table tr.stat-chain-row { cursor: pointer; }
+#stat-chain-table tr.stat-ver-row td { background: var(--bg); font-size: .8rem; }
+#stat-chain-table tr.stat-ver-row td:first-child { padding-left: 36px; }
+#stat-error-table td.stat-err-msg { max-width: 520px; word-break: break-all; font-family: monospace; font-size: .76rem; }
+.stat-rate-bad { color: #dc2626; font-weight: 600; }
+#stat-chain-table .btn, #stat-error-table .btn { white-space: nowrap; }

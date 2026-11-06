@@ -336,12 +336,9 @@
     </div>
   </div>
 
-  <!-- Statistics Tab：Node 日志按天统计（每个 node 每日访问量与错误量柱状图） -->
+  <!-- Statistics Tab：概览卡片、根链执行统计、错误排行、Node 每日访问量 -->
   <div id="tab-statistics" class="tab-content">
     <div class="toolbar">
-      <select id="stat-node" onchange="loadStatistics()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部 Node</option>
-      </select>
       <select id="stat-env" onchange="loadStatistics()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
         <option value="">全部环境</option>
       </select>
@@ -351,13 +348,34 @@
         <option value="30">最近 30 天</option>
         <option value="90">最近 90 天</option>
       </select>
-      <button class="btn btn-primary" onclick="loadStatistics()">刷新</button>
+      <button class="btn btn-primary" onclick="loadStatistics(true)">刷新</button>
+      <span id="stat-updated" style="font-size:.75rem;color:var(--text-muted)"></span>
     </div>
-    <div id="stat-legend" style="display:flex;gap:18px;align-items:center;margin:10px 2px;font-size:.8rem;color:var(--text-muted)">
-      <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#3b82f6"></span>访问量（总）</span>
-      <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#ef4444"></span>错误量</span>
+    <div id="stat-cards" class="stat-cards"></div>
+
+    <div class="stat-section">
+      <div class="stat-section-title">根链执行统计 <span class="stat-hint">同一 trace_id 在同一根链、同一 10 分钟窗口内的日志算一次执行（trace_id 按业务单号生成，会跨天复用）；有节点报错即算失败；耗时为首个节点开始到最后节点结束（秒级精度），P95 为估算值（误差约 10%）。点击行展开各发布版本。</span></div>
+      <div class="table-wrap"><table id="stat-chain-table"></table></div>
     </div>
-    <div id="stat-chart" style="width:50%;min-width:360px;max-width:100%;overflow-x:auto;padding:8px 0"><div class="log-empty">加载中…</div></div>
+
+    <div class="stat-section">
+      <div class="stat-section-title">错误排行 Top 20 <span class="stat-hint">同一节点下错误信息中的 ID、长数字归一后合并计数。</span></div>
+      <div class="table-wrap"><table id="stat-error-table"></table></div>
+    </div>
+
+    <div class="stat-section">
+      <div class="stat-section-title" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span>Node 每日访问量</span>
+        <select id="stat-node" onchange="loadStatChart()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.8rem;font-weight:400">
+          <option value="">全部 Node</option>
+        </select>
+        <span id="stat-legend" style="display:inline-flex;gap:14px;align-items:center;font-size:.78rem;font-weight:400;color:var(--text-muted)">
+          <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#3b82f6"></span>访问量（总）</span>
+          <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#ef4444"></span>错误量</span>
+        </span>
+      </div>
+      <div id="stat-chart" style="max-width:100%;overflow-x:auto;padding:8px 0"><div class="log-empty">加载中…</div></div>
+    </div>
   </div>
 
   <!-- Execute 执行面板：独立模态框，仅通过 Root Chains / SubChains 列表的 Execute 按钮打开 -->

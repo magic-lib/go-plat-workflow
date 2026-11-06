@@ -1279,6 +1279,107 @@ type NodeLogDayStat struct {
 	Errors int64 `json:"errors"`
 }
 
+// StatsExecWindow 统计口径：同一 trace_id + 同一根链、落在同一个 10 分钟窗口内的 node 日志算一次执行。
+// trace_id 由业务单号派生，同一笔业务隔几天再次触发也会复用同一个 trace_id，所以不能只按 trace_id 去重。
+const StatsExecWindow = 600
+
+// StatsExecBucketRow 执行耗时分布的聚合行：某根链某发布版本下，耗时落在同一对数分桶内的执行汇总。
+type StatsExecBucketRow struct {
+	RootChainID string `json:"root_chain_id"`
+	// ReleaseID 执行时的发布版本标识（形如 R000005@3），草稿执行为空
+	ReleaseID string `json:"release_id"`
+	// Bucket 耗时分桶：FLOOR(LN(耗时ms+1)*10)，相邻桶约差 10%
+	Bucket int `json:"bucket"`
+	// Count 执行次数；Failed 其中有节点报错的次数
+	Count  int64 `json:"count"`
+	Failed int64 `json:"failed"`
+	// SumMs 耗时总和（毫秒），耗时为最早节点开始到最晚节点结束（日志时间戳为秒级，属近似值）
+	SumMs int64 `json:"sum_ms"`
+	// LastMs 最近一次执行结束时间（毫秒时间戳）
+	LastMs int64 `json:"last_ms"`
+}
+
+// StatsErrorRow node 错误日志按（节点模板、节点名、错误信息）聚合的原始行。
+type StatsErrorRow struct {
+	// NodeID 节点模板 ID（已去掉实例后缀）
+	NodeID   string `json:"node_id"`
+	NodeName string `json:"node_name"`
+	ErrorMsg string `json:"error_msg"`
+	Count    int64  `json:"count"`
+	// LastTs 最近一次出现时间（秒级时间戳）
+	LastTs int64 `json:"last_ts"`
+	// TraceID 其中一次出现的 trace_id，用于跳转日志页查看样例
+	TraceID string `json:"trace_id"`
+}
+
+// StatsOverview 统计页概览：汇总卡片、根链统计、错误排行。
+type StatsOverview struct {
+	Env        string           `json:"env"`
+	Days       int              `json:"days"`
+	Summary    *StatsSummary    `json:"summary"`
+	RootChains []*RootChainStat `json:"root_chains"`
+	Errors     []*ErrorStat     `json:"errors"`
+}
+
+// StatsSummary 统计页汇总卡片。
+type StatsSummary struct {
+	// Executions 根链执行次数（口径见 StatsExecWindow，只统计现存根链）
+	Executions int64 `json:"executions"`
+	// FailedExecutions 有节点报错的执行次数
+	FailedExecutions int64 `json:"failed_executions"`
+	// SuccessRate 成功率 [0,1]，无执行时为 0
+	SuccessRate float64 `json:"success_rate"`
+	// NodeTotal / NodeErrors node 执行总次数与报错次数（含节点单测等非根链执行）
+	NodeTotal  int64 `json:"node_total"`
+	NodeErrors int64 `json:"node_errors"`
+	// AvgMs / P95Ms 根链执行端到端耗时，P95 取耗时分桶上界（误差约 10%）
+	AvgMs int64 `json:"avg_ms"`
+	P95Ms int64 `json:"p95_ms"`
+	// ActivityPublished / ActivityOnline 已发布 activity 数与其中有心跳的数量；未选环境时为 nil
+	ActivityPublished *int `json:"activity_published,omitempty"`
+	ActivityOnline    *int `json:"activity_online,omitempty"`
+}
+
+// RootChainStat 单条根链的执行统计。
+type RootChainStat struct {
+	ChainID string `json:"chain_id"`
+	Name    string `json:"name"`
+	ExecStat
+	// Versions 按发布版本拆分（版本号倒序，草稿执行排最后）
+	Versions []*RootChainVersionStat `json:"versions"`
+}
+
+// RootChainVersionStat 根链某个发布版本（或草稿）的执行统计。
+type RootChainVersionStat struct {
+	ReleaseID string `json:"release_id"`
+	// Version 发布版本号，0 表示草稿执行
+	Version int `json:"version"`
+	ExecStat
+}
+
+// ExecStat 一组执行的通用统计指标。
+type ExecStat struct {
+	Executions int64   `json:"executions"`
+	Failed     int64   `json:"failed"`
+	FailRate   float64 `json:"fail_rate"`
+	AvgMs      int64   `json:"avg_ms"`
+	P95Ms      int64   `json:"p95_ms"`
+	// LastAt 最近一次执行结束时间（毫秒时间戳）
+	LastAt int64 `json:"last_at"`
+}
+
+// ErrorStat 错误排行项：同一节点模板下归一化后相同的错误信息合并计数。
+type ErrorStat struct {
+	NodeID   string `json:"node_id"`
+	NodeName string `json:"node_name"`
+	Message  string `json:"message"`
+	Count    int64  `json:"count"`
+	// LastAt 最近一次出现时间（毫秒时间戳）
+	LastAt int64 `json:"last_at"`
+	// TraceID 最近一组错误中的样例 trace_id，用于跳转日志页
+	TraceID string `json:"trace_id"`
+}
+
 // NodeLogStore node 运行日志仓储接口。
 type NodeLogStore interface {
 	// Create 创建一条 node 运行日志
