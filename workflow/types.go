@@ -332,14 +332,18 @@ type RootChainCallSignature struct {
 	Responses []RootResponseItem `json:"responses"`
 }
 
-// ParamInputDef 参数输入节点的一个参数定义（编排时动态配置）。
+// ParamInputDef 参数输入节点的一个参数定义（编排时动态配置，字段与根节点返回值定义一致）。
 type ParamInputDef struct {
-	// Key 参数名
+	// Key 字段名
 	Key string `json:"key"`
-	// Type 参数类型（string/int64/float64/bool/slice/map）
-	Type string `json:"type"`
-	// Description 参数说明
-	Description string `json:"description"`
+	// Label 名称（中文名/说明，选填）
+	Label string `json:"label,omitempty"`
+	// Type 转换类型（string/int64/float64/bool/slice/map/formula），空表示不转换
+	Type string `json:"type,omitempty"`
+	// Value 默认值：来源取不到值（为空）时使用，可为固定值或 {{...}} 表达式
+	Value string `json:"value,omitempty"`
+	// Description 参数说明（旧数据字段，新数据用 Label）
+	Description string `json:"description,omitempty"`
 }
 
 // RootChainReleaseDef 根链发布版本定义。

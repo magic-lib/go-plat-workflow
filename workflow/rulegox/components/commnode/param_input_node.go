@@ -2,6 +2,7 @@ package commnode
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/conv"
@@ -26,16 +27,22 @@ type ParamInputConfiguration struct {
 
 // ParamInputParam 参数输入节点的一个参数定义。
 type ParamInputParam struct {
-	Key         string `json:"key"`
-	Type        string `json:"type"`
-	Description string `json:"description"`
+	// Key 字段名
+	Key string `json:"key"`
+	// Label 名称
+	Label string `json:"label"`
+	// Type 转换类型，空表示不转换
+	Type string `json:"type"`
+	// Value 默认值：来源取不到值（为空）时使用，可为固定值或 {{...}} 表达式
+	Value string `json:"value"`
 }
 
 // ParamInputNode 参数输入节点（custom/ParamInput）。
 //
 // 编排时为每个实例动态定义参数列表，并为每个参数配置来源（固定配置 / 引用节点 / 调用传入）；
 // 执行时按来源解析出各参数的值，同时写入本节点的 steps.<实例ID>.arguments 与 steps.<实例ID>.responses，
-// 下游节点可直接引用。只有定义过的参数会被输出；定义了但没配置来源的参数输出为 nil。
+// 下游节点可直接引用。只有定义过的参数会被输出；来源取不到值（未配置或为空）时使用默认值，
+// 没有默认值则输出 nil。
 type ParamInputNode struct {
 	Configuration *ParamInputConfiguration
 	ruleObj       *templates.RuleExprEngine
@@ -100,7 +107,7 @@ func (x *ParamInputNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	allDataMap, _ := allParam.ToMaps()
 	resolved := replaceBindConfig(x.ruleObj, allDataMap, x.Configuration.Arguments)
 	fillPrivateArguments(resolved, allParam.GetStepArguments(currNodeId), nodeStr, x.Configuration.Arguments)
-	values := x.collectValues(resolved)
+	values := x.collectValues(allDataMap, resolved)
 
 	allParam.SetStep(currNodeId, &paramx.Step{
 		Arguments:   values,
@@ -119,11 +126,18 @@ func (x *ParamInputNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	ctx.TellSuccess(msg)
 }
 
-// collectValues 按参数定义输出参数值：定义了的参数都输出（未配置来源的为 nil）；
+// collectValues 按参数定义输出参数值：定义了的参数都输出；来源取不到值（未配置或为空）时按默认值解析，
+// 并按转换类型转换（formula 时把默认值当公式计算）；没有默认值则为 nil。
 // 没有参数定义时（如旧 DSL）原样输出解析结果。
-func (x *ParamInputNode) collectValues(resolved map[string]any) map[string]any {
+func (x *ParamInputNode) collectValues(allDataMap map[string]any, resolved map[string]any) map[string]any {
 	if len(x.Configuration.InputParams) == 0 {
 		return resolved
+	}
+	exprs := make(map[string]string, len(x.Configuration.Arguments))
+	for _, b := range x.Configuration.Arguments {
+		if b != nil {
+			exprs[b.Key] = conv.String(b.Value)
+		}
 	}
 	values := make(map[string]any, len(x.Configuration.InputParams))
 	for _, p := range x.Configuration.InputParams {
@@ -131,11 +145,16 @@ func (x *ParamInputNode) collectValues(resolved map[string]any) map[string]any {
 			continue
 		}
 		v, ok := resolved[p.Key]
-		if !ok {
-			values[p.Key] = nil
+		if !ok || isEmptyParamValue(v, exprs[p.Key]) {
+			if p.Value == "" {
+				values[p.Key] = nil
+				continue
+			}
+			def := replaceBindConfig(x.ruleObj, allDataMap, []*param.BindConfig{{Key: p.Key, Value: p.Value, Type: p.Type}})
+			values[p.Key] = def[p.Key]
 			continue
 		}
-		if p.Type != "" {
+		if p.Type != "" && p.Type != "formula" {
 			if cv, ok := conv.ConvertForTypeString(p.Type, v); ok {
 				v = cv
 			}
@@ -143,6 +162,19 @@ func (x *ParamInputNode) collectValues(resolved map[string]any) map[string]any {
 		values[p.Key] = v
 	}
 	return values
+}
+
+// isEmptyParamValue 来源解析结果是否为空，为空时使用默认值：
+// nil、空字符串，或取值表达式里引用的参数不存在、模板原样未被替换（如调用方没传 {{arguments.x}}）。
+func isEmptyParamValue(v any, expr string) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	return s == "" || (strings.Contains(expr, "{{") && s == expr)
 }
 
 func init() {

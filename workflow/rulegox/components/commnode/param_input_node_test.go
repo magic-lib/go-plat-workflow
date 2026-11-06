@@ -16,11 +16,15 @@ const paramInputTestDSL = `{
     "nodes": [
       {"id": "N000010__in", "type": "custom/ParamInput", "name": "参数输入",
        "configuration": {
-         "input_params": [{"key": "uid", "type": "int64"}, {"key": "flag", "type": "bool"}, {"key": "phone", "type": "string"}, {"key": "unset", "type": "string"}],
+         "input_params": [{"key": "uid", "type": "int64"}, {"key": "flag", "type": "bool"}, {"key": "phone", "type": "string"},
+           {"key": "unset", "type": "string"}, {"key": "level", "type": "int64", "value": "3"},
+           {"key": "src", "value": "{{arguments.channel}}"}, {"key": "score", "type": "int64", "value": "100"}, {"key": "raw"}],
          "arguments": [
            {"key": "uid", "value": "{{arguments.uid}}", "type": "int64"},
            {"key": "flag", "value": "true", "type": "bool"},
-           {"key": "phone", "value": "{{arguments.N000010__in.phone}}", "type": "string"}
+           {"key": "phone", "value": "{{arguments.N000010__in.phone}}", "type": "string"},
+           {"key": "score", "value": "{{arguments.score}}", "type": "int64"},
+           {"key": "raw", "value": "{{arguments.uid}}"}
          ]}}
     ],
     "connections": []
@@ -34,7 +38,7 @@ func TestParamInputNode_OnMsg(t *testing.T) {
 	}
 	defer rulego.Del("param_input_ok")
 
-	flowCtx := paramx.NewFlowContext("R000001", "inst", map[string]any{"uid": "7", "N000010__in": map[string]any{"phone": "138"}},
+	flowCtx := paramx.NewFlowContext("R000001", "inst", map[string]any{"uid": "7", "channel": "web", "N000010__in": map[string]any{"phone": "138"}},
 		func(key string, val any) (any, bool) { return val, key == "N000010__in" })
 	md := types.NewMetadata()
 	md.PutValue("project", "p1")
@@ -65,7 +69,7 @@ func TestParamInputNode_OnMsg(t *testing.T) {
 		t.Fatalf("unexpected step: %+v", step)
 	}
 	resp := conv.String(step.Responses)
-	if resp != `{"flag":true,"phone":"138","uid":7,"unset":null}` {
+	if resp != `{"flag":true,"level":3,"phone":"138","raw":"7","score":100,"src":"web","uid":7,"unset":null}` {
 		t.Fatalf("unexpected responses: %s", resp)
 	}
 	if conv.String(step.Arguments) != resp {

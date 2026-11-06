@@ -8031,9 +8031,10 @@ function storeParamPreset() {
       if (src !== PARAM_SRC_FIXED && rr && rr.type) ptype = rr.type;
     } else if (isOrchInputInst(inst)) {
       const d = getOrchInputDefs(nodeId).find(x => x.key === key);
-      pdesc = d ? (d.description || '') : '';
-      plabel = pdesc;
-      if (src !== PARAM_SRC_FIXED && d && d.type) ptype = d.type;
+      plabel = d ? (d.label || '') : '';
+      pdesc = plabel;
+      // 非固定配置时类型跟随参数定义（空表示不转换）
+      if (src !== PARAM_SRC_FIXED && d) ptype = d.type || '';
     }
     if (!_orchParamPreset[nodeId]) _orchParamPreset[nodeId] = {};
     _orchParamPreset[nodeId][key] = {
@@ -10057,7 +10058,11 @@ function getOrchInputDefs(instanceId) {
   if (!p || !p.value) return [];
   try {
     const arr = typeof p.value === 'string' ? JSON.parse(p.value) : p.value;
-    return Array.isArray(arr) ? arr.filter(d => d && d.key) : [];
+    if (!Array.isArray(arr)) return [];
+    // 旧数据只有 description（说明），作为名称回显
+    return arr.filter(d => d && d.key).map(d => ({
+      key: d.key, label: d.label || d.description || '', type: d.type || '', value: d.value == null ? '' : String(d.value),
+    }));
   } catch (e) {
     return [];
   }
@@ -10068,14 +10073,14 @@ function setOrchInputDefs(instanceId, defs) {
   if (!_orchParamPreset[instanceId]) _orchParamPreset[instanceId] = {};
   _orchParamPreset[instanceId][ORCH_INPUT_DEFS_KEY] = {
     src: PARAM_SRC_FIXED,
-    value: JSON.stringify((defs || []).map(d => ({ key: d.key, type: d.type || 'string', description: d.description || '' }))),
+    value: JSON.stringify((defs || []).map(d => ({ key: d.key, label: d.label || '', type: d.type || '', value: d.value || '' }))),
   };
 }
 
 // 参数配置区与引用候选使用的参数列表
 function getOrchInputParams(instanceId) {
   return getOrchInputDefs(instanceId).map(d => ({
-    key: d.key, label: d.description || '', type: d.type || 'string', required: false, description: d.description || '',
+    key: d.key, label: d.label || '', type: d.type || '', required: false, description: d.label || '', defaultValue: d.value || '',
   }));
 }
 
@@ -10097,9 +10102,12 @@ function openOrchInputParamEditor(instanceId) {
     overlay.id = 'orch-input-modal-overlay';
     overlay.innerHTML = `<div class="modal" style="width:680px;max-width:96vw">
       <h2>编辑输入参数<button class="modal-close" onclick="closeOrchInputParamEditor()" title="关闭">&times;</button></h2>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">定义本节点输出的参数，确定后在「节点参数配置」里为每个参数配置来源；下游节点可通过「引用节点」直接引用这些参数。参数名只能包含字母、数字和下划线，且不能以数字开头。</div>
-      <div id="orch-input-rows" style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto"></div>
-      <button class="btn btn-sm btn-outline" type="button" style="margin-top:8px" onclick="addOrchInputParamRow()">+ 添加参数</button>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">定义本节点输出的参数，确定后在「节点参数配置」里为每个参数配置来源；下游节点可通过「引用节点」直接引用这些参数。字段名只能包含字母、数字和下划线，且不能以数字开头；来源取不到值（为空）时使用默认值。</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span id="orch-input-count" style="color:var(--text-muted);font-size:.78rem">0 个参数</span>
+        <button class="btn btn-sm btn-outline" type="button" onclick="addOrchInputParamRow()">+ 添加参数</button>
+      </div>
+      <div id="orch-input-rows" style="max-height:50vh;overflow-y:auto"></div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="closeOrchInputParamEditor()">取消</button>
         <button class="btn btn-primary" onclick="confirmOrchInputParamEditor()">确定</button>
@@ -10111,25 +10119,28 @@ function openOrchInputParamEditor(instanceId) {
   const defs = getOrchInputDefs(instanceId);
   if (defs.length) defs.forEach(d => addOrchInputParamRow(d));
   else addOrchInputParamRow();
+  refreshOrchInputParamCount();
   overlay.classList.add('show');
 }
 
-// 新增一行参数定义；data-orig 记录原参数名，改名时把已配置的来源迁移到新名字下
+// 新增一行参数定义（字段名 / 名称 / 转换类型 / 默认值，与根节点返回值定义一致）；
+// data-orig 记录原字段名，改名时把已配置的来源迁移到新名字下
 function addOrchInputParamRow(def) {
   const box = document.getElementById('orch-input-rows');
   if (!box) return;
-  const d = def || { key: '', type: 'string', description: '' };
+  const d = def || { key: '', label: '', type: '', value: '' };
+  const inputStyle = 'min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem';
   const row = document.createElement('div');
   row.className = 'orch-input-row';
-  row.style.cssText = 'display:flex;gap:6px;align-items:center';
+  row.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0;border-bottom:1px dashed var(--border)';
   row.setAttribute('data-orig', d.key || '');
-  row.innerHTML = `<input class="orch-input-key" placeholder="参数名" value="${esc(d.key || '')}" style="flex:0 1 180px;min-width:120px">
-    <select class="orch-input-type" style="flex:0 1 100px;min-width:90px">
-      ${ORCH_INPUT_PARAM_TYPES.map(t => `<option value="${t}" ${t === (d.type || 'string') ? 'selected' : ''}>${t}</option>`).join('')}
-    </select>
-    <input class="orch-input-desc" placeholder="说明" value="${esc(d.description || '')}" style="flex:1 1 200px;min-width:120px">
-    <button class="btn-remove-param" type="button" onclick="removeOrchInputParamRow(this)" title="删除此参数">&times;</button>`;
+  row.innerHTML = `<input class="orch-input-key" placeholder="key（字段名）" title="参数的键名" value="${esc(d.key || '')}" style="flex:0 0 140px;${inputStyle};font-family:monospace">
+    <input class="orch-input-label" placeholder="名称（说明）" title="中文名/说明（选填）" value="${esc(d.label || '')}" style="flex:0 0 120px;${inputStyle}">
+    <select class="orch-input-type" title="转换类型" style="flex:0 0 92px;${inputStyle}">${orchRootResponseTypeHTML(d.type || '')}</select>
+    <input class="orch-input-value" placeholder="默认值" title="来源取不到值时使用，可填固定值或 {{arguments.xxx}} 等表达式" value="${esc(d.value || '')}" style="flex:1 1 180px;${inputStyle};font-family:monospace">
+    <button class="btn btn-sm btn-danger" type="button" title="删除该参数" onclick="removeOrchInputParamRow(this)">✕</button>`;
   box.appendChild(row);
+  refreshOrchInputParamCount();
   const keyEl = row.querySelector('.orch-input-key');
   if (!def && keyEl) keyEl.focus();
 }
@@ -10137,6 +10148,12 @@ function addOrchInputParamRow(def) {
 function removeOrchInputParamRow(btn) {
   const row = btn.closest('.orch-input-row');
   if (row) row.remove();
+  refreshOrchInputParamCount();
+}
+
+function refreshOrchInputParamCount() {
+  const cnt = document.getElementById('orch-input-count');
+  if (cnt) cnt.textContent = document.querySelectorAll('#orch-input-rows .orch-input-row').length + ' 个参数';
 }
 
 function closeOrchInputParamEditor() {
@@ -10154,15 +10171,16 @@ function confirmOrchInputParamEditor() {
   const seen = {};
   for (const row of rows) {
     const key = (row.querySelector('.orch-input-key').value || '').trim();
-    const type = row.querySelector('.orch-input-type').value || 'string';
-    const description = (row.querySelector('.orch-input-desc').value || '').trim();
+    const label = (row.querySelector('.orch-input-label').value || '').trim();
+    const type = row.querySelector('.orch-input-type').value || '';
+    const value = (row.querySelector('.orch-input-value').value || '').trim();
     const orig = row.getAttribute('data-orig') || '';
-    if (!key && !description) continue; // 空行忽略
-    if (!key) { showToast('有参数未填写参数名', 'error'); return; }
-    if (!ORCH_INPUT_KEY_RE.test(key)) { showToast('参数名 ' + key + ' 不合法：只能包含字母、数字和下划线，且不能以数字开头', 'error'); return; }
-    if (seen[key]) { showToast('参数名 ' + key + ' 重复', 'error'); return; }
+    if (!key && !label && !value) continue; // 空行忽略
+    if (!key) { showToast('有参数未填写字段名', 'error'); return; }
+    if (!ORCH_INPUT_KEY_RE.test(key)) { showToast('字段名 ' + key + ' 不合法：只能包含字母、数字和下划线，且不能以数字开头', 'error'); return; }
+    if (seen[key]) { showToast('字段名 ' + key + ' 重复', 'error'); return; }
     seen[key] = true;
-    defs.push({ key, type, description, orig });
+    defs.push({ key, label, type, value, orig });
   }
 
   storeParamPreset(); // 先把参数配置区当前的编辑结果写回暂存
@@ -10179,8 +10197,8 @@ function confirmOrchInputParamEditor() {
     } else {
       p = { src: PARAM_SRC_ENTRY, value: d.key, private: false, type: d.type, key: d.key, required: false, policy: 'frontend' };
     }
-    p.label = d.description;
-    p.description = d.description;
+    p.label = d.label;
+    p.description = d.label;
     newPreset[d.key] = p;
   });
   _orchParamPreset[instanceId] = newPreset;
