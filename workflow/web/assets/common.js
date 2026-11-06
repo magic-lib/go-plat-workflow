@@ -5305,11 +5305,23 @@ async function loadRootChains() {
           <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
           <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
           <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
+          <button class="btn btn-sm btn-outline edit-only" onclick="copyRootChain('${esc(c.chain_id)}')">复制</button>
           ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>`}
         </div></td>
       </tr>`;
     }).join('');
   } catch (e) { showToast('加载根链失败: ' + e.message, 'error'); }
+}
+
+// 复制根链：新建一条内容与该链当前草稿一致的根链（名称加「-副本」，不复制发布记录）
+async function copyRootChain(id) {
+  const c = (window._rootChainsForEdit || []).find(x => x.chain_id === id);
+  if (!confirm('确定复制根链 ' + id + (c && c.name ? '（' + c.name + '）' : '') + ' 吗？\n将新建一条内容相同的根链（复制当前草稿，不复制发布记录）。')) return;
+  try {
+    const def = await api('/api/root-chains/' + encodeURIComponent(id) + '/copy', { method: 'POST' });
+    showToast('已复制为新根链 ' + def.chain_id + '（' + def.name + '）', 'success');
+    loadRootChains();
+  } catch (e) { showToast('复制失败: ' + e.message, 'error'); }
 }
 
 async function deleteRootChain(id) {
