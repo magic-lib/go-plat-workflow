@@ -7034,7 +7034,7 @@ function removeOrchConnRow(rowId) {
 // Connections 列表排序：按 from 实例 ID 自然序（数字 ID 在前、随机后缀在后，与下拉排序一致），
 // from 相同再按 relationType 排（留空视为 Success），再按 to 排，使同一节点的连接排在一起；
 // 以上都相同的多条保持原有相对顺序（稳定排序）。
-// 在加载链和图上拖拽新增连接后调用；未选 from 的空行排在最后。
+// 在加载链、图上拖拽新增连接后及点「刷新排序」时调用；未选 from 的空行排在最后。
 function sortOrchConnRows() {
   const container = document.getElementById('orch-conn-container');
   if (!container) return;
@@ -7054,6 +7054,14 @@ function sortOrchConnRows() {
   }));
   keyed.sort((x, y) => cmp(x.from, y.from) || cmp(x.type, y.type) || cmp(x.to, y.to) || (x.idx - y.idx));
   keyed.forEach(k => container.appendChild(k.row));
+}
+
+// 「刷新排序」按钮：手动「+ 添加连接」的行固定追加在末尾（编辑时不自动重排），点此按规则统一重新排序
+function refreshOrchConnSort() {
+  if (!document.querySelector('#orch-conn-container .orch-conn-row')) return;
+  sortOrchConnRows();
+  onOrchChange();
+  showToast('连接列表已重新排序', 'success');
 }
 
 function collectOrchConnections() {
