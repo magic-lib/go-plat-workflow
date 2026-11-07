@@ -6284,6 +6284,7 @@ async function showFlowchart(chain) {
 
   try {
     await mermaid.run({ nodes: [container] });
+    rerouteMermaidEdges(container);
   } catch(e) {
     container.innerHTML = '<p style="color:#ef4444;font-weight:600">渲染失败: ' + esc(e.message) + '</p><pre style="font-size:.75rem;margin-top:8px;white-space:pre-wrap">' + esc(syntax) + '</pre>';
   }
@@ -7174,7 +7175,7 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
   conns.forEach(c => {
     const from = idMap[c.from_id];
     const to = idMap[c.to_id];
-    if (from && to) edgeMap['L_' + from + '_' + to] = { from_id: c.from_id, to_id: c.to_id };
+    if (from && to) edgeMap['L_' + from + '_' + to] = { from_id: c.from_id, to_id: c.to_id, from_safe: from, to_safe: to };
   });
   window._orchEdgeMap = edgeMap;
   mergedEdges.forEach(m => {
@@ -7205,6 +7206,114 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
   // 暴露 id 映射供预览图叠加删除叉时反向查询原始实例 ID
   window._orchIdMap = idMap;
   return lines.join('\n');
+}
+
+// Mermaid 渲染后重画连线：Mermaid（TD 布局）只会从节点下边连到上边，复杂拓扑里线条容易绕远、交叉。
+// 这里取每个节点上/下/左/右四条边的中点作为候选连接点，对每条连线在起止节点的候选点两两组合中选
+// 「距离最近、不往回绕且不穿过其它节点」的一对，用沿边法线方向出入的三次贝塞尔曲线重画，并把连线标签移到曲线中点；
+// 所有组合都会穿过其它节点时保留 Mermaid 原有走线。
+// 节点位置仍由 Mermaid 排版，只改连线端点，所以交叉能减少但不能保证完全消除。
+// 依赖 buildMermaidFromState 暴露的 _orchEdgeMap。
+// 编排页 Live Preview 与 Root Chains「流程图」弹窗共用；任何异常都不影响原图展示。
+function rerouteMermaidEdges(container) {
+  try {
+    const svg = container && container.querySelector('svg');
+    const edgeMap = window._orchEdgeMap || {};
+    if (!svg) return;
+    // 节点矩形（与连线同一坐标系）：g.node 的 translate + 自身形状的包围盒（排除叠加的删除叉/连线把手）
+    const rects = {};
+    svg.querySelectorAll('g.node').forEach(g => {
+      const m = (g.id || '').match(/-flowchart-(.+)-\d+$/);
+      if (!m) return;
+      let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+      Array.from(g.children).forEach(ch => {
+        if (ch.classList && (ch.classList.contains('orch-node-del') || ch.classList.contains('orch-node-link'))) return;
+        if (typeof ch.getBBox !== 'function') return;
+        const b = ch.getBBox();
+        if (!b.width && !b.height) return;
+        x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y);
+        x2 = Math.max(x2, b.x + b.width); y2 = Math.max(y2, b.y + b.height);
+      });
+      if (!isFinite(x1)) return;
+      const tf = g.transform && g.transform.baseVal && g.transform.baseVal.consolidate();
+      const tx = tf ? tf.matrix.e : 0, ty = tf ? tf.matrix.f : 0;
+      rects[m[1]] = { x: tx + x1, y: ty + y1, w: x2 - x1, h: y2 - y1 };
+    });
+    const anchorsOf = r => [
+      { x: r.x + r.w / 2, y: r.y,       nx: 0,  ny: -1 }, // 上
+      { x: r.x + r.w / 2, y: r.y + r.h, nx: 0,  ny: 1 },  // 下
+      { x: r.x,           y: r.y + r.h / 2, nx: -1, ny: 0 }, // 左
+      { x: r.x + r.w,     y: r.y + r.h / 2, nx: 1,  ny: 0 },  // 右
+    ];
+    const labelById = {};
+    svg.querySelectorAll('g.edgeLabel').forEach(l => {
+      const inner = l.querySelector('[data-id]');
+      if (inner) labelById[inner.getAttribute('data-id')] = l;
+    });
+    svg.querySelectorAll('path.flowchart-link').forEach(path => {
+      const dataId = path.getAttribute('data-id') || '';
+      const key = dataId.replace(/_\d+$/, '');
+      const e = edgeMap[key];
+      if (!e) return;
+      const a = rects[e.from_safe], b = rects[e.to_safe];
+      if (!a || !b || a === b) return;
+      const cands = [];
+      anchorsOf(a).forEach(sa => {
+        anchorsOf(b).forEach(sb => {
+          const dx = sb.x - sa.x, dy = sb.y - sa.y;
+          const dist = Math.hypot(dx, dy);
+          // 起点应朝目标方向出线、终点应从来源方向进线，否则视为往回绕，加惩罚
+          const outDot = sa.nx * dx + sa.ny * dy;
+          const inDot = sb.nx * -dx + sb.ny * -dy;
+          let cost = dist;
+          if (outDot < 0) cost += 200 - outDot * 2;
+          if (inDot < 0) cost += 200 - inDot * 2;
+          const k = Math.max(30, Math.min(90, dist * 0.4));
+          const c1 = { x: sa.x + sa.nx * k, y: sa.y + sa.ny * k };
+          const c2 = { x: sb.x + sb.nx * k, y: sb.y + sb.ny * k };
+          cands.push({ cost, sa, sb, c1, c2 });
+        });
+      });
+      cands.sort((x, y) => x.cost - y.cost);
+      // 按代价从低到高取第一条不穿过其它节点的曲线；全部都会穿过时保留 Mermaid 原有（会绕开节点的）走线
+      const others = Object.keys(rects).map(k => rects[k]).filter(r => r !== a && r !== b);
+      const crosses = (cd) => {
+        for (let i = 1; i < 20; i++) {
+          const t = i / 20, u = 1 - t;
+          const x = u * u * u * cd.sa.x + 3 * u * u * t * cd.c1.x + 3 * u * t * t * cd.c2.x + t * t * t * cd.sb.x;
+          const y = u * u * u * cd.sa.y + 3 * u * u * t * cd.c1.y + 3 * u * t * t * cd.c2.y + t * t * t * cd.sb.y;
+          if (others.some(r => x > r.x - 4 && x < r.x + r.w + 4 && y > r.y - 4 && y < r.y + r.h + 4)) return true;
+        }
+        return false;
+      };
+      const best = cands.find(cd => !crosses(cd));
+      if (!best) return;
+      const sa = best.sa, sb = best.sb, c1 = best.c1, c2 = best.c2;
+      const f = v => Math.round(v * 10) / 10;
+      path.setAttribute('d', `M${f(sa.x)},${f(sa.y)} C${f(c1.x)},${f(c1.y)} ${f(c2.x)},${f(c2.y)} ${f(sb.x)},${f(sb.y)}`);
+      const lbl = labelById[dataId];
+      if (lbl) {
+        const mx = (sa.x + 3 * c1.x + 3 * c2.x + sb.x) / 8;
+        const my = (sa.y + 3 * c1.y + 3 * c2.y + sb.y) / 8;
+        lbl.setAttribute('transform', `translate(${f(mx)}, ${f(my)})`);
+      }
+    });
+    // 曲线从左右两侧出线可能超出原 viewBox，按实际内容扩展，避免被裁切
+    const vb = svg.viewBox && svg.viewBox.baseVal;
+    const content = svg.querySelector('g.root') || svg.querySelector('g');
+    if (vb && vb.width && content) {
+      const bb = content.getBBox();
+      const pad = 8;
+      const nx1 = Math.min(vb.x, bb.x - pad), ny1 = Math.min(vb.y, bb.y - pad);
+      const nx2 = Math.max(vb.x + vb.width, bb.x + bb.width + pad), ny2 = Math.max(vb.y + vb.height, bb.y + bb.height + pad);
+      if (nx1 < vb.x || ny1 < vb.y || nx2 > vb.x + vb.width || ny2 > vb.y + vb.height) {
+        svg.setAttribute('viewBox', `${nx1} ${ny1} ${nx2 - nx1} ${ny2 - ny1}`);
+        if (svg.style.maxWidth) svg.style.maxWidth = (nx2 - nx1) + 'px';
+      }
+    }
+  } catch (err) {
+    console.warn('rerouteMermaidEdges failed', err);
+  }
 }
 
 // Build Mermaid syntax for orchestration preview（复用通用构建函数）
@@ -8707,6 +8816,7 @@ async function renderOrchPreview() {
       el.removeAttribute('data-processed');
       el.textContent = syntax;
       await mermaid.run({ nodes: [el] });
+      rerouteMermaidEdges(el);
       enhanceOrchPreviewNodes(el);
       enhanceOrchPreviewEdges(el);
     }
