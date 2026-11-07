@@ -8629,6 +8629,38 @@ function centerOrchPreview() {
   area.scrollTop = Math.max(0, (area.scrollHeight - area.clientHeight) / 2);
 }
 
+// Live Preview 空白处按住鼠标拖动平移画面（放大后不用来回拖滚动条）：
+// 横向滚动预览区自身，纵向滚动页面（预览区纵向不溢出，纵向交给页面滚动条，见 syncOrchPreviewSize）。
+// 在节点、连线标签、连线把手、泡泡层上按下不触发，保留原有点击/拖拽连线行为。只绑定一次。
+function initOrchPreviewPan() {
+  const area = document.getElementById('orch-preview');
+  if (!area || area._orchPanBound) return;
+  area._orchPanBound = true;
+  area.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const t = e.target;
+    if (t && t.closest && t.closest('g.node, .orch-edge-label, .orch-node-link, .orch-switch-popover, button, input, textarea, select, a')) return;
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    const startLeft = area.scrollLeft, startTop = area.scrollTop;
+    const startPageX = window.scrollX, startPageY = window.scrollY;
+    area.classList.add('orch-panning');
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      area.scrollLeft = startLeft - dx;
+      area.scrollTop = startTop - dy;
+      window.scrollTo(startPageX, startPageY - dy);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      area.classList.remove('orch-panning');
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 // 放大/缩小：delta>0 放大，delta<0 缩小，限制 0.3~3 倍
 function zoomOrchPreview(delta) {
   _orchPreviewScale = Math.min(3, Math.max(0.3, _orchPreviewScale + delta));
@@ -8641,6 +8673,7 @@ function resetOrchPreview() {
 }
 
 async function renderOrchPreview() {
+  initOrchPreviewPan();
   const container = document.getElementById('orch-preview');
   const scaleBox = document.getElementById('orch-preview-scale');
   const nodeIds = getSelectedOrchNodeIds();

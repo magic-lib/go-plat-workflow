@@ -342,6 +342,9 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
    预览区本身不设高度（纵向交给页面滚动），因此不会出现纵向滚动条。 */
 .orch-preview-scale { transform-origin: top left; transition: transform .15s ease; width: 100%; height: auto; }
 .orch-preview-area svg { display: block; }
+/* Live Preview 空白处可按住拖动平移 */
+.orch-preview-area { cursor: grab; }
+.orch-preview-area.orch-panning, .orch-preview-area.orch-panning * { cursor: grabbing !important; user-select: none; }
 /* Live Preview 节点右上角删除叉：纯 X，常显，hover 变红 */
 .orch-node-del { opacity: .7; cursor: pointer; pointer-events: all; transition: opacity .12s ease; }
 g.node:hover > .orch-node-del { opacity: 1; }
