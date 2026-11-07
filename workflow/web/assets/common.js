@@ -8669,7 +8669,7 @@ async function renderOrchPreview() {
 // Live Preview 按 traceId 回放执行路径
 // ============================================================
 // 查询结果缓存：改连接、缩放等触发重绘后重新叠加高亮，直到点「清除」。
-// 结构：{ traceId, chainId, steps:[{instId, order, log}], nodes:{instId:{orders, error}}, edges:Set('from|to'), missing:[] }
+// 结构：{ traceId, chainId, steps:[{instId, order, log}], nodes:{instId:{orders, error}}, edges:Set('from|to') }
 let _orchTrace = null;
 
 // 按输入的 traceId + 当前根链 chain_id 查询 node 运行日志，按时间顺序在图上标出执行路径
@@ -8686,7 +8686,7 @@ async function queryOrchTracePath() {
     const logs = await fetchOrchTraceLogs(traceId, chainId);
     _orchTrace = buildOrchTracePath(traceId, chainId, logs);
     applyOrchTraceHighlight();
-    renderOrchTraceInfo();
+    syncOrchTraceClearBtn();
     if (!logs.length) showToast('该 traceId 在当前根链下没有节点日志', 'error');
     else if (!_orchTrace.steps.length) showToast('查到日志，但节点都不在当前图中', 'error');
   } catch (e) {
@@ -8700,7 +8700,7 @@ async function queryOrchTracePath() {
 function clearOrchTrace() {
   _orchTrace = null;
   applyOrchTraceHighlight();
-  renderOrchTraceInfo();
+  syncOrchTraceClearBtn();
 }
 
 // 分页拉取该 trace 在当前根链下的全部 node 日志（最多 1000 条），按执行时间正序返回
@@ -8735,13 +8735,9 @@ function buildOrchTracePath(traceId, chainId, logs) {
   const graphIds = new Set([...getSelectedOrchNodeIds(), ...getSelectedOrchSubIds()]);
   const nodes = {};
   const steps = [];
-  const missing = [];
   logs.forEach(r => {
     const id = r.node_id;
-    if (!graphIds.has(id)) {
-      if (!missing.includes(id)) missing.push(id);
-      return;
-    }
+    if (!graphIds.has(id)) return;
     const order = steps.length + 1;
     steps.push({ instId: id, order: order, log: r });
     const n = nodes[id] || (nodes[id] = { orders: [], error: false });
@@ -8766,7 +8762,7 @@ function buildOrchTracePath(traceId, chainId, logs) {
     const hasOut = [...edges].some(k => k.startsWith(a + '|'));
     if (!hasOut && conns.some(c => c.from_id === a && c.to_id === b)) edges.add(a + '|' + b);
   }
-  return { traceId: traceId, chainId: chainId, steps: steps, nodes: nodes, edges: edges, missing: missing, total: logs.length };
+  return { traceId: traceId, chainId: chainId, steps: steps, nodes: nodes, edges: edges };
 }
 
 // 在当前 Live Preview 的 SVG 上叠加/清除执行路径高亮
@@ -8894,41 +8890,10 @@ function applyOrchTraceHighlight() {
   syncOrchPreviewSize();
 }
 
-// 渲染预览区上方的执行路径说明：按时间顺序列出经过的节点及走出的 relationType
-function renderOrchTraceInfo() {
-  const box = document.getElementById('orch-trace-info');
+// 有查询结果时才显示「清除」按钮
+function syncOrchTraceClearBtn() {
   const clearBtn = document.getElementById('orch-trace-clear');
   if (clearBtn) clearBtn.style.display = _orchTrace ? '' : 'none';
-  if (!box) return;
-  if (!_orchTrace) { box.style.display = 'none'; box.innerHTML = ''; return; }
-  const tr = _orchTrace;
-  const fmtTime = r => {
-    const ms = Date.parse(r.created_at || '');
-    const d = isNaN(ms) ? new Date((Number(r.timestamp) || 0) * 1000) : new Date(ms);
-    const pad = (n, l) => String(n).padStart(l || 2, '0');
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
-  };
-  let html = `<div class="orch-trace-summary">traceId <code>${esc(tr.traceId)}</code>：共 ${tr.total} 条节点日志，经过 ${Object.keys(tr.nodes).length} 个节点`;
-  if (tr.missing.length) html += `；<span class="orch-trace-miss" title="${esc(tr.missing.join(', '))}">${tr.missing.length} 个节点不在当前图中</span>`;
-  html += '</div>';
-  if (tr.steps.length) {
-    html += '<div class="orch-trace-steps">' + tr.steps.map((s, i) => {
-      const r = s.log;
-      const err = r.level === 'error' || r.error_msg;
-      const tip = [
-        '时间: ' + fmtTime(r),
-        '节点: ' + s.instId,
-        '耗时: ' + (r.duration_ms || 0) + 'ms',
-        'relationType: ' + (r.relation_type || 'Success'),
-        err ? '错误: ' + (r.error_msg || '') : '',
-      ].filter(Boolean).join('\n');
-      const step = `<span class="orch-trace-step${err ? ' orch-trace-step-err' : ''}" title="${esc(tip)}"><b>${s.order}</b> ${esc(r.node_name || s.instId)}</span>`;
-      const arrow = i + 1 < tr.steps.length ? `<span class="orch-trace-arrow">→${esc(r.relation_type || 'Success')}→</span>` : '';
-      return step + arrow;
-    }).join('') + '</div>';
-  }
-  box.innerHTML = html;
-  box.style.display = '';
 }
 
 // 在 Live Preview 的 mermaid 节点右上角叠加"删除叉"，hover 节点时显示，点击删除该实例
