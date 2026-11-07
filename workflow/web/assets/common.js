@@ -8712,12 +8712,35 @@ function enhanceOrchPreviewNodes(container) {
     del.appendChild(hit); del.appendChild(x1); del.appendChild(x2);
     if (!isMidChain) g.appendChild(del);
 
+    // 节点底部中间的连线把手：从这里按下拖到另一个节点即新增一条 from → to 连接（只读预览不显示）
+    g.setAttribute('data-orch-inst', instId);
+    if (!document.body.classList.contains('orch-viewonly')) {
+      const oldLink = g.querySelector(':scope > g.orch-node-link');
+      if (oldLink) oldLink.remove();
+      const link = document.createElementNS(SVGNS, 'g');
+      link.setAttribute('class', 'orch-node-link');
+      link.setAttribute('transform', `translate(${bbox.x + bbox.width / 2},${bbox.y + bbox.height})`);
+      const linkHit = document.createElementNS(SVGNS, 'circle');
+      linkHit.setAttribute('r', '9');
+      linkHit.setAttribute('fill', 'transparent');
+      const dot = document.createElementNS(SVGNS, 'circle');
+      dot.setAttribute('r', '4.5');
+      dot.setAttribute('class', 'orch-node-link-dot');
+      const linkTitle = document.createElementNS(SVGNS, 'title');
+      linkTitle.textContent = '按住拖到另一个节点，新增连接';
+      link.appendChild(linkHit); link.appendChild(dot); link.appendChild(linkTitle);
+      link.addEventListener('mousedown', (e) => startOrchLinkDrag(e, instId, g));
+      g.appendChild(link);
+    }
+
     // Live Preview 任意节点点击均可打开编辑器（改本链实例名称；Activity/CondSwitch 还可改路由条件）
     // 命中删除叉则删除，否则打开编辑器（用 target 判定，避免热区外误触或 stopPropagation 失效导致误开编辑器）
     g.style.cursor = 'pointer';
     g.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      if (_orchLinkJustDragged) return;
+      if (e.target && e.target.closest && e.target.closest('.orch-node-link')) return;
       if (e.target && e.target.closest && e.target.closest('.orch-node-del')) {
         removeOrchNodeInstanceConfirm(instId);
         return;
@@ -8733,8 +8756,97 @@ function enhanceOrchPreviewNodes(container) {
   });
 }
 
+// Live Preview 拖拽连线：拖拽结束后的那次 click 不应打开节点编辑器
+let _orchLinkJustDragged = false;
+
+// 从节点连线把手按下开始拖拽：SVG 上画一条跟随鼠标的虚线箭头，松开在另一节点上即新增连接。
+// 坐标统一用 svg.getScreenCTM() 换算，预览区缩放（transform: scale）后也能对准。
+function startOrchLinkDrag(e, fromId, fromG) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const svg = fromG.ownerSVGElement;
+  if (!svg) return;
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const toSvgPoint = (clientX, clientY) => {
+    const m = svg.getScreenCTM();
+    if (!m) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    return pt.matrixTransform(m.inverse());
+  };
+  const r = fromG.getBoundingClientRect();
+  const start = toSvgPoint(r.left + r.width / 2, r.bottom);
+  if (!start) return;
+  if (!svg.querySelector('#orch-link-arrow')) {
+    let defs = svg.querySelector(':scope > defs');
+    if (!defs) { defs = document.createElementNS(SVGNS, 'defs'); svg.insertBefore(defs, svg.firstChild); }
+    const marker = document.createElementNS(SVGNS, 'marker');
+    marker.setAttribute('id', 'orch-link-arrow');
+    marker.setAttribute('viewBox', '0 0 10 10');
+    marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5');
+    marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7');
+    marker.setAttribute('orient', 'auto-start-reverse');
+    const path = document.createElementNS(SVGNS, 'path');
+    path.setAttribute('d', 'M0,0 L10,5 L0,10 z');
+    path.setAttribute('class', 'orch-link-arrow-head');
+    marker.appendChild(path);
+    defs.appendChild(marker);
+  }
+  const line = document.createElementNS(SVGNS, 'line');
+  line.setAttribute('class', 'orch-link-temp');
+  line.setAttribute('x1', start.x); line.setAttribute('y1', start.y);
+  line.setAttribute('x2', start.x); line.setAttribute('y2', start.y);
+  line.setAttribute('marker-end', 'url(#orch-link-arrow)');
+  svg.appendChild(line);
+  document.body.classList.add('orch-linking');
+  hideOrchSwitchPopover();
+
+  const findTarget = (ev) => {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    const g = el && el.closest ? el.closest('g.node[data-orch-inst]') : null;
+    return g && svg.contains(g) && g !== fromG ? g : null;
+  };
+  let hoverG = null;
+  const onMove = (ev) => {
+    const p = toSvgPoint(ev.clientX, ev.clientY);
+    if (p) { line.setAttribute('x2', p.x); line.setAttribute('y2', p.y); }
+    const t = findTarget(ev);
+    if (hoverG !== t) {
+      if (hoverG) hoverG.classList.remove('orch-link-target');
+      hoverG = t;
+      if (hoverG) hoverG.classList.add('orch-link-target');
+    }
+  };
+  const onUp = (ev) => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    line.remove();
+    if (hoverG) hoverG.classList.remove('orch-link-target');
+    document.body.classList.remove('orch-linking');
+    _orchLinkJustDragged = true;
+    setTimeout(() => { _orchLinkJustDragged = false; }, 0);
+    const t = findTarget(ev);
+    if (t) addOrchConnFromPreview(fromId, t.getAttribute('data-orch-inst'));
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// 图上拖拽连线落点后新增连接：忽略自连，相同 from → to 已存在时提示不重复添加
+function addOrchConnFromPreview(fromId, toId) {
+  if (!fromId || !toId || fromId === toId) return;
+  if (collectOrchConnections().some(c => c.from_id === fromId && c.to_id === toId)) {
+    showToast('连接已存在', 'error');
+    return;
+  }
+  addOrchConnRow(fromId, toId);
+  onOrchChange();
+}
+
 // 在 Live Preview 节点上悬停时，弹出泡泡层展示该节点生效的 switch_condition 表达式
 function showOrchSwitchPopover(expr, gNode) {
+  if (document.body.classList.contains('orch-linking')) return;
   const host = document.getElementById('orch-preview');
   if (!host) return;
   let pop = document.getElementById('orch-switch-popover');

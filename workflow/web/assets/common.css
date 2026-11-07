@@ -346,6 +346,15 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
 g.node:hover > .orch-node-del { opacity: 1; }
 .orch-node-del-x { stroke: #6b7280; stroke-width: 2; stroke-linecap: round; }
 .orch-node-del:hover .orch-node-del-x { stroke: #ef4444; }
+/* Live Preview 节点底部连线把手：按住拖到另一节点即新增连接 */
+.orch-node-link { cursor: crosshair; pointer-events: all; }
+.orch-node-link-dot { fill: #fff; stroke: #6366f1; stroke-width: 1.5; opacity: .75; transition: r .12s ease, opacity .12s ease; }
+g.node:hover > .orch-node-link .orch-node-link-dot, .orch-node-link:hover .orch-node-link-dot { r: 6; opacity: 1; fill: #6366f1; }
+.orch-link-temp { stroke: #6366f1; stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+.orch-link-arrow-head { fill: #6366f1; }
+g.node.orch-link-target > rect, g.node.orch-link-target > polygon, g.node.orch-link-target > path, g.node.orch-link-target > circle { stroke: #6366f1 !important; stroke-width: 3px !important; }
+g.node.orch-link-target { filter: drop-shadow(0 0 5px #6366f1); }
+body.orch-linking, body.orch-linking * { cursor: crosshair !important; user-select: none; }
 .orch-preview-empty { text-align: center; color: var(--text-muted); padding: 40px; font-size: .9rem; }
 /* 已选节点表中链路中间节点（有父节点也有子节点）的锁定提示，删除按钮被隐藏 */
 .orch-node-locked { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; color: var(--text-muted); white-space: nowrap; }
