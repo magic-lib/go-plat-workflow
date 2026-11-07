@@ -6767,6 +6767,8 @@ function orchConnOptionsHtml() {
     const s = _orchSubChains.find(x => x.chain_id === id);
     items.push({ id: id, name: (s && s.name) ? s.name : id, prefix: '🔗' });
   });
+  // 按 ID 排序（数字按自然序），便于在下拉中快速定位节点；Node（N…）自然排在 Sub Chain 前
+  items.sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
   // 名称后始终附加完整实例 ID（如 N000034__hflz1），方便区分，与右侧 Live Preview 的 Id: 标识对应
   return items.map(it => {
     const label = it.name + ' · ' + it.id;
