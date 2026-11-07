@@ -6302,8 +6302,6 @@ let orchConnSeq = 0;
 let _orchNodeListFiltered = [];  // 当前过滤后的节点列表（供分页复用）
 let _orchNodeListPage = 1;       // 当前页码
 let _orchNodeListPageSize = 20;  // 每页条数
-let _orchSwitchExprByInstance = {}; // Live Preview 用：实例ID -> 生效的 switch_condition 表达式
-let _orchSwitchPopover = null;   // 鼠标悬停弹出的 switch_condition 泡泡层 DOM
 let _orchSwitchOverrides = {};   // 每节点实例的 switch_condition 覆盖（key=实例 instanceId，仅本链生效，不改节点定义）
 let _orchNameOverrides = {};     // 每节点实例的名称覆盖（key=实例 instanceId，仅本链生效，不改节点定义）
 let _orchSwitchEditId = '';      // 当前正在编辑 switch_condition 的节点实例 ID
@@ -7082,8 +7080,6 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
   nodes = nodes || [];
   subChains = subChains || [];
   conns = conns || [];
-  // 重置 Live Preview 的 switch_condition 表达式映射（每次重绘重建）
-  window._orchSwitchExprByInstance = {};
 
   const allIds = new Set([...nodeIds, ...subIds]);
   conns.forEach(c => { allIds.add(c.from_id); allIds.add(c.to_id); });
@@ -7128,16 +7124,18 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     const instLine = inst && inst.instanceId !== baseId ? `<small>Id: ${esc(inst.instanceId)}</small>` : '';
     const callLine = (inst && inst.type === ORCH_CALL_NODE_TYPE) ? `<small>→ 调用根链: ${esc(orchCallTargetText(inst))}</small>`
       : (isOrchInputInst(inst) ? `<small>→ ${esc(orchInputDefsSummary(inst.instanceId))}</small>` : '');
-    lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}${callLine ? '<br/>'+callLine : ''}"]`);
-    (kindSafeIds[clsName] = kindSafeIds[clsName] || []).push(safe);
-    // 记录该实例生效的 switch_condition 表达式（覆盖值优先，其次节点默认），供悬停弹层与点击编辑展示。
-    // 仅对具备 switch_condition 能力的节点类型（Activity / CondSwitch）有意义。
+    // 该实例生效的 switch_condition（覆盖值优先，其次节点默认；仅 Activity / CondSwitch 有意义）直接显示在节点内：
+    // 用醒目配色标识，最多两行、超出省略（样式见 .orch-sw-cond），取代原来的悬停泡泡层（会引起布局抖动）
+    let swLine = '';
     if (n && (n.type === 'custom/Activity' || n.type === 'custom/CondSwitch')) {
-      const defExpr = nodeSwitchConditionText(n);
       const effExpr = Object.prototype.hasOwnProperty.call(_orchSwitchOverrides, id)
-        ? _orchSwitchOverrides[id] : defExpr;
-      if (effExpr) window._orchSwitchExprByInstance[id] = effExpr;
+        ? _orchSwitchOverrides[id] : nodeSwitchConditionText(n);
+      const expr = String(effExpr || '').replace(/\s+/g, ' ').trim();
+      // 文字颜色写成行内 !important：Mermaid classDef 的节点配色以 !important 作用到 span，样式表无法覆盖
+      if (expr) swLine = `<span class='orch-sw-cond' style='color:#b45309 !important'>⑂ ${esc(expr)}</span>`;
     }
+    lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}${callLine ? '<br/>'+callLine : ''}${swLine}"]`);
+    (kindSafeIds[clsName] = kindSafeIds[clsName] || []).push(safe);
   });
   subSet.forEach(id => {
     const safe = idMap[id];
@@ -8639,7 +8637,7 @@ function initOrchPreviewPan() {
   area.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     const t = e.target;
-    if (t && t.closest && t.closest('g.node, .orch-edge-label, .orch-node-link, .orch-switch-popover, button, input, textarea, select, a')) return;
+    if (t && t.closest && t.closest('g.node, .orch-edge-label, .orch-node-link, button, input, textarea, select, a')) return;
     e.preventDefault();
     const startX = e.clientX, startY = e.clientY;
     const startLeft = area.scrollLeft, startTop = area.scrollTop;
@@ -8679,9 +8677,6 @@ async function renderOrchPreview() {
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
   const conns = collectOrchConnections();
-  // 重绘前移除旧的悬停泡泡层，避免残留
-  const oldPop = document.getElementById('orch-switch-popover');
-  if (oldPop) oldPop.remove();
 
   if (nodeIds.length === 0 && subIds.length === 0) {
     scaleBox.innerHTML = '<div class="orch-preview-empty">选择节点并添加连接后，这里将显示实时流程图</div>';
@@ -8803,12 +8798,6 @@ function enhanceOrchPreviewNodes(container) {
       selectOrchParamBlock(instId);
       orchOpenNodeSwitchEditor(instId);
     });
-    // 具备 switch_condition 的节点（Activity / CondSwitch）：悬停弹泡泡层展示路由条件
-    const swExpr = (window._orchSwitchExprByInstance || {})[instId];
-    if (swExpr) {
-      g.addEventListener('mouseenter', () => showOrchSwitchPopover(swExpr, g));
-      g.addEventListener('mouseleave', hideOrchSwitchPopover);
-    }
   });
 }
 
@@ -8888,7 +8877,6 @@ function startOrchLinkDrag(e, fromId, fromG) {
   line.setAttribute('marker-end', 'url(#orch-link-arrow)');
   svg.appendChild(line);
   document.body.classList.add('orch-linking');
-  hideOrchSwitchPopover();
 
   const findTarget = (ev) => {
     const el = document.elementFromPoint(ev.clientX, ev.clientY);
@@ -8939,43 +8927,6 @@ function addOrchConnFromPreview(fromId, toId) {
     }
     showToast('已新增第 ' + (existCount + 1) + ' 条相同节点间的连接，请在 Connections 中填写连接类型', 'success');
   }
-}
-
-// 在 Live Preview 节点上悬停时，弹出泡泡层展示该节点生效的 switch_condition 表达式
-function showOrchSwitchPopover(expr, gNode) {
-  if (document.body.classList.contains('orch-linking')) return;
-  const host = document.getElementById('orch-preview');
-  if (!host) return;
-  let pop = document.getElementById('orch-switch-popover');
-  if (!pop) {
-    pop = document.createElement('div');
-    pop.id = 'orch-switch-popover';
-    pop.className = 'orch-switch-popover';
-    host.appendChild(pop);
-    // 离开整个预览区时隐藏泡泡层（仅绑定一次）
-    if (!host._orchPopBound) {
-      host.addEventListener('mouseleave', hideOrchSwitchPopover);
-      host._orchPopBound = true;
-    }
-  }
-  _orchSwitchPopover = pop;
-  pop.innerHTML = '<div class="osp-title">switch_condition</div>'
-    + '<textarea readonly class="osp-text">' + orchSafeText(expr) + '</textarea>';
-  // 相对预览区定位到该节点下方
-  const cRect = host.getBoundingClientRect();
-  const nRect = gNode.getBoundingClientRect();
-  pop.style.left = (nRect.left - cRect.left + host.scrollLeft) + 'px';
-  pop.style.top = (nRect.bottom - cRect.top + host.scrollTop + 4) + 'px';
-  pop.style.display = 'block';
-}
-
-function hideOrchSwitchPopover() {
-  if (_orchSwitchPopover) _orchSwitchPopover.style.display = 'none';
-}
-
-// 仅转义 < 与 &（textarea 内容安全），保留单引号等原样，避免表达式被改形
-function orchSafeText(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
 }
 
 function renderOrchDslPreview() {
