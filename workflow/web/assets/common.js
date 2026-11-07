@@ -6733,7 +6733,6 @@ function removeOrchConnRowsByInstance(instanceId) {
     const emptyEl = document.getElementById('orch-conn-empty');
     if (emptyEl) emptyEl.style.display = '';
   }
-  updateOrchConnMoveState();
   refreshOrchConnOptions();
 }
 
@@ -6960,6 +6959,8 @@ function orchConnOptionsHtml() {
     const s = _orchSubChains.find(x => x.chain_id === id);
     items.push({ id: id, name: (s && s.name) ? s.name : id, prefix: '🔗' });
   });
+  // 按 ID 排序（数字按自然序），便于在下拉中快速定位节点；Node（N…）自然排在 Sub Chain 前
+  items.sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
   // 名称后始终附加完整实例 ID（如 N000034__hflz1），方便区分，与右侧 Live Preview 的 Id: 标识对应
   return items.map(it => {
     const label = it.name + ' · ' + it.id;
@@ -7021,8 +7022,6 @@ function addOrchConnRow(fromId, toId, connType) {
     <select data-role="orch-to">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
     <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'')}" title="连接类型：留空表示新增未指定（Success / Failure / True / False / Stream 或自定义）">
     <button type="button" class="orch-cond-warn" data-role="orch-cond-warn" style="display:none" onclick="onOrchConnWarnClick(this)" title=""></button>
-    <button class="btn-move" onclick="moveOrchConnRow('orch-conn-row-${orchConnSeq}',-1)" title="上移">▲</button>
-    <button class="btn-move" onclick="moveOrchConnRow('orch-conn-row-${orchConnSeq}',1)" title="下移">▼</button>
     <button class="btn-remove" onclick="removeOrchConnRow('orch-conn-row-${orchConnSeq}')" title="删除">&times;</button>
   `;
   container.appendChild(row);
@@ -7038,7 +7037,6 @@ function addOrchConnRow(fromId, toId, connType) {
   row.querySelector('[data-role="orch-from"]').addEventListener('change', () => { syncOrchConnRowTooltip(row); onOrchChange(); });
   row.querySelector('[data-role="orch-to"]').addEventListener('change', () => { syncOrchConnRowTooltip(row); onOrchChange(); });
   row.querySelector('[data-role="orch-type"]').addEventListener('input', onOrchChange);
-  updateOrchConnMoveState();
   refreshOrchConnWarns();
 }
 
@@ -7215,17 +7213,6 @@ function onOrchConnWarnClick(btn) {
   orchOpenNodeSwitchEditor(id);
 }
 
-// 更新连接行上移/下移按钮的可用状态（首行禁上移、末行禁下移）
-function updateOrchConnMoveState() {
-  const rows = Array.from(document.querySelectorAll('#orch-conn-container .orch-conn-row'));
-  rows.forEach((row, idx) => {
-    const up = row.querySelector('.btn-move[onclick*=",-1)"]');
-    const down = row.querySelector('.btn-move[onclick*=",1)"]');
-    if (up) up.disabled = idx === 0;
-    if (down) down.disabled = idx === rows.length - 1;
-  });
-}
-
 function removeOrchConnRow(rowId) {
   const row = document.getElementById(rowId);
   if (row) row.remove();
@@ -7234,24 +7221,40 @@ function removeOrchConnRow(rowId) {
     const emptyEl = document.getElementById('orch-conn-empty');
     if (emptyEl) emptyEl.style.display = '';
   }
-  updateOrchConnMoveState();
   onOrchChange();
 }
 
-// 连接行上移/下移：直接在容器内移动 DOM 节点，顺序即连接顺序（collectOrchConnections 按 DOM 顺序读取）
-function moveOrchConnRow(rowId, dir) {
-  const row = document.getElementById(rowId);
-  if (!row) return;
+// Connections 列表排序：按 from 实例 ID 自然序（数字 ID 在前、随机后缀在后，与下拉排序一致），
+// from 相同再按 relationType 排（留空视为 Success），再按 to 排，使同一节点的连接排在一起；
+// 以上都相同的多条保持原有相对顺序（稳定排序）。
+// 在加载链、图上拖拽新增连接后及点「刷新排序」时调用；未选 from 的空行排在最后。
+function sortOrchConnRows() {
   const container = document.getElementById('orch-conn-container');
-  if (dir < 0) {
-    const prev = row.previousElementSibling;
-    if (prev && prev.classList.contains('orch-conn-row')) container.insertBefore(row, prev);
-  } else {
-    const next = row.nextElementSibling;
-    if (next && next.classList.contains('orch-conn-row')) container.insertBefore(next, row);
-  }
-  updateOrchConnMoveState();
+  if (!container) return;
+  const rows = Array.from(container.querySelectorAll(':scope > .orch-conn-row'));
+  if (rows.length < 2) return;
+  const cmp = (a, b) => {
+    if (!a && !b) return 0;
+    if (!a) return 1;
+    if (!b) return -1;
+    return a.localeCompare(b, undefined, { numeric: true });
+  };
+  const keyed = rows.map((row, idx) => ({
+    row, idx,
+    from: row.querySelector('[data-role="orch-from"]').value,
+    to: row.querySelector('[data-role="orch-to"]').value,
+    type: row.querySelector('[data-role="orch-type"]').value.trim() || 'Success',
+  }));
+  keyed.sort((x, y) => cmp(x.from, y.from) || cmp(x.type, y.type) || cmp(x.to, y.to) || (x.idx - y.idx));
+  keyed.forEach(k => container.appendChild(k.row));
+}
+
+// 「刷新排序」按钮：手动「+ 添加连接」的行固定追加在末尾（编辑时不自动重排），点此按规则统一重新排序
+function refreshOrchConnSort() {
+  if (!document.querySelector('#orch-conn-container .orch-conn-row')) return;
+  sortOrchConnRows();
   onOrchChange();
+  showToast('连接列表已重新排序', 'success');
 }
 
 function collectOrchConnections() {
@@ -7359,6 +7362,14 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
       mergedEdges.push(entry);
     }
   });
+  // 暴露边映射供 Live Preview 点击连线标签时反查 from/to 实例 ID
+  const edgeMap = {};
+  conns.forEach(c => {
+    const from = idMap[c.from_id];
+    const to = idMap[c.to_id];
+    if (from && to) edgeMap['L_' + from + '_' + to] = { from_id: c.from_id, to_id: c.to_id };
+  });
+  window._orchEdgeMap = edgeMap;
   mergedEdges.forEach(m => {
     lines.push(`    ${m.from} -->|${m.types.join(',')}| ${m.to}`);
   });
@@ -7618,7 +7629,8 @@ function renderOrchParamOverrides() {
     const params = getOrchInstanceParams(inst).slice().sort((a, b) => String(a.key || '').localeCompare(String(b.key || '')));
     // 存在失效引用时强制展开，避免用户看不到需要重新选择的参数
     const collapsed = _orchCollapseState && _orchCollapseState[inst.instanceId] === true && !brokenRefMap[inst.instanceId];
-    html += `<div class="override-node-block">
+    const activeCls = inst.instanceId === _orchActiveParamInst ? ' override-node-active' : '';
+    html += `<div class="override-node-block${activeCls}" data-inst="${esc(inst.instanceId)}">
       <div class="override-node-header" onclick="toggleOrchParamBlock(this, '${esc(inst.instanceId)}', event)">
         <span class="toggle-icon">${collapsed ? '▸' : '▾'}</span>
         <span class="ov-inst-id ov-copyable" title="点击可选中复制">${esc(inst.instanceId)}</span>
@@ -8461,6 +8473,17 @@ function applyOrchCollapseOverrides(saved) {
 }
 
 // 切换某个节点参数配置实例的收起/展开，并即时更新状态（稍后随"保存"请求落到数据库）
+// Live Preview 点击节点时同步选中左侧「节点参数配置」中该实例的配置块：仅高亮标记，
+// 不滚动、不展开，避免打乱用户当前的浏览位置（需要时自行下拉查看）。
+// 选中实例记录在 _orchActiveParamInst，参数区重渲染后保持高亮；无参数的节点在配置区没有对应块，只清除旧高亮。
+let _orchActiveParamInst = '';
+function selectOrchParamBlock(instanceId) {
+  _orchActiveParamInst = instanceId || '';
+  document.querySelectorAll('#orch-param-list .override-node-block').forEach(b => {
+    b.classList.toggle('override-node-active', b.getAttribute('data-inst') === _orchActiveParamInst);
+  });
+}
+
 function toggleOrchParamBlock(headerEl, instanceId, ev) {
   // 在名称 / instanceId 上拖选复制时不要折叠：这些元素已放开 user-select，点击它们只用于选中文本
   if (ev && ev.target && ev.target.closest && ev.target.closest('.ov-copyable')) return;
@@ -8799,6 +8822,38 @@ function centerOrchPreview() {
   area.scrollTop = Math.max(0, (area.scrollHeight - area.clientHeight) / 2);
 }
 
+// Live Preview 空白处按住鼠标拖动平移画面（放大后不用来回拖滚动条）：
+// 横向滚动预览区自身，纵向滚动页面（预览区纵向不溢出，纵向交给页面滚动条，见 syncOrchPreviewSize）。
+// 在节点、连线标签、连线把手、泡泡层上按下不触发，保留原有点击/拖拽连线行为。只绑定一次。
+function initOrchPreviewPan() {
+  const area = document.getElementById('orch-preview');
+  if (!area || area._orchPanBound) return;
+  area._orchPanBound = true;
+  area.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const t = e.target;
+    if (t && t.closest && t.closest('g.node, .orch-edge-label, .orch-node-link, .orch-switch-popover, button, input, textarea, select, a')) return;
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    const startLeft = area.scrollLeft, startTop = area.scrollTop;
+    const startPageX = window.scrollX, startPageY = window.scrollY;
+    area.classList.add('orch-panning');
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      area.scrollLeft = startLeft - dx;
+      area.scrollTop = startTop - dy;
+      window.scrollTo(startPageX, startPageY - dy);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      area.classList.remove('orch-panning');
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 // 放大/缩小：delta>0 放大，delta<0 缩小，限制 0.3~3 倍
 function zoomOrchPreview(delta) {
   _orchPreviewScale = Math.min(3, Math.max(0.3, _orchPreviewScale + delta));
@@ -8811,6 +8866,7 @@ function resetOrchPreview() {
 }
 
 async function renderOrchPreview() {
+  initOrchPreviewPan();
   const container = document.getElementById('orch-preview');
   const scaleBox = document.getElementById('orch-preview-scale');
   const nodeIds = getSelectedOrchNodeIds();
@@ -8845,6 +8901,7 @@ async function renderOrchPreview() {
       el.textContent = syntax;
       await mermaid.run({ nodes: [el] });
       enhanceOrchPreviewNodes(el);
+      enhanceOrchPreviewEdges(el);
     }
     applyOrchPreviewScale();
     // mermaid 内部布局可能稍晚稳定，延迟再居中一次确保内容位于视野中间
@@ -8903,16 +8960,40 @@ function enhanceOrchPreviewNodes(container) {
     del.appendChild(hit); del.appendChild(x1); del.appendChild(x2);
     if (!isMidChain) g.appendChild(del);
 
+    // 节点底部中间的连线把手：从这里按下拖到另一个节点即新增一条 from → to 连接（只读预览不显示）
+    g.setAttribute('data-orch-inst', instId);
+    if (!document.body.classList.contains('orch-viewonly')) {
+      const oldLink = g.querySelector(':scope > g.orch-node-link');
+      if (oldLink) oldLink.remove();
+      const link = document.createElementNS(SVGNS, 'g');
+      link.setAttribute('class', 'orch-node-link');
+      link.setAttribute('transform', `translate(${bbox.x + bbox.width / 2},${bbox.y + bbox.height})`);
+      const linkHit = document.createElementNS(SVGNS, 'circle');
+      linkHit.setAttribute('r', '9');
+      linkHit.setAttribute('fill', 'transparent');
+      const dot = document.createElementNS(SVGNS, 'circle');
+      dot.setAttribute('r', '4.5');
+      dot.setAttribute('class', 'orch-node-link-dot');
+      const linkTitle = document.createElementNS(SVGNS, 'title');
+      linkTitle.textContent = '按住拖到另一个节点，新增连接';
+      link.appendChild(linkHit); link.appendChild(dot); link.appendChild(linkTitle);
+      link.addEventListener('mousedown', (e) => startOrchLinkDrag(e, instId, g));
+      g.appendChild(link);
+    }
+
     // Live Preview 任意节点点击均可打开编辑器（改本链实例名称；Activity/CondSwitch 还可改路由条件）
     // 命中删除叉则删除，否则打开编辑器（用 target 判定，避免热区外误触或 stopPropagation 失效导致误开编辑器）
     g.style.cursor = 'pointer';
     g.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      if (_orchLinkJustDragged) return;
+      if (e.target && e.target.closest && e.target.closest('.orch-node-link')) return;
       if (e.target && e.target.closest && e.target.closest('.orch-node-del')) {
         removeOrchNodeInstanceConfirm(instId);
         return;
       }
+      selectOrchParamBlock(instId);
       orchOpenNodeSwitchEditor(instId);
     });
     // 具备 switch_condition 的节点（Activity / CondSwitch）：悬停弹泡泡层展示路由条件
@@ -8924,8 +9005,138 @@ function enhanceOrchPreviewNodes(container) {
   });
 }
 
+// Live Preview 连线上的 relationType 标签可点击：选中左侧 Connections 中该 from → to 的全部记录，
+// 便于直接编辑（相同节点间多条连接在图上合并为一条线，因此可能同时选中多行）。只读预览不绑定。
+function enhanceOrchPreviewEdges(container) {
+  if (!container || document.body.classList.contains('orch-viewonly')) return;
+  const edgeMap = window._orchEdgeMap || {};
+  container.querySelectorAll('g.edgeLabel').forEach(lbl => {
+    const inner = lbl.querySelector('[data-id]');
+    const dataId = inner ? inner.getAttribute('data-id') : '';
+    const edge = edgeMap[String(dataId || '').replace(/_\d+$/, '')];
+    if (!edge) return;
+    lbl.classList.add('orch-edge-label');
+    lbl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      selectOrchConnRows(edge.from_id, edge.to_id);
+    });
+  });
+}
+
+// 高亮并定位 Connections 中指定 from → to 的记录，聚焦第一条的连接类型输入框
+function selectOrchConnRows(fromId, toId) {
+  const rows = Array.from(document.querySelectorAll('#orch-conn-container .orch-conn-row'));
+  rows.forEach(r => r.classList.remove('orch-conn-row-active'));
+  const hits = rows.filter(r => r.querySelector('[data-role="orch-from"]').value === fromId
+    && r.querySelector('[data-role="orch-to"]').value === toId);
+  if (!hits.length) return;
+  hits.forEach(r => r.classList.add('orch-conn-row-active'));
+  hits[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const typeInput = hits[0].querySelector('[data-role="orch-type"]');
+  if (typeInput) typeInput.focus({ preventScroll: true });
+}
+
+// Live Preview 拖拽连线：拖拽结束后的那次 click 不应打开节点编辑器
+let _orchLinkJustDragged = false;
+
+// 从节点连线把手按下开始拖拽：SVG 上画一条跟随鼠标的虚线箭头，松开在另一节点上即新增连接。
+// 坐标统一用 svg.getScreenCTM() 换算，预览区缩放（transform: scale）后也能对准。
+function startOrchLinkDrag(e, fromId, fromG) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const svg = fromG.ownerSVGElement;
+  if (!svg) return;
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const toSvgPoint = (clientX, clientY) => {
+    const m = svg.getScreenCTM();
+    if (!m) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    return pt.matrixTransform(m.inverse());
+  };
+  const r = fromG.getBoundingClientRect();
+  const start = toSvgPoint(r.left + r.width / 2, r.bottom);
+  if (!start) return;
+  if (!svg.querySelector('#orch-link-arrow')) {
+    let defs = svg.querySelector(':scope > defs');
+    if (!defs) { defs = document.createElementNS(SVGNS, 'defs'); svg.insertBefore(defs, svg.firstChild); }
+    const marker = document.createElementNS(SVGNS, 'marker');
+    marker.setAttribute('id', 'orch-link-arrow');
+    marker.setAttribute('viewBox', '0 0 10 10');
+    marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5');
+    marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7');
+    marker.setAttribute('orient', 'auto-start-reverse');
+    const path = document.createElementNS(SVGNS, 'path');
+    path.setAttribute('d', 'M0,0 L10,5 L0,10 z');
+    path.setAttribute('class', 'orch-link-arrow-head');
+    marker.appendChild(path);
+    defs.appendChild(marker);
+  }
+  const line = document.createElementNS(SVGNS, 'line');
+  line.setAttribute('class', 'orch-link-temp');
+  line.setAttribute('x1', start.x); line.setAttribute('y1', start.y);
+  line.setAttribute('x2', start.x); line.setAttribute('y2', start.y);
+  line.setAttribute('marker-end', 'url(#orch-link-arrow)');
+  svg.appendChild(line);
+  document.body.classList.add('orch-linking');
+  hideOrchSwitchPopover();
+
+  const findTarget = (ev) => {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    const g = el && el.closest ? el.closest('g.node[data-orch-inst]') : null;
+    return g && svg.contains(g) && g !== fromG ? g : null;
+  };
+  let hoverG = null;
+  const onMove = (ev) => {
+    const p = toSvgPoint(ev.clientX, ev.clientY);
+    if (p) { line.setAttribute('x2', p.x); line.setAttribute('y2', p.y); }
+    const t = findTarget(ev);
+    if (hoverG !== t) {
+      if (hoverG) hoverG.classList.remove('orch-link-target');
+      hoverG = t;
+      if (hoverG) hoverG.classList.add('orch-link-target');
+    }
+  };
+  const onUp = (ev) => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    line.remove();
+    if (hoverG) hoverG.classList.remove('orch-link-target');
+    document.body.classList.remove('orch-linking');
+    _orchLinkJustDragged = true;
+    setTimeout(() => { _orchLinkJustDragged = false; }, 0);
+    const t = findTarget(ev);
+    if (t) addOrchConnFromPreview(fromId, t.getAttribute('data-orch-inst'));
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// 图上拖拽连线落点后新增连接（忽略自连）。相同 from → to 允许多条（不同连接类型）：
+// Connections 中逐条记录，Live Preview 合并为一条线、类型用逗号分隔展示。
+// 已存在同 from → to 时，新行类型留空并聚焦类型输入框，提示填写不同的连接类型。
+function addOrchConnFromPreview(fromId, toId) {
+  if (!fromId || !toId || fromId === toId) return;
+  const existCount = collectOrchConnections().filter(c => c.from_id === fromId && c.to_id === toId).length;
+  addOrchConnRow(fromId, toId);
+  const newRow = document.getElementById('orch-conn-row-' + orchConnSeq);
+  sortOrchConnRows();
+  onOrchChange();
+  if (existCount > 0) {
+    const typeInput = newRow ? newRow.querySelector('[data-role="orch-type"]') : null;
+    if (typeInput) {
+      typeInput.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      typeInput.focus();
+    }
+    showToast('已新增第 ' + (existCount + 1) + ' 条相同节点间的连接，请在 Connections 中填写连接类型', 'success');
+  }
+}
+
 // 在 Live Preview 节点上悬停时，弹出泡泡层展示该节点生效的 switch_condition 表达式
 function showOrchSwitchPopover(expr, gNode) {
+  if (document.body.classList.contains('orch-linking')) return;
   const host = document.getElementById('orch-preview');
   if (!host) return;
   let pop = document.getElementById('orch-switch-popover');
@@ -9139,6 +9350,7 @@ function orchSubChainByIndex(i) {
     try {
       const conns = JSON.parse(c.connections_data || '[]');
       conns.forEach(conn => addOrchConnRow(conn.from_id, conn.to_id, conn.type));
+      sortOrchConnRows();
     } catch(e) {}
     if (!document.querySelector('#orch-conn-container .orch-conn-row')) {
       if (emptyEl) emptyEl.style.display = '';
@@ -9336,6 +9548,7 @@ function loadRootChainToOrch(c) {
     try {
       const conns = JSON.parse(c.connections_data || '[]');
       conns.forEach(conn => addOrchConnRow(conn.from_id, conn.to_id, conn.type));
+      sortOrchConnRows();
     } catch(e) {}
     if (!document.querySelector('#orch-conn-container .orch-conn-row')) {
       if (emptyEl) emptyEl.style.display = '';
@@ -10159,6 +10372,7 @@ async function orchLoadRootChainById(chainId) {
       try {
         const conns = JSON.parse(c.connections_data || '[]');
         conns.forEach(conn => addOrchConnRow(conn.from_id, conn.to_id, conn.type));
+      sortOrchConnRows();
       } catch(e) {}
       onOrchChange();
       showToast('已加载根链到编排页，修改后点击"更新 Root Chain"保存', 'success');
