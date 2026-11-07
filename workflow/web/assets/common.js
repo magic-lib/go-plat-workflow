@@ -7063,6 +7063,32 @@ function moveOrchConnRow(rowId, dir) {
   onOrchChange();
 }
 
+// Connections 列表排序：按 from 实例 ID 自然序（数字 ID 在前、随机后缀在后，与下拉排序一致），
+// from 相同再按 relationType 排（留空视为 Success），再按 to 排，使同一节点的连接排在一起；
+// 以上都相同的多条保持原有相对顺序（稳定排序）。
+// 在加载链和图上拖拽新增连接后调用；未选 from 的空行排在最后。
+function sortOrchConnRows() {
+  const container = document.getElementById('orch-conn-container');
+  if (!container) return;
+  const rows = Array.from(container.querySelectorAll(':scope > .orch-conn-row'));
+  if (rows.length < 2) return;
+  const cmp = (a, b) => {
+    if (!a && !b) return 0;
+    if (!a) return 1;
+    if (!b) return -1;
+    return a.localeCompare(b, undefined, { numeric: true });
+  };
+  const keyed = rows.map((row, idx) => ({
+    row, idx,
+    from: row.querySelector('[data-role="orch-from"]').value,
+    to: row.querySelector('[data-role="orch-to"]').value,
+    type: row.querySelector('[data-role="orch-type"]').value.trim() || 'Success',
+  }));
+  keyed.sort((x, y) => cmp(x.from, y.from) || cmp(x.type, y.type) || cmp(x.to, y.to) || (x.idx - y.idx));
+  keyed.forEach(k => container.appendChild(k.row));
+  updateOrchConnMoveState();
+}
+
 function collectOrchConnections() {
   const rows = document.querySelectorAll('#orch-conn-container .orch-conn-row');
   const conns = [];
@@ -8881,10 +8907,11 @@ function addOrchConnFromPreview(fromId, toId) {
   if (!fromId || !toId || fromId === toId) return;
   const existCount = collectOrchConnections().filter(c => c.from_id === fromId && c.to_id === toId).length;
   addOrchConnRow(fromId, toId);
+  const newRow = document.getElementById('orch-conn-row-' + orchConnSeq);
+  sortOrchConnRows();
   onOrchChange();
   if (existCount > 0) {
-    const rows = document.querySelectorAll('#orch-conn-container .orch-conn-row');
-    const typeInput = rows.length ? rows[rows.length - 1].querySelector('[data-role="orch-type"]') : null;
+    const typeInput = newRow ? newRow.querySelector('[data-role="orch-type"]') : null;
     if (typeInput) {
       typeInput.scrollIntoView({ block: 'center', behavior: 'smooth' });
       typeInput.focus();
@@ -9109,6 +9136,7 @@ function orchSubChainByIndex(i) {
     try {
       const conns = JSON.parse(c.connections_data || '[]');
       conns.forEach(conn => addOrchConnRow(conn.from_id, conn.to_id, conn.type));
+      sortOrchConnRows();
     } catch(e) {}
     if (!document.querySelector('#orch-conn-container .orch-conn-row')) {
       if (emptyEl) emptyEl.style.display = '';
@@ -9306,6 +9334,7 @@ function loadRootChainToOrch(c) {
     try {
       const conns = JSON.parse(c.connections_data || '[]');
       conns.forEach(conn => addOrchConnRow(conn.from_id, conn.to_id, conn.type));
+      sortOrchConnRows();
     } catch(e) {}
     if (!document.querySelector('#orch-conn-container .orch-conn-row')) {
       if (emptyEl) emptyEl.style.display = '';
@@ -10129,6 +10158,7 @@ async function orchLoadRootChainById(chainId) {
       try {
         const conns = JSON.parse(c.connections_data || '[]');
         conns.forEach(conn => addOrchConnRow(conn.from_id, conn.to_id, conn.type));
+      sortOrchConnRows();
       } catch(e) {}
       onOrchChange();
       showToast('已加载根链到编排页，修改后点击"更新 Root Chain"保存', 'success');
