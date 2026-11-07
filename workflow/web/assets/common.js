@@ -8280,23 +8280,15 @@ function applyOrchCollapseOverrides(saved) {
 }
 
 // 切换某个节点参数配置实例的收起/展开，并即时更新状态（稍后随"保存"请求落到数据库）
-// Live Preview 点击节点时同步选中左侧「节点参数配置」中该实例的配置块：高亮、展开（若已收起）并滚动定位。
+// Live Preview 点击节点时同步选中左侧「节点参数配置」中该实例的配置块：仅高亮标记，
+// 不滚动、不展开，避免打乱用户当前的浏览位置（需要时自行下拉查看）。
 // 选中实例记录在 _orchActiveParamInst，参数区重渲染后保持高亮；无参数的节点在配置区没有对应块，只清除旧高亮。
 let _orchActiveParamInst = '';
 function selectOrchParamBlock(instanceId) {
   _orchActiveParamInst = instanceId || '';
-  const blocks = document.querySelectorAll('#orch-param-list .override-node-block');
-  let hit = null;
-  blocks.forEach(b => {
-    const on = b.getAttribute('data-inst') === _orchActiveParamInst;
-    b.classList.toggle('override-node-active', on);
-    if (on) hit = b;
+  document.querySelectorAll('#orch-param-list .override-node-block').forEach(b => {
+    b.classList.toggle('override-node-active', b.getAttribute('data-inst') === _orchActiveParamInst);
   });
-  if (!hit) return;
-  const header = hit.querySelector('.override-node-header');
-  const body = hit.querySelector('.override-node-body');
-  if (header && body && body.classList.contains('hidden')) toggleOrchParamBlock(header, instanceId, null);
-  hit.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 function toggleOrchParamBlock(headerEl, instanceId, ev) {
