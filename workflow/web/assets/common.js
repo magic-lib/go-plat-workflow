@@ -7436,7 +7436,8 @@ function renderOrchParamOverrides() {
     const params = getOrchInstanceParams(inst).slice().sort((a, b) => String(a.key || '').localeCompare(String(b.key || '')));
     // 存在失效引用时强制展开，避免用户看不到需要重新选择的参数
     const collapsed = _orchCollapseState && _orchCollapseState[inst.instanceId] === true && !brokenRefMap[inst.instanceId];
-    html += `<div class="override-node-block">
+    const activeCls = inst.instanceId === _orchActiveParamInst ? ' override-node-active' : '';
+    html += `<div class="override-node-block${activeCls}" data-inst="${esc(inst.instanceId)}">
       <div class="override-node-header" onclick="toggleOrchParamBlock(this, '${esc(inst.instanceId)}', event)">
         <span class="toggle-icon">${collapsed ? '▸' : '▾'}</span>
         <span class="ov-inst-id ov-copyable" title="点击可选中复制">${esc(inst.instanceId)}</span>
@@ -8279,6 +8280,25 @@ function applyOrchCollapseOverrides(saved) {
 }
 
 // 切换某个节点参数配置实例的收起/展开，并即时更新状态（稍后随"保存"请求落到数据库）
+// Live Preview 点击节点时同步选中左侧「节点参数配置」中该实例的配置块：高亮、展开（若已收起）并滚动定位。
+// 选中实例记录在 _orchActiveParamInst，参数区重渲染后保持高亮；无参数的节点在配置区没有对应块，只清除旧高亮。
+let _orchActiveParamInst = '';
+function selectOrchParamBlock(instanceId) {
+  _orchActiveParamInst = instanceId || '';
+  const blocks = document.querySelectorAll('#orch-param-list .override-node-block');
+  let hit = null;
+  blocks.forEach(b => {
+    const on = b.getAttribute('data-inst') === _orchActiveParamInst;
+    b.classList.toggle('override-node-active', on);
+    if (on) hit = b;
+  });
+  if (!hit) return;
+  const header = hit.querySelector('.override-node-header');
+  const body = hit.querySelector('.override-node-body');
+  if (header && body && body.classList.contains('hidden')) toggleOrchParamBlock(header, instanceId, null);
+  hit.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
 function toggleOrchParamBlock(headerEl, instanceId, ev) {
   // 在名称 / instanceId 上拖选复制时不要折叠：这些元素已放开 user-select，点击它们只用于选中文本
   if (ev && ev.target && ev.target.closest && ev.target.closest('.ov-copyable')) return;
@@ -8755,6 +8775,7 @@ function enhanceOrchPreviewNodes(container) {
         removeOrchNodeInstanceConfirm(instId);
         return;
       }
+      selectOrchParamBlock(instId);
       orchOpenNodeSwitchEditor(instId);
     });
     // 具备 switch_condition 的节点（Activity / CondSwitch）：悬停弹泡泡层展示路由条件

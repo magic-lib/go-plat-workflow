@@ -222,6 +222,8 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 
 /* Override section */
 .override-node-block { margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+/* 点击 Live Preview 节点后选中的参数配置块 */
+.override-node-block.override-node-active { border-color: #6366f1; box-shadow: 0 0 0 2px #6366f1; }
 .override-node-header { background: #f3f4f6; padding: 8px 14px; font-size: .82rem; font-weight: 700; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; flex-wrap: wrap; }
 .override-node-header:hover { background: #e5e7eb; }
 /* instanceId 必须完整显示：不收缩、不换行、不截断 */
