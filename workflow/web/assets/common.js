@@ -8772,7 +8772,7 @@ function applyOrchTraceHighlight() {
   const SVGNS = 'http://www.w3.org/2000/svg';
   // 先清掉上一次的标记
   svg.classList.remove('orch-trace-on');
-  svg.querySelectorAll('.orch-trace-node').forEach(el => el.classList.remove('orch-trace-node', 'orch-trace-node-err', 'orch-trace-node-entry'));
+  svg.querySelectorAll('.orch-trace-node').forEach(el => el.classList.remove('orch-trace-node', 'orch-trace-node-err'));
   svg.querySelectorAll('.orch-trace-edge').forEach(el => {
     el.classList.remove('orch-trace-edge');
     if (el.hasAttribute('data-orch-marker')) {
@@ -8786,25 +8786,9 @@ function applyOrchTraceHighlight() {
     el.setAttribute('style', el.getAttribute('data-orch-style'));
     el.removeAttribute('data-orch-style');
   });
-  svg.querySelectorAll('.orch-trace-badge').forEach(el => el.remove());
-  if (svg.hasAttribute('data-orch-viewbox')) {
-    svg.setAttribute('viewBox', svg.getAttribute('data-orch-viewbox'));
-    svg.style.maxWidth = svg.getAttribute('data-orch-maxw');
-    svg.removeAttribute('data-orch-viewbox');
-    svg.removeAttribute('data-orch-maxw');
-  }
-  if (!_orchTrace || !_orchTrace.steps.length) { syncOrchPreviewSize(); return; }
+  if (!_orchTrace || !_orchTrace.steps.length) return;
 
   svg.classList.add('orch-trace-on');
-  // 序号徽标压在节点左上角外侧，最上/最左的节点会被裁掉一半：给 viewBox 上方和左侧各留出边距
-  const vb = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
-  if (vb.length === 4 && vb.every(v => !isNaN(v))) {
-    const pad = 16;
-    svg.setAttribute('data-orch-viewbox', svg.getAttribute('viewBox'));
-    svg.setAttribute('data-orch-maxw', svg.style.maxWidth || '');
-    svg.setAttribute('viewBox', `${vb[0] - pad} ${vb[1] - pad} ${vb[2] + pad} ${vb[3] + pad}`);
-    if (svg.style.maxWidth) svg.style.maxWidth = (vb[2] + pad) + 'px';
-  }
   const idMap = window._orchIdMap || {};
   const reEsc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // 路径专用箭头（醒目红色），mermaid 默认箭头是灰色
@@ -8825,7 +8809,7 @@ function applyOrchTraceHighlight() {
     defs.appendChild(marker);
   }
 
-  // 节点：加醒目描边 + 左上角执行序号徽标（多次经过显示多个序号）
+  // 节点：加醒目描边（报错节点用深红虚线）
   const nodeGs = Array.from(svg.querySelectorAll('g.node'));
   Object.keys(_orchTrace.nodes).forEach(instId => {
     const safe = idMap[instId];
@@ -8836,7 +8820,6 @@ function applyOrchTraceHighlight() {
     const info = _orchTrace.nodes[instId];
     g.classList.add('orch-trace-node');
     if (info.error) g.classList.add('orch-trace-node-err');
-    if (info.orders[0] === 1) g.classList.add('orch-trace-node-entry');
     // mermaid classDef 把描边写在形状的内联 style（带 !important）上，样式表压不住，只能改内联并记下原值以便清除时还原
     g.querySelectorAll(':scope > .label-container, :scope > g > .label-container').forEach(shape => {
       shape.setAttribute('data-orch-style', shape.getAttribute('style') || '');
@@ -8844,28 +8827,6 @@ function applyOrchTraceHighlight() {
       shape.style.setProperty('stroke-width', '4px', 'important');
       if (info.error) shape.style.setProperty('stroke-dasharray', '6 3', 'important');
     });
-    let bbox;
-    try { bbox = g.getBBox(); } catch (e) { return; }
-    if (!bbox || !bbox.width) return;
-    const text = (info.orders[0] === 1 ? '入口 ' : '') + info.orders.join(',');
-    const w = Math.max(22, 10 + text.length * 8);
-    const badge = document.createElementNS(SVGNS, 'g');
-    badge.setAttribute('class', 'orch-trace-badge' + (info.error ? ' orch-trace-badge-err' : '') + (info.orders[0] === 1 ? ' orch-trace-badge-entry' : ''));
-    badge.setAttribute('transform', `translate(${bbox.x - 8},${bbox.y - 11})`);
-    const rect = document.createElementNS(SVGNS, 'rect');
-    rect.setAttribute('width', String(w)); rect.setAttribute('height', '22');
-    rect.setAttribute('rx', '11'); rect.setAttribute('ry', '11');
-    // 徽标在 g.node 内，会被 mermaid 的「#mermaid-xxx .node rect」规则覆盖填充色，这里用内联 !important 固定
-    rect.style.setProperty('fill', info.error ? '#7f1d1d' : (info.orders[0] === 1 ? '#16a34a' : '#ef4444'), 'important');
-    rect.style.setProperty('stroke', '#fff', 'important');
-    rect.style.setProperty('stroke-width', '1.5px', 'important');
-    const t = document.createElementNS(SVGNS, 'text');
-    t.setAttribute('x', String(w / 2)); t.setAttribute('y', '15.5');
-    t.setAttribute('text-anchor', 'middle');
-    t.style.setProperty('fill', '#fff', 'important');
-    t.textContent = text;
-    badge.appendChild(rect); badge.appendChild(t);
-    g.appendChild(badge);
   });
 
   // 连线：路径加粗变红并带流动动画，箭头换成红色；对应的 relationType 标签同步高亮
@@ -8887,7 +8848,6 @@ function applyOrchTraceHighlight() {
       lg.classList.add('orch-trace-label');
     });
   });
-  syncOrchPreviewSize();
 }
 
 // 有查询结果时才显示「清除」按钮
