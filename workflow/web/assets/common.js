@@ -6540,7 +6540,6 @@ function removeOrchConnRowsByInstance(instanceId) {
     const emptyEl = document.getElementById('orch-conn-empty');
     if (emptyEl) emptyEl.style.display = '';
   }
-  updateOrchConnMoveState();
   refreshOrchConnOptions();
 }
 
@@ -6830,8 +6829,6 @@ function addOrchConnRow(fromId, toId, connType) {
     <select data-role="orch-to">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
     <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'')}" title="连接类型：留空表示新增未指定（Success / Failure / True / False / Stream 或自定义）">
     <button type="button" class="orch-cond-warn" data-role="orch-cond-warn" style="display:none" onclick="onOrchConnWarnClick(this)" title=""></button>
-    <button class="btn-move" onclick="moveOrchConnRow('orch-conn-row-${orchConnSeq}',-1)" title="上移">▲</button>
-    <button class="btn-move" onclick="moveOrchConnRow('orch-conn-row-${orchConnSeq}',1)" title="下移">▼</button>
     <button class="btn-remove" onclick="removeOrchConnRow('orch-conn-row-${orchConnSeq}')" title="删除">&times;</button>
   `;
   container.appendChild(row);
@@ -6847,7 +6844,6 @@ function addOrchConnRow(fromId, toId, connType) {
   row.querySelector('[data-role="orch-from"]').addEventListener('change', () => { syncOrchConnRowTooltip(row); onOrchChange(); });
   row.querySelector('[data-role="orch-to"]').addEventListener('change', () => { syncOrchConnRowTooltip(row); onOrchChange(); });
   row.querySelector('[data-role="orch-type"]').addEventListener('input', onOrchChange);
-  updateOrchConnMoveState();
   refreshOrchConnWarns();
 }
 
@@ -7024,17 +7020,6 @@ function onOrchConnWarnClick(btn) {
   orchOpenNodeSwitchEditor(id);
 }
 
-// 更新连接行上移/下移按钮的可用状态（首行禁上移、末行禁下移）
-function updateOrchConnMoveState() {
-  const rows = Array.from(document.querySelectorAll('#orch-conn-container .orch-conn-row'));
-  rows.forEach((row, idx) => {
-    const up = row.querySelector('.btn-move[onclick*=",-1)"]');
-    const down = row.querySelector('.btn-move[onclick*=",1)"]');
-    if (up) up.disabled = idx === 0;
-    if (down) down.disabled = idx === rows.length - 1;
-  });
-}
-
 function removeOrchConnRow(rowId) {
   const row = document.getElementById(rowId);
   if (row) row.remove();
@@ -7043,23 +7028,6 @@ function removeOrchConnRow(rowId) {
     const emptyEl = document.getElementById('orch-conn-empty');
     if (emptyEl) emptyEl.style.display = '';
   }
-  updateOrchConnMoveState();
-  onOrchChange();
-}
-
-// 连接行上移/下移：直接在容器内移动 DOM 节点，顺序即连接顺序（collectOrchConnections 按 DOM 顺序读取）
-function moveOrchConnRow(rowId, dir) {
-  const row = document.getElementById(rowId);
-  if (!row) return;
-  const container = document.getElementById('orch-conn-container');
-  if (dir < 0) {
-    const prev = row.previousElementSibling;
-    if (prev && prev.classList.contains('orch-conn-row')) container.insertBefore(row, prev);
-  } else {
-    const next = row.nextElementSibling;
-    if (next && next.classList.contains('orch-conn-row')) container.insertBefore(next, row);
-  }
-  updateOrchConnMoveState();
   onOrchChange();
 }
 
@@ -7086,7 +7054,6 @@ function sortOrchConnRows() {
   }));
   keyed.sort((x, y) => cmp(x.from, y.from) || cmp(x.type, y.type) || cmp(x.to, y.to) || (x.idx - y.idx));
   keyed.forEach(k => container.appendChild(k.row));
-  updateOrchConnMoveState();
 }
 
 function collectOrchConnections() {
