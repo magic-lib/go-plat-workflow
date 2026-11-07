@@ -344,6 +344,11 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-preview-area svg { display: block; }
 /* 节点内的 switch_condition：醒目配色，最多两行，超出省略号 */
 .orch-sw-cond { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-overflow: ellipsis; white-space: normal; word-break: break-all; max-width: 240px; margin-top: 4px; padding: 2px 6px; border-radius: 4px; background: #fff7ed; border: 1px dashed #f59e0b; font-family: var(--font-mono, monospace); font-size: 11px; line-height: 1.35; text-align: left; }
+/* Mermaid classDef 以 #mermaid-xxx .nodeKind_xxx span { color: … !important } 设置节点文字色，这里用容器 ID + .node 提高优先级覆盖 */
+#orch-preview .node span.orch-sw-cond, #flowchart-mermaid .node span.orch-sw-cond { color: #b45309 !important; }
+/* 节点名称前的「🔀路由」标记（原行内样式移到这里） */
+.orch-route-mark { display: inline-block; padding: 0 5px; border-radius: 8px; font-size: .62rem; font-weight: 600; background: #dbeafe; }
+#orch-preview .node span.orch-route-mark, #flowchart-mermaid .node span.orch-route-mark { color: #1e40af !important; }
 /* Live Preview 空白处可按住拖动平移 */
 .orch-preview-area { cursor: grab; }
 .orch-preview-area.orch-panning, .orch-preview-area.orch-panning * { cursor: grabbing !important; user-select: none; }

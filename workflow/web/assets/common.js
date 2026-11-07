@@ -7324,8 +7324,9 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
       const effExpr = Object.prototype.hasOwnProperty.call(_orchSwitchOverrides, id)
         ? _orchSwitchOverrides[id] : nodeSwitchConditionText(n);
       const expr = String(effExpr || '').replace(/\s+/g, ' ').trim();
-      // 文字颜色写成行内 !important：Mermaid classDef 的节点配色以 !important 作用到 span，样式表无法覆盖
-      if (expr) swLine = `<span class='orch-sw-cond' style='color:#b45309 !important'>⑂ ${esc(expr)}</span>`;
+      // 不能写行内 style：Mermaid 会对含「style…:…#…;」的标签文本删掉最后一个分号，破坏 #39; 等实体；
+      // 文字颜色改由 common.css 中更高优先级的选择器（带容器 ID）覆盖 classDef 配色
+      if (expr) swLine = `<span class='orch-sw-cond'>⑂ ${escMermaidText(expr)}</span>`;
     }
     lines.push(`    ${safe}["${labelLine}<br/>${idLine}${instLine ? '<br/>'+instLine : ''}${callLine ? '<br/>'+callLine : ''}${swLine}"]`);
     (kindSafeIds[clsName] = kindSafeIds[clsName] || []).push(safe);
@@ -9512,6 +9513,13 @@ function loadRootChainToOrch(c) {
 // ============================================================
 // Utility
 // ============================================================
+// Mermaid 标签文本转义：Mermaid 会把 `#xxx;` 当作自身的实体语法解析，若用 esc() 生成的 HTML 实体（如 &#39;）
+// 会被拆成 `&` + `'`，单引号显示成 &'。这里统一改用 Mermaid 实体写法：特殊字符（含 # 与 ;）都写成 #实体名;
+function escMermaidText(s) {
+  if (s === null || s === undefined) return '';
+  const map = { '&': '#amp;', '<': '#lt;', '>': '#gt;', '"': '#quot;', "'": '#39;', '#': '#35;', ';': '#59;' };
+  return String(s).replace(/[&<>"'#;]/g, c => map[c]);
+}
 function esc(s) { if (s === null || s === undefined) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 // 安全取值：元素可能已被 UI 隐藏/移除，缺失时返回默认值
 function safeVal(id, def) { const el = document.getElementById(id); return el ? el.value.trim() : (def || ''); }
@@ -9598,7 +9606,9 @@ function orchNodeRouteMark(n) {
   if (!has) return '';
   const expr = nodeSwitchConditionText(n);
   const tip = expr ? ('已配置路由条件（switch_condition）：' + expr) : '已配置路由条件（switch_condition），执行后按返回值路由到不同分支';
-  return ` <span style='display:inline-block;padding:0 5px;border-radius:8px;font-size:.62rem;font-weight:600;background:#dbeafe;color:#1e40af' title='${esc(tip).replace(/'/g, "&#39;")}'>🔀路由</span>`;
+  // 仅用于 Mermaid 节点标签：不能写行内 style（Mermaid 会删掉含「style…:…#…;」整行的最后一个分号，破坏同行的 #39; 等实体），
+  // 样式见 common.css .orch-route-mark；title 用 Mermaid 实体转义，避免单引号显示成 &'
+  return ` <span class='orch-route-mark' title='${escMermaidText(tip)}'>🔀路由</span>`;
 }
 function formatDuration(ms) {
   if (ms === undefined || ms === null || ms < 0) return '-';
