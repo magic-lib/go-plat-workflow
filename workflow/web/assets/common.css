@@ -378,14 +378,6 @@ body.orch-linking, body.orch-linking * { cursor: crosshair !important; user-sele
 .orch-preview-title { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .orch-trace-box { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
 .orch-trace-input { width: 260px; max-width: 46vw; padding: 3px 8px; font-size: .8rem; border: 1px solid var(--border); border-radius: 4px; }
-.orch-trace-info { margin: 0 0 8px; padding: 6px 10px; border: 1px solid #fecaca; border-radius: 6px; background: #fff5f5; font-size: .78rem; color: #7f1d1d; }
-.orch-trace-summary code { background: #fee2e2; padding: 0 4px; border-radius: 3px; }
-.orch-trace-miss { color: #b45309; text-decoration: underline dotted; cursor: help; }
-.orch-trace-steps { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; line-height: 1.8; }
-.orch-trace-step { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border-radius: 10px; background: #ef4444; color: #fff; cursor: help; }
-.orch-trace-step b { font-weight: 700; }
-.orch-trace-step-err { background: #7f1d1d; }
-.orch-trace-arrow { color: #dc2626; font-size: .72rem; }
 .orch-trace-on g.node:not(.orch-trace-node) { opacity: .35; }
 .orch-trace-on path.flowchart-link:not(.orch-trace-edge) { opacity: .25; }
 .orch-trace-on g.edgeLabel:not(.orch-trace-label) { opacity: .3; }
@@ -393,7 +385,6 @@ body.orch-linking, body.orch-linking * { cursor: crosshair !important; user-sele
 path.orch-trace-edge { stroke: #ef4444 !important; stroke-width: 3.5px !important; stroke-dasharray: 10 5; animation: orchTraceFlow .8s linear infinite; }
 @keyframes orchTraceFlow { to { stroke-dashoffset: -15; } }
 .orch-trace-label .labelBkg, .orch-trace-label span, .orch-trace-label p { background: #ef4444 !important; color: #fff !important; font-weight: 700; }
-.orch-trace-badge text { font-size: 13px; font-weight: 700; pointer-events: none; }
 .orch-dsl-preview { background: #1e293b; color: #e2e8f0; border-radius: 6px; padding: 14px; font-family: 'SF Mono','Fira Code',monospace; font-size: .75rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 12px; display: none; }
 .orch-dsl-preview.show { display: block; }
 .orch-actions { display: flex; gap: 10px; margin-top: 16px; }
