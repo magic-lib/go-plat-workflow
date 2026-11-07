@@ -8833,15 +8833,23 @@ function startOrchLinkDrag(e, fromId, fromG) {
   document.addEventListener('mouseup', onUp);
 }
 
-// 图上拖拽连线落点后新增连接：忽略自连，相同 from → to 已存在时提示不重复添加
+// 图上拖拽连线落点后新增连接（忽略自连）。相同 from → to 允许多条（不同连接类型）：
+// Connections 中逐条记录，Live Preview 合并为一条线、类型用逗号分隔展示。
+// 已存在同 from → to 时，新行类型留空并聚焦类型输入框，提示填写不同的连接类型。
 function addOrchConnFromPreview(fromId, toId) {
   if (!fromId || !toId || fromId === toId) return;
-  if (collectOrchConnections().some(c => c.from_id === fromId && c.to_id === toId)) {
-    showToast('连接已存在', 'error');
-    return;
-  }
+  const existCount = collectOrchConnections().filter(c => c.from_id === fromId && c.to_id === toId).length;
   addOrchConnRow(fromId, toId);
   onOrchChange();
+  if (existCount > 0) {
+    const rows = document.querySelectorAll('#orch-conn-container .orch-conn-row');
+    const typeInput = rows.length ? rows[rows.length - 1].querySelector('[data-role="orch-type"]') : null;
+    if (typeInput) {
+      typeInput.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      typeInput.focus();
+    }
+    showToast('已新增第 ' + (existCount + 1) + ' 条相同节点间的连接，请在 Connections 中填写连接类型', 'success');
+  }
 }
 
 // 在 Live Preview 节点上悬停时，弹出泡泡层展示该节点生效的 switch_condition 表达式
