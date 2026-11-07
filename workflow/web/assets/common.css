@@ -305,6 +305,8 @@ body.orch-viewonly .orch-hide-in-view { display: none; }
 .orch-conn-rows { border: 1px solid var(--border); border-radius: 6px; padding: 8px; background: #fafbfc; max-height: 200px; overflow-y: auto; }
 .orch-conn-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
 .orch-conn-row:last-child { margin-bottom: 0; }
+/* 点击 Live Preview 连线标签后选中的连接记录 */
+.orch-conn-row.orch-conn-row-active { background: #eef2ff; outline: 2px solid #6366f1; outline-offset: 2px; border-radius: 4px; }
 .orch-conn-row select { flex: 1; min-width: 0; padding: 6px 4px; border: 1px solid var(--border); border-radius: 4px; font-size: .78rem; outline: none; font-family: 'SF Mono','Fira Code',monospace; }
 .orch-conn-row select:focus { border-color: var(--primary); }
 .orch-conn-row .conn-type-sel { max-width: 100px; flex: none; }
@@ -354,6 +356,9 @@ g.node:hover > .orch-node-link .orch-node-link-dot, .orch-node-link:hover .orch-
 .orch-link-arrow-head { fill: #6366f1; }
 g.node.orch-link-target > rect, g.node.orch-link-target > polygon, g.node.orch-link-target > path, g.node.orch-link-target > circle { stroke: #6366f1 !important; stroke-width: 3px !important; }
 g.node.orch-link-target { filter: drop-shadow(0 0 5px #6366f1); }
+/* Live Preview 连线标签：可点击定位到左侧 Connections 记录 */
+.orch-edge-label { cursor: pointer; }
+.orch-edge-label:hover .labelBkg, .orch-edge-label:hover span { color: #4f46e5; text-decoration: underline; }
 body.orch-linking, body.orch-linking * { cursor: crosshair !important; user-select: none; }
 .orch-preview-empty { text-align: center; color: var(--text-muted); padding: 40px; font-size: .9rem; }
 /* 已选节点表中链路中间节点（有父节点也有子节点）的锁定提示，删除按钮被隐藏 */

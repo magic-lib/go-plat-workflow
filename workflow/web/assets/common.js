@@ -7168,6 +7168,14 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
       mergedEdges.push(entry);
     }
   });
+  // 暴露边映射供 Live Preview 点击连线标签时反查 from/to 实例 ID
+  const edgeMap = {};
+  conns.forEach(c => {
+    const from = idMap[c.from_id];
+    const to = idMap[c.to_id];
+    if (from && to) edgeMap['L_' + from + '_' + to] = { from_id: c.from_id, to_id: c.to_id };
+  });
+  window._orchEdgeMap = edgeMap;
   mergedEdges.forEach(m => {
     lines.push(`    ${m.from} -->|${m.types.join(',')}| ${m.to}`);
   });
@@ -8654,6 +8662,7 @@ async function renderOrchPreview() {
       el.textContent = syntax;
       await mermaid.run({ nodes: [el] });
       enhanceOrchPreviewNodes(el);
+      enhanceOrchPreviewEdges(el);
     }
     applyOrchPreviewScale();
     // mermaid 内部布局可能稍晚稳定，延迟再居中一次确保内容位于视野中间
@@ -8754,6 +8763,38 @@ function enhanceOrchPreviewNodes(container) {
       g.addEventListener('mouseleave', hideOrchSwitchPopover);
     }
   });
+}
+
+// Live Preview 连线上的 relationType 标签可点击：选中左侧 Connections 中该 from → to 的全部记录，
+// 便于直接编辑（相同节点间多条连接在图上合并为一条线，因此可能同时选中多行）。只读预览不绑定。
+function enhanceOrchPreviewEdges(container) {
+  if (!container || document.body.classList.contains('orch-viewonly')) return;
+  const edgeMap = window._orchEdgeMap || {};
+  container.querySelectorAll('g.edgeLabel').forEach(lbl => {
+    const inner = lbl.querySelector('[data-id]');
+    const dataId = inner ? inner.getAttribute('data-id') : '';
+    const edge = edgeMap[String(dataId || '').replace(/_\d+$/, '')];
+    if (!edge) return;
+    lbl.classList.add('orch-edge-label');
+    lbl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      selectOrchConnRows(edge.from_id, edge.to_id);
+    });
+  });
+}
+
+// 高亮并定位 Connections 中指定 from → to 的记录，聚焦第一条的连接类型输入框
+function selectOrchConnRows(fromId, toId) {
+  const rows = Array.from(document.querySelectorAll('#orch-conn-container .orch-conn-row'));
+  rows.forEach(r => r.classList.remove('orch-conn-row-active'));
+  const hits = rows.filter(r => r.querySelector('[data-role="orch-from"]').value === fromId
+    && r.querySelector('[data-role="orch-to"]').value === toId);
+  if (!hits.length) return;
+  hits.forEach(r => r.classList.add('orch-conn-row-active'));
+  hits[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const typeInput = hits[0].querySelector('[data-role="orch-type"]');
+  if (typeInput) typeInput.focus({ preventScroll: true });
 }
 
 // Live Preview 拖拽连线：拖拽结束后的那次 click 不应打开节点编辑器
