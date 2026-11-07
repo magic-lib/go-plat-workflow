@@ -8898,6 +8898,8 @@ async function renderOrchPreview() {
       await mermaid.run({ nodes: [el] });
       enhanceOrchPreviewNodes(el);
       enhanceOrchPreviewEdges(el);
+      // 重绘后重新叠加 traceId 执行路径高亮（未查询时无操作）
+      applyOrchTraceHighlight();
     }
     applyOrchPreviewScale();
     // mermaid 内部布局可能稍晚稳定，延迟再居中一次确保内容位于视野中间
@@ -8907,6 +8909,272 @@ async function renderOrchPreview() {
   } catch(e) {
     scaleBox.innerHTML = '<div class="orch-preview-empty" style="color:#ef4444">渲染失败: ' + esc(e.message) + '</div><pre style="font-size:.7rem;margin-top:8px;white-space:pre-wrap;max-height:150px;overflow:auto">' + esc(syntax) + '</pre>';
   }
+}
+
+// ============================================================
+// Live Preview 按 traceId 回放执行路径
+// ============================================================
+// 查询结果缓存：改连接、缩放等触发重绘后重新叠加高亮，直到点「清除」。
+// 结构：{ traceId, chainId, steps:[{instId, order, log}], nodes:{instId:{orders, error}}, edges:Set('from|to'), missing:[] }
+let _orchTrace = null;
+
+// 按输入的 traceId + 当前根链 chain_id 查询 node 运行日志，按时间顺序在图上标出执行路径
+async function queryOrchTracePath() {
+  const input = document.getElementById('orch-trace-input');
+  const traceId = ((input && input.value) || '').trim();
+  if (!traceId) { showToast('请输入 traceId', 'error'); return; }
+  const chainEl = document.getElementById('orch-chain-id');
+  const chainId = ((chainEl && chainEl.value) || '').trim();
+  if (!chainId) { showToast('当前没有加载根链，无法按 chain_id 查询日志', 'error'); return; }
+  const btn = document.getElementById('orch-trace-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '查询中…'; }
+  try {
+    const logs = await fetchOrchTraceLogs(traceId, chainId);
+    _orchTrace = buildOrchTracePath(traceId, chainId, logs);
+    applyOrchTraceHighlight();
+    renderOrchTraceInfo();
+    if (!logs.length) showToast('该 traceId 在当前根链下没有节点日志', 'error');
+    else if (!_orchTrace.steps.length) showToast('查到日志，但节点都不在当前图中', 'error');
+  } catch (e) {
+    showToast('查询日志失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '查询'; }
+  }
+}
+
+// 清除执行路径高亮
+function clearOrchTrace() {
+  _orchTrace = null;
+  applyOrchTraceHighlight();
+  renderOrchTraceInfo();
+}
+
+// 分页拉取该 trace 在当前根链下的全部 node 日志（最多 1000 条），按执行时间正序返回
+async function fetchOrchTraceLogs(traceId, chainId) {
+  const pageSize = 200;
+  const maxPages = 5;
+  let all = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const params = new URLSearchParams();
+    params.set('trace_id', traceId);
+    params.set('root_chain_id', chainId);
+    params.set('page', String(page));
+    params.set('page_size', String(pageSize));
+    const resp = await api('/api/node-logs?' + params.toString());
+    const list = (resp && resp.list) || [];
+    all = all.concat(list);
+    if (list.length < pageSize || all.length >= ((resp && resp.total) || 0)) break;
+  }
+  // flow_total 是整条链的汇总记录，没有 node_id，不参与路径
+  all = all.filter(r => r && r.node_id && r.level !== 'flow_total');
+  // ts 只到秒，同一秒内用 created_at（毫秒）和自增 id 兜底排序
+  const t = r => {
+    const ms = Date.parse(r.created_at || '');
+    return isNaN(ms) ? (Number(r.timestamp) || 0) * 1000 : ms;
+  };
+  all.sort((a, b) => (t(a) - t(b)) || ((a.id || 0) - (b.id || 0)));
+  return all;
+}
+
+// 由按时间排好序的日志计算执行路径：经过的节点（带执行序号）与走过的连线
+function buildOrchTracePath(traceId, chainId, logs) {
+  const graphIds = new Set([...getSelectedOrchNodeIds(), ...getSelectedOrchSubIds()]);
+  const nodes = {};
+  const steps = [];
+  const missing = [];
+  logs.forEach(r => {
+    const id = r.node_id;
+    if (!graphIds.has(id)) {
+      if (!missing.includes(id)) missing.push(id);
+      return;
+    }
+    const order = steps.length + 1;
+    steps.push({ instId: id, order: order, log: r });
+    const n = nodes[id] || (nodes[id] = { orders: [], error: false });
+    n.orders.push(order);
+    if (r.level === 'error' || r.error_msg) n.error = true;
+  });
+  // 连线：节点执行完按 relation_type 往下走，目标节点在其之后也执行过才算走过这条线
+  const conns = collectOrchConnections();
+  const edges = new Set();
+  steps.forEach(s => {
+    const rel = s.log.relation_type || 'Success';
+    conns.forEach(c => {
+      if (c.from_id !== s.instId || (c.type || 'Success') !== rel) return;
+      const target = nodes[c.to_id];
+      if (target && target.orders.some(o => o > s.order)) edges.add(c.from_id + '|' + c.to_id);
+    });
+  });
+  // 兜底：相邻两步之间存在连线、但 relation_type 没对上（如历史日志缺字段）时，仍按先后顺序连起来
+  for (let i = 0; i + 1 < steps.length; i++) {
+    const a = steps[i].instId;
+    const b = steps[i + 1].instId;
+    const hasOut = [...edges].some(k => k.startsWith(a + '|'));
+    if (!hasOut && conns.some(c => c.from_id === a && c.to_id === b)) edges.add(a + '|' + b);
+  }
+  return { traceId: traceId, chainId: chainId, steps: steps, nodes: nodes, edges: edges, missing: missing, total: logs.length };
+}
+
+// 在当前 Live Preview 的 SVG 上叠加/清除执行路径高亮
+function applyOrchTraceHighlight() {
+  const svg = document.querySelector('#orch-preview-scale .mermaid svg');
+  if (!svg) return;
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  // 先清掉上一次的标记
+  svg.classList.remove('orch-trace-on');
+  svg.querySelectorAll('.orch-trace-node').forEach(el => el.classList.remove('orch-trace-node', 'orch-trace-node-err', 'orch-trace-node-entry'));
+  svg.querySelectorAll('.orch-trace-edge').forEach(el => {
+    el.classList.remove('orch-trace-edge');
+    if (el.hasAttribute('data-orch-marker')) {
+      const m = el.getAttribute('data-orch-marker');
+      if (m) el.setAttribute('marker-end', m); else el.removeAttribute('marker-end');
+      el.removeAttribute('data-orch-marker');
+    }
+  });
+  svg.querySelectorAll('.orch-trace-label').forEach(el => el.classList.remove('orch-trace-label'));
+  svg.querySelectorAll('[data-orch-style]').forEach(el => {
+    el.setAttribute('style', el.getAttribute('data-orch-style'));
+    el.removeAttribute('data-orch-style');
+  });
+  svg.querySelectorAll('.orch-trace-badge').forEach(el => el.remove());
+  if (svg.hasAttribute('data-orch-viewbox')) {
+    svg.setAttribute('viewBox', svg.getAttribute('data-orch-viewbox'));
+    svg.style.maxWidth = svg.getAttribute('data-orch-maxw');
+    svg.removeAttribute('data-orch-viewbox');
+    svg.removeAttribute('data-orch-maxw');
+  }
+  if (!_orchTrace || !_orchTrace.steps.length) { syncOrchPreviewSize(); return; }
+
+  svg.classList.add('orch-trace-on');
+  // 序号徽标压在节点左上角外侧，最上/最左的节点会被裁掉一半：给 viewBox 上方和左侧各留出边距
+  const vb = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+  if (vb.length === 4 && vb.every(v => !isNaN(v))) {
+    const pad = 16;
+    svg.setAttribute('data-orch-viewbox', svg.getAttribute('viewBox'));
+    svg.setAttribute('data-orch-maxw', svg.style.maxWidth || '');
+    svg.setAttribute('viewBox', `${vb[0] - pad} ${vb[1] - pad} ${vb[2] + pad} ${vb[3] + pad}`);
+    if (svg.style.maxWidth) svg.style.maxWidth = (vb[2] + pad) + 'px';
+  }
+  const idMap = window._orchIdMap || {};
+  const reEsc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // 路径专用箭头（醒目红色），mermaid 默认箭头是灰色
+  let defs = svg.querySelector('defs');
+  if (!defs) { defs = document.createElementNS(SVGNS, 'defs'); svg.insertBefore(defs, svg.firstChild); }
+  if (!svg.querySelector('#orch-trace-arrow')) {
+    const marker = document.createElementNS(SVGNS, 'marker');
+    marker.setAttribute('id', 'orch-trace-arrow');
+    marker.setAttribute('viewBox', '0 0 10 10');
+    marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5');
+    marker.setAttribute('markerWidth', '5'); marker.setAttribute('markerHeight', '5');
+    marker.setAttribute('orient', 'auto-start-reverse');
+    marker.setAttribute('markerUnits', 'strokeWidth');
+    const tip = document.createElementNS(SVGNS, 'path');
+    tip.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+    tip.setAttribute('fill', '#ef4444');
+    marker.appendChild(tip);
+    defs.appendChild(marker);
+  }
+
+  // 节点：加醒目描边 + 左上角执行序号徽标（多次经过显示多个序号）
+  const nodeGs = Array.from(svg.querySelectorAll('g.node'));
+  Object.keys(_orchTrace.nodes).forEach(instId => {
+    const safe = idMap[instId];
+    if (!safe) return;
+    const re = new RegExp('flowchart-' + reEsc(safe) + '-\\d+$');
+    const g = nodeGs.find(x => re.test(x.id || ''));
+    if (!g) return;
+    const info = _orchTrace.nodes[instId];
+    g.classList.add('orch-trace-node');
+    if (info.error) g.classList.add('orch-trace-node-err');
+    if (info.orders[0] === 1) g.classList.add('orch-trace-node-entry');
+    // mermaid classDef 把描边写在形状的内联 style（带 !important）上，样式表压不住，只能改内联并记下原值以便清除时还原
+    g.querySelectorAll(':scope > .label-container, :scope > g > .label-container').forEach(shape => {
+      shape.setAttribute('data-orch-style', shape.getAttribute('style') || '');
+      shape.style.setProperty('stroke', info.error ? '#7f1d1d' : '#ef4444', 'important');
+      shape.style.setProperty('stroke-width', '4px', 'important');
+      if (info.error) shape.style.setProperty('stroke-dasharray', '6 3', 'important');
+    });
+    let bbox;
+    try { bbox = g.getBBox(); } catch (e) { return; }
+    if (!bbox || !bbox.width) return;
+    const text = (info.orders[0] === 1 ? '入口 ' : '') + info.orders.join(',');
+    const w = Math.max(22, 10 + text.length * 8);
+    const badge = document.createElementNS(SVGNS, 'g');
+    badge.setAttribute('class', 'orch-trace-badge' + (info.error ? ' orch-trace-badge-err' : '') + (info.orders[0] === 1 ? ' orch-trace-badge-entry' : ''));
+    badge.setAttribute('transform', `translate(${bbox.x - 8},${bbox.y - 11})`);
+    const rect = document.createElementNS(SVGNS, 'rect');
+    rect.setAttribute('width', String(w)); rect.setAttribute('height', '22');
+    rect.setAttribute('rx', '11'); rect.setAttribute('ry', '11');
+    // 徽标在 g.node 内，会被 mermaid 的「#mermaid-xxx .node rect」规则覆盖填充色，这里用内联 !important 固定
+    rect.style.setProperty('fill', info.error ? '#7f1d1d' : (info.orders[0] === 1 ? '#16a34a' : '#ef4444'), 'important');
+    rect.style.setProperty('stroke', '#fff', 'important');
+    rect.style.setProperty('stroke-width', '1.5px', 'important');
+    const t = document.createElementNS(SVGNS, 'text');
+    t.setAttribute('x', String(w / 2)); t.setAttribute('y', '15.5');
+    t.setAttribute('text-anchor', 'middle');
+    t.style.setProperty('fill', '#fff', 'important');
+    t.textContent = text;
+    badge.appendChild(rect); badge.appendChild(t);
+    g.appendChild(badge);
+  });
+
+  // 连线：路径加粗变红并带流动动画，箭头换成红色；对应的 relationType 标签同步高亮
+  const edgePaths = Array.from(svg.querySelectorAll('path[data-id]'));
+  const labelEls = Array.from(svg.querySelectorAll('.edgeLabel [data-id], .edgeLabels [data-id]'));
+  _orchTrace.edges.forEach(key => {
+    const parts = key.split('|');
+    const from = idMap[parts[0]];
+    const to = idMap[parts[1]];
+    if (!from || !to) return;
+    const re = new RegExp('^L_' + reEsc(from) + '_' + reEsc(to) + '_\\d+$');
+    edgePaths.filter(p => re.test(p.getAttribute('data-id') || '')).forEach(p => {
+      p.classList.add('orch-trace-edge');
+      p.setAttribute('data-orch-marker', p.getAttribute('marker-end') || '');
+      p.setAttribute('marker-end', 'url(#orch-trace-arrow)');
+    });
+    labelEls.filter(l => re.test(l.getAttribute('data-id') || '')).forEach(l => {
+      const lg = l.closest('g.edgeLabel') || l;
+      lg.classList.add('orch-trace-label');
+    });
+  });
+  syncOrchPreviewSize();
+}
+
+// 渲染预览区上方的执行路径说明：按时间顺序列出经过的节点及走出的 relationType
+function renderOrchTraceInfo() {
+  const box = document.getElementById('orch-trace-info');
+  const clearBtn = document.getElementById('orch-trace-clear');
+  if (clearBtn) clearBtn.style.display = _orchTrace ? '' : 'none';
+  if (!box) return;
+  if (!_orchTrace) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const tr = _orchTrace;
+  const fmtTime = r => {
+    const ms = Date.parse(r.created_at || '');
+    const d = isNaN(ms) ? new Date((Number(r.timestamp) || 0) * 1000) : new Date(ms);
+    const pad = (n, l) => String(n).padStart(l || 2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+  };
+  let html = `<div class="orch-trace-summary">traceId <code>${esc(tr.traceId)}</code>：共 ${tr.total} 条节点日志，经过 ${Object.keys(tr.nodes).length} 个节点`;
+  if (tr.missing.length) html += `；<span class="orch-trace-miss" title="${esc(tr.missing.join(', '))}">${tr.missing.length} 个节点不在当前图中</span>`;
+  html += '</div>';
+  if (tr.steps.length) {
+    html += '<div class="orch-trace-steps">' + tr.steps.map((s, i) => {
+      const r = s.log;
+      const err = r.level === 'error' || r.error_msg;
+      const tip = [
+        '时间: ' + fmtTime(r),
+        '节点: ' + s.instId,
+        '耗时: ' + (r.duration_ms || 0) + 'ms',
+        'relationType: ' + (r.relation_type || 'Success'),
+        err ? '错误: ' + (r.error_msg || '') : '',
+      ].filter(Boolean).join('\n');
+      const step = `<span class="orch-trace-step${err ? ' orch-trace-step-err' : ''}" title="${esc(tip)}"><b>${s.order}</b> ${esc(r.node_name || s.instId)}</span>`;
+      const arrow = i + 1 < tr.steps.length ? `<span class="orch-trace-arrow">→${esc(r.relation_type || 'Success')}→</span>` : '';
+      return step + arrow;
+    }).join('') + '</div>';
+  }
+  box.innerHTML = html;
+  box.style.display = '';
 }
 
 // 在 Live Preview 的 mermaid 节点右上角叠加"删除叉"，hover 节点时显示，点击删除该实例
