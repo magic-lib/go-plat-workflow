@@ -47,6 +47,10 @@ var (
 	ErrActivityNotFound = fmt.Errorf("workflow: activity not found")
 	// ErrNodePublishedInRootChain 节点已被发布到根链（生产快照引用），禁止编辑/删除
 	ErrNodePublishedInRootChain = fmt.Errorf("workflow: node already published in root chain, cannot edit or delete")
+	// ErrSubChainReferencedByRootChain 子链被未停用的根链引用（直接或经嵌套子链），禁止删除/停用
+	ErrSubChainReferencedByRootChain = fmt.Errorf("workflow: sub chain referenced by enabled root chain, cannot delete or disable")
+	// ErrSubChainPublishedNeedConfirm 子链被根链的当前发布版本引用（直接或经嵌套子链），修改后需重新保存并发布根链才生效，需调用方确认后再保存
+	ErrSubChainPublishedNeedConfirm = fmt.Errorf("workflow: sub chain referenced by published root chain, confirm required")
 	// ErrActivityPublishedInRootChain activity 已被发布到根链（生产快照引用），禁止编辑/删除
 	ErrActivityPublishedInRootChain = fmt.Errorf("workflow: activity already published in root chain, cannot edit or delete")
 )
@@ -736,6 +740,8 @@ type BuildSubChainRequest struct {
 	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
 	// NodeCollapseOverrides 每节点实例参数配置区收起状态，key=node 实例 instanceId，value=true 表示收起
 	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides,omitempty"`
+	// ConfirmPublished 已确认修改被已发布根链引用的子链（保存后线上立即生效）
+	ConfirmPublished bool `json:"confirm_published,omitempty"`
 }
 
 // ============================================================

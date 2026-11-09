@@ -17,6 +17,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	confPackage "github.com/magic-lib/go-plat-workflow/workflow/config"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 )
 
 // DSLBuilder 规则链 DSL 组装器，实现 workflow.DSLBuilder 接口。
@@ -61,7 +62,7 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	}
 
 	// 2. 查询子链（仅当前项目，避免加载其他项目的子链）
-	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, req.SubChainIDs)
+	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, dedupBaseIDs(req.SubChainIDs))
 	if err != nil {
 		return nil, fmt.Errorf("%w: query sub chains: %v", workflow.ErrDSLBuildFailed, err)
 	}
@@ -205,7 +206,7 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 	}
 
 	// 查询嵌套子链（仅当前项目）
-	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, req.SubChainIDs)
+	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, dedupBaseIDs(req.SubChainIDs))
 	if err != nil {
 		return nil, fmt.Errorf("%w: query sub chains: %v", workflow.ErrDSLBuildFailed, err)
 	}
@@ -745,13 +746,33 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 	// Flow Node 使用 type="flow" + configuration.ruleChainId 引用子链，
 	// 替代已废弃的 RuleChainConnections 机制。
 	// 子链 DSL 需提前加载到 rulego pool 中。
+	// 同一子链可添加多次：sub_chain_ids 里是实例 ID（形如 F000001__ab12c），每个实例生成一个 flow 节点，
+	// 节点 ID 即实例 ID（连线、参数覆盖都按实例 ID 对应），引用的子链仍是 project:子链ID。
+	// 不带后缀的旧数据（F000001）实例 ID 与子链 ID 相同，照常可用。
+	subByID := make(map[string]*workflow.SubChainDef, len(subChains))
 	for _, sc := range subChains {
-		// Flow Node 的 ID 直接使用子链自身 ChainID，不再加 flow_ 前缀。
-		// 子链 ID 前缀为 S，普通节点前缀为 N，与 idMap 冲突检测配合不会撞。
-		flowNodeID := sc.ChainID
-		// 冲突检测（极端情况下子链 ID 与真实节点 ID 冲突）
+		subByID[sc.ChainID] = sc
+	}
+	// 与节点一样，子链内容在保存时嵌入本链 DSL（additionalInfo.embedded_sub_chains），flow 节点 targetId 指向嵌入的子链，
+	// 执行时用保存时的子链内容；子链修改后需重新编辑保存本链才会用上最新内容。子链 DSL 无效时退回按子链 ID 实时加载。
+	embedHolder := &types.RuleChain{}
+	embeddedIDs := make(map[string]string, len(subChains))
+	for _, sc := range subChains {
+		if eid, err := engine.EmbedSubChain(embedHolder, sc.ChainID, sc.DSLJSON); err == nil {
+			embeddedIDs[sc.ChainID] = eid
+		} else {
+			log.Ctx(context.Background()).Warn().Str("sub_chain_id", sc.ChainID).Err(err).Msg("embed sub chain failed, fallback to live sub chain")
+		}
+	}
+	for _, inst := range parseInstanceRefs(req.SubChainIDs) {
+		sc, ok := subByID[inst.baseId]
+		if !ok {
+			continue
+		}
+		flowNodeID := inst.instanceId
+		// 冲突检测（极端情况下子链实例 ID 与节点实例 ID 冲突，或同一实例 ID 重复传入）
 		if idMap[flowNodeID] {
-			flowNodeID = sc.ChainID + "_dup"
+			flowNodeID = inst.instanceId + "_dup"
 		}
 		idMap[flowNodeID] = true
 
@@ -759,13 +780,17 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 		// rulego 的 flow 组件只认 targetId；ruleChainId 保留给发布检查、前端解析使用。
 		// extend=true：子链输出原样转发给下游（合并模式会把输出包成数组，下游无法按 FlowContext 解析）。
 		poolKey := req.Project + ":" + sc.ChainID
+		targetKey := poolKey
+		if eid, ok := embeddedIDs[sc.ChainID]; ok {
+			targetKey = req.Project + ":" + eid
+		}
 		flowNode := &types.RuleNode{
 			Id:   flowNodeID,
 			Type: "flow",
 			Name: sc.Name,
 			Configuration: types.Configuration{
 				"ruleChainId": poolKey,
-				"targetId":    poolKey,
+				"targetId":    targetKey,
 				"extend":      true,
 			},
 		}
@@ -775,7 +800,7 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 	// 4. 构建连接关系
 	connections := make([]types.NodeConnection, 0, len(req.Connections))
 	for _, conn := range req.Connections {
-		// 子链 Flow Node 的 ID 即子链自身 ChainID，无需再加 flow_ 前缀转换。
+		// 子链 Flow Node 的 ID 即子链实例 ID，无需再加 flow_ 前缀转换。
 		fromID := conn.FromID
 		toID := conn.ToID
 		connections = append(connections, types.NodeConnection{
@@ -796,12 +821,13 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 
 	return &types.RuleChain{
 		RuleChain: types.RuleChainBaseInfo{
-			ID:            req.ChainID,
-			Name:          req.ChainName,
-			DebugMode:     debugMode,
-			Root:          true,
-			Disabled:      false,
-			Configuration: config,
+			ID:             req.ChainID,
+			Name:           req.ChainName,
+			DebugMode:      debugMode,
+			Root:           true,
+			Disabled:       false,
+			Configuration:  config,
+			AdditionalInfo: embedHolder.RuleChain.AdditionalInfo,
 		},
 		Metadata: types.RuleMetadata{
 			FirstNodeIndex: firstNodeIndex,

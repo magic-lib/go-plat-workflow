@@ -899,8 +899,27 @@ function apiUrl(path) {
 async function api(path, opts = {}) {
   const res = await fetch(apiUrl(path), opts);
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    err.code = data.code || '';
+    throw err;
+  }
   return data;
+}
+
+// 保存子链：子链被已发布根链引用且编排内容有变化时，后端返回 409 + code=sub_chain_published，
+// 提示这些根链需重新保存并发布才生效；确认后 doRequest(true) 带确认标记重新提交，取消返回 null。
+async function apiSubChainSaveWithConfirm(doRequest) {
+  try {
+    return await doRequest(false);
+  } catch (e) {
+    if (e.code !== 'sub_chain_published') throw e;
+    // 去掉后端错误链末尾的内部英文说明（workflow: ...），只给用户看中文提示
+    const msg = String(e.message || '').replace(/（workflow:[^）]*）\s*$/, '');
+    if (!window.confirm('⚠️ ' + msg + '\n\n确定保存子链吗？')) return null;
+    return await doRequest(true);
+  }
 }
 
 function escHtml(s) {
@@ -5205,7 +5224,8 @@ async function saveSubChain() {
   if (!body.name) { showToast('名称不能为空', 'error'); return; }
   try {
     if (isEdit) {
-      await api('/api/sub-chains/' + encodeURIComponent(body.chain_id), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const saved = await apiSubChainSaveWithConfirm(confirmed => api('/api/sub-chains/' + encodeURIComponent(body.chain_id) + (confirmed ? '?confirm_published=1' : ''), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) }));
+      if (!saved) return;
       showToast('子链已更新', 'success');
     } else {
       await api('/api/sub-chains', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -6711,14 +6731,27 @@ function renderOrchSubList(filterText) {
     container.innerHTML = '<div class="orch-select-empty">无匹配子链</div>';
     return;
   }
-  container.innerHTML = filtered.map(s =>
-    `<label class="orch-select-item" title="${esc(s.chain_id)} - ${esc(s.description||'')}">
-      <input type="checkbox" value="${esc(s.chain_id)}" data-kind="sub" onchange="onOrchSelectionChange()">
+  // 已添加次数以 _orchSelectedSubIds（子链实例 ID）为准：搜索过滤、重新加载列表时都不会丢失
+  const counts = {};
+  (window._orchSelectedSubIds || []).forEach(id => { const b = orchSubBaseId(id); counts[b] = (counts[b] || 0) + 1; });
+  container.innerHTML = filtered.map(s => {
+    const n = counts[s.chain_id] || 0;
+    return `<label class="orch-select-item" title="${esc(s.chain_id)} - ${esc(s.description||'')}">
       <span class="node-id" style="color:#d97706">${esc(s.chain_id)}</span>
       <span class="node-name">${esc(s.name||s.chain_id)}</span>
       <span class="node-type-tag">sub</span>
-    </label>`
-  ).join('');
+      ${n ? `<span class="node-out-badge" title="已添加 ${n} 次，在 Live Preview 中点子链节点的 ✕ 移除">已添加 ${n}</span>` : ''}
+      <button class="btn btn-sm btn-outline orch-add-btn" type="button" onclick="addOrchSubInstance('${esc(s.chain_id)}')" title="添加到编排（可多次添加同一子链）">+ 添加</button>
+    </label>`;
+  }).join('');
+}
+
+// 按当前搜索框内容重绘子链列表（更新「已添加 N」）
+function rerenderOrchSubList() {
+  const list = document.getElementById('orch-sub-list');
+  if (!list) return;
+  const input = list.previousElementSibling;
+  renderOrchSubList(input && input.value ? input.value : '');
 }
 
 function filterOrchSubChains() {
@@ -6731,9 +6764,74 @@ function getSelectedOrchNodeIds() {
   return (window._orchNodeInstances || []).map(i => i.instanceId);
 }
 
+// 已选子链 ID（按勾选顺序）。不从 DOM 读取：子链列表会因搜索过滤、重新加载而重绘，
+// 重绘后的勾选框不代表真实选择，从 DOM 读会把已选子链和它的连线一起丢掉。
+window._orchSelectedSubIds = [];
+
+// 子链实例 ID：同一子链可在一条链里添加多次，实例 ID 形如 F000001__ab12c（与节点实例规则一致）；
+// 旧数据不带后缀（F000001），实例 ID 即子链 ID。
+function orchSubBaseId(id) {
+  const s = String(id || '');
+  const i = s.indexOf('__');
+  return i >= 0 ? s.slice(0, i) : s;
+}
+
+// 按子链实例 ID 取子链定义
+function orchSubDefOf(id) {
+  const base = orchSubBaseId(id);
+  return (_orchSubChains || []).find(x => x.chain_id === base);
+}
+
+// 生成全局唯一的子链实例 ID：chainId + "__" + 5 位 base36 随机串（不与节点实例、已有子链实例冲突）
+function genOrchSubInstanceId(chainId) {
+  const used = new Set([...getSelectedOrchNodeIds(), ...(window._orchSelectedSubIds || [])]);
+  let id;
+  do {
+    id = chainId + '__' + Math.random().toString(36).slice(2, 7);
+  } while (used.has(id));
+  return id;
+}
+
 function getSelectedOrchSubIds() {
-  const cbs = document.querySelectorAll('#orch-sub-list input[type="checkbox"]:checked');
-  return [...cbs].map(cb => cb.value);
+  return (window._orchSelectedSubIds || []).slice();
+}
+
+// 设置已选子链实例（加载已保存的链、新建时清空），并刷新列表上的「已添加 N」
+function setOrchSelectedSubIds(ids) {
+  const seen = new Set();
+  window._orchSelectedSubIds = (ids || []).filter(id => id && !seen.has(id) && seen.add(id));
+  rerenderOrchSubList();
+}
+
+// 添加子链实例到编排（同一子链可多次添加）
+function addOrchSubInstance(chainId) {
+  if (!chainId) return;
+  if (!window._orchSelectedSubIds) window._orchSelectedSubIds = [];
+  window._orchSelectedSubIds.push(genOrchSubInstanceId(chainId));
+  rerenderOrchSubList();
+  onOrchSelectionChange();
+}
+
+// 移除子链实例（流程图上点 ✕）：与节点实例删除规则一致——
+// 处于链路中间（既有上游又有下游）时不允许移除，需先调整连线；有相关连线时二次确认并一起删除。
+// 返回是否已移除。
+function removeOrchSubChain(instanceId) {
+  if (!(window._orchSelectedSubIds || []).includes(instanceId)) return false;
+  if (orchNodeHasParentAndChild(instanceId)) {
+    showToast('该子链处于链路中间（同时存在上游与下游连线），不能直接移除。请先调整 Connections 连线。', 'error');
+    return false;
+  }
+  const related = collectOrchConnections().filter(c => c.from_id === instanceId || c.to_id === instanceId).length;
+  if (related > 0) {
+    const s = orchSubDefOf(instanceId);
+    const name = (s && s.name) || orchSubBaseId(instanceId);
+    if (!window.confirm('确定要移除该子链吗？\n\n子链：' + name + '\n实例ID：' + instanceId + '\n\n与它相关的 ' + related + ' 条连线会一起删除。')) return false;
+  }
+  window._orchSelectedSubIds = window._orchSelectedSubIds.filter(id => id !== instanceId);
+  rerenderOrchSubList();
+  removeOrchConnRowsByInstance(instanceId);
+  onOrchSelectionChange();
+  return true;
 }
 
 function onOrchSelectionChange() {
@@ -6761,7 +6859,7 @@ function orchConnOptionsHtml() {
     items.push({ id: id, name: name, prefix: '⚙' });
   });
   subIds.forEach(id => {
-    const s = _orchSubChains.find(x => x.chain_id === id);
+    const s = orchSubDefOf(id);
     items.push({ id: id, name: (s && s.name) ? s.name : id, prefix: '🔗' });
   });
   // 按 ID 排序（数字按自然序），便于在下拉中快速定位节点；Node（N…）自然排在 Sub Chain 前
@@ -6773,27 +6871,31 @@ function orchConnOptionsHtml() {
   }).join('');
 }
 
+// 给连接行的 from/to 下拉设置值。值不在当前可选项里（节点/子链已移除或失效）时，
+// 追加一个「已失效」选项保持原值，不能让浏览器默认选中第一项，否则连线会被悄悄改到别的节点上。
+function setOrchConnSelectValue(sel, val) {
+  if (!sel || !val) return;
+  if (![...sel.options].some(o => o.value === val)) {
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = '⚠ 已失效 · ' + val;
+    sel.appendChild(opt);
+  }
+  sel.value = val;
+}
+
 function refreshOrchConnOptions() {
   const allOpts = orchConnOptionsHtml();
 
   // Update all existing connection rows' select elements
   document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(row => {
-    const fromSel = row.querySelector('[data-role="orch-from"]');
-    const toSel = row.querySelector('[data-role="orch-to"]');
-    if (fromSel) {
-      const curVal = fromSel.value;
-      fromSel.innerHTML = allOpts || '<option value="">-- 请选择 --</option>';
-      if (curVal && [...getSelectedOrchNodeIds(), ...getSelectedOrchSubIds()].includes(curVal)) {
-        fromSel.value = curVal;
-      }
-    }
-    if (toSel) {
-      const curVal = toSel.value;
-      toSel.innerHTML = allOpts || '<option value="">-- 请选择 --</option>';
-      if (curVal && [...getSelectedOrchNodeIds(), ...getSelectedOrchSubIds()].includes(curVal)) {
-        toSel.value = curVal;
-      }
-    }
+    ['[data-role="orch-from"]', '[data-role="orch-to"]'].forEach(q => {
+      const sel = row.querySelector(q);
+      if (!sel) return;
+      const curVal = sel.value;
+      sel.innerHTML = allOpts || '<option value="">-- 请选择 --</option>';
+      setOrchConnSelectValue(sel, curVal);
+    });
     syncOrchConnRowTooltip(row);
   });
   refreshOrchConnWarns(); // 节点名称/路由条件变化后同步校验
@@ -6832,8 +6934,8 @@ function addOrchConnRow(fromId, toId, connType) {
   container.appendChild(row);
 
   // Set initial values
-  if (fromId) row.querySelector('[data-role="orch-from"]').value = fromId;
-  if (toId) row.querySelector('[data-role="orch-to"]').value = toId;
+  setOrchConnSelectValue(row.querySelector('[data-role="orch-from"]'), fromId);
+  setOrchConnSelectValue(row.querySelector('[data-role="orch-to"]'), toId);
 
   // 悬停显示完整选中名称
   syncOrchConnRowTooltip(row);
@@ -6912,7 +7014,7 @@ function orchConnFromKind(fromId) {
     return (t === 'custom/Activity' || t === 'custom/CondSwitch') ? 'node' : 'unsupported';
   }
   const subs = (typeof _orchSubChains !== 'undefined' && _orchSubChains) ? _orchSubChains : (window._orchSubChains || []);
-  if (subs.some(s => s.chain_id === fromId)) return 'sub';
+  if (getSelectedOrchSubIds().includes(fromId) || subs.some(s => s.chain_id === orchSubBaseId(fromId))) return 'sub';
   return 'unknown';
 }
 
@@ -7015,6 +7117,10 @@ function onOrchConnWarnClick(btn) {
   const fromSel = row.querySelector('[data-role="orch-from"]');
   const id = fromSel ? fromSel.value : '';
   if (!id) { showToast('请先选择起点节点', 'error'); return; }
+  if (getSelectedOrchSubIds().includes(id)) {
+    showToast('子链不能配置 switch_condition，从子链出发的连接请使用 Success / Failure', 'error');
+    return;
+  }
   orchOpenNodeSwitchEditor(id);
 }
 
@@ -7140,7 +7246,9 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
   });
   subSet.forEach(id => {
     const safe = idMap[id];
-    const s = subChains.find(x => x.chain_id === id);
+    // 子链实例 ID（F000001__ab12c）按子链 ID 取定义；不带后缀的旧数据实例 ID 即子链 ID
+    const baseId = String(id).split('__')[0];
+    const s = subChains.find(x => x.chain_id === baseId);
     const label = s && s.name ? s.name : id;
     const subLabel = s && s.name ? id : '';
     lines.push(`    ${safe}(["<b>🔗 ${esc(label)}</b>${subLabel ? '<br/><small>'+esc(subLabel)+'</small>' : ''}"])`);
@@ -7276,9 +7384,9 @@ function orchBuildDslPreview() {
   });
 
   const subNodes = subIds.map(id => {
-    const s = _orchSubChains.find(x => x.chain_id === id);
-    // Flow Node 的 ID 直接使用子链自身 chain_id，不再加 flow_ 前缀
-    return { id: id, type: 'flow', name: s? s.name : id, configuration: { ruleChainId: getProject()+':'+id } };
+    const s = orchSubDefOf(id);
+    // Flow Node 的 ID 为子链实例 ID，引用的子链为 project:子链ID
+    return { id: id, type: 'flow', name: s? s.name : id, configuration: { ruleChainId: getProject()+':'+orchSubBaseId(id) } };
   });
 
   return JSON.stringify({
@@ -7828,13 +7936,13 @@ function getOrchRefNodeCandidates(excludeId) {
     }
     cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: parseNodeParams(def), outputs: parseNodeOutputs(def) });
   });
-  // 已选子链（按 chain_id 排除自身，且必须在祖先集合内）
+  // 已选子链实例（按实例 ID 排除自身，且必须在祖先集合内）
   getSelectedOrchSubIds().forEach(subId => {
     if (subId === excludeId) return;
     if (!ancestorIds.has(subId)) return;
-    const s = (_orchSubChains || []).find(x => x.chain_id === subId);
+    const s = orchSubDefOf(subId);
     if (!s) return;
-    cands.push({ id: s.chain_id, name: s.name || s.chain_id, type: 'sub', params: parseNodeParams(s), outputs: parseNodeOutputs(s) });
+    cands.push({ id: subId, name: s.name || s.chain_id, type: 'sub', params: parseNodeParams(s), outputs: parseNodeOutputs(s) });
   });
   return cands;
 }
@@ -8917,12 +9025,15 @@ function enhanceOrchPreviewNodes(container) {
   const nodeIds = getSelectedOrchNodeIds();
   const subIds = getSelectedOrchSubIds();
   const SVGNS = 'http://www.w3.org/2000/svg';
+  const reEsc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const nodeGs = Array.from(container.querySelectorAll('g.node'));
   nodeGs.forEach((g, idx) => {
-    // 反查实例 ID：优先用 g.id 在 idMap 中匹配（mermaid 保留自定义 id 时有效）
+    // 反查实例 ID：mermaid 节点 g.id 形如 flowchart-<safeId>-<n>，按 idMap 的 safeId 精确匹配
     let instId = null;
     if (g.id) {
-      for (const k in idMap) { if (idMap[k] === g.id) { instId = k; break; } }
+      for (const k in idMap) {
+        if (idMap[k] === g.id || new RegExp('flowchart-' + reEsc(idMap[k]) + '-\\d+$').test(g.id)) { instId = k; break; }
+      }
     }
     // 兜底：按 DOM 顺序映射（mermaid 改写节点 id 时生效）；超出 node/sub 范围的孤立节点不加叉
     if (!instId) {
@@ -8985,6 +9096,15 @@ function enhanceOrchPreviewNodes(container) {
       e.preventDefault();
       if (_orchLinkJustDragged) return;
       if (e.target && e.target.closest && e.target.closest('.orch-node-link')) return;
+      // 子链节点：叉 = 移除该子链实例；点击节点 = 新标签页打开该子链的编排页（不离开当前未保存的编排）
+      if (subIds.includes(instId)) {
+        if (e.target && e.target.closest && e.target.closest('.orch-node-del')) {
+          if (removeOrchSubChain(instId) && typeof renderOrchPreview === 'function') renderOrchPreview();
+          return;
+        }
+        orchOpenSubChainInNewTab(instId);
+        return;
+      }
       if (e.target && e.target.closest && e.target.closest('.orch-node-del')) {
         removeOrchNodeInstanceConfirm(instId);
         return;
@@ -9215,41 +9335,10 @@ function updateOrchTargetByChainId() {
   }
 }
 
-// 编排新建：切换到 Orchestrate 页，目标设为 Root Chain，清空表单。
+// 编排新建子链：跳到独立编排页，目标为 Sub Chain（首页没有编排 Tab，不能在本页切换）。
 function newSubChainViaOrch() {
-  // 切换到 Orchestrate Tab
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.querySelector('[data-tab="orchestrate"]').classList.add('active');
-  document.getElementById('tab-orchestrate').classList.add('active');
-
-  // 清空表单
-  document.getElementById('orch-chain-id').value = '';
-  document.getElementById('orch-chain-key').value = '';
-  document.getElementById('orch-chain-name').value = '';
-  document.getElementById('orch-chain-desc').value = '';
-  document.getElementById('orch-debug-mode').checked = false;
-  _orchParamPreset = {}; // 重置节点参数配置暂存
-  _orchFixedSeeded = {}; // 重置首次切固定配置标记
-  _orchCollapseState = {}; // 重置节点参数配置区收起状态
-  _orchRootResponses = []; // 重置根节点返回值定义
-  renderOrchRootResponses();
-  window._orchNodeInstances = []; // 重置已选节点实例
-  document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
-  const emptyEl = document.getElementById('orch-conn-empty');
-  if (emptyEl) emptyEl.style.display = '';
-  renderOrchNodeSelected();
-
-  // 确保数据已加载再取消勾选
-  loadOrchData().then(() => {
-    document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => cb.checked = false);
-    onOrchSelectionChange();
-  });
-
-  const btn = document.getElementById('orch-generate-btn');
-  btn.dataset.edit = '';
-  setOrchTarget('root');
-  showToast('已切换到编排页，目标为 Sub Chain', 'success');
+  const p = encodeURIComponent(getProject() || '');
+  location.href = '/orch?target=sub' + (p ? '&project=' + p : '');
 }
 
 // 将子链加载到编排页进行编辑（目标设为 Sub Chain）。
@@ -9292,9 +9381,7 @@ function orchSubChainByIndex(i) {
     const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
     restoreOrchNodeInstances(nodeIds);
     const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
-    document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => {
-      cb.checked = subIds.includes(cb.value);
-    });
+    setOrchSelectedSubIds(subIds);
     onOrchSelectionChange();
 
     document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
@@ -9415,14 +9502,20 @@ async function generateOrchRootChain() {
   btn.disabled = true;
   btn.textContent = '生成中...';
 
+  // 子链：后端按 chain_id 存在则更新、不存在则新增；有 chain_id 走 PUT，否则 POST 新建
   const endpoint = isSub
-    ? (isEdit ? '/api/sub-chains/' + encodeURIComponent(chainId) + '/build' : '/api/sub-chains/build')
+    ? (chainId ? '/api/sub-chains/' + encodeURIComponent(chainId) + '/build' : '/api/sub-chains/build')
     : '/api/root-chains';
-  const method = isSub && isEdit ? 'PUT' : 'POST';
+  const method = isSub && chainId ? 'PUT' : 'POST';
 
   try {
-    await api(endpoint, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-    showToast((isSub ? 'Sub Chain' : 'Root Chain') + ' 已保存: ' + (chainId || '(自动生成)'), 'success');
+    const doSave = confirmed => api(endpoint, { method, headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(confirmed ? Object.assign({}, body, { confirm_published: true }) : body) });
+    // 子链被已发布根链引用时后端要求确认，确认后带 confirm_published 重新提交；取消则不保存
+    const saved = isSub ? await apiSubChainSaveWithConfirm(doSave) : await doSave(false);
+    if (!saved) return;
+    const savedId = (saved && saved.chain_id) || chainId;
+    showToast((isSub ? 'Sub Chain' : 'Root Chain') + ' 已保存: ' + (savedId || '(自动生成)'), 'success');
     if (isSub) {
       const subTab = document.getElementById('tab-sub-chains');
       if (subTab && subTab.classList.contains('active')) loadSubChains();
@@ -9430,14 +9523,21 @@ async function generateOrchRootChain() {
       const rootTab = document.getElementById('tab-root-chains');
       if (rootTab && rootTab.classList.contains('active')) loadRootChains();
     }
-    // 保存成功后清除编辑标记，恢复默认文案
-    btn.dataset.edit = '';
+    if (isSub) {
+      // 子链保存后回填 chain_id 并进入编辑状态：再次点击就是更新，不会重复新建子链
+      if (savedId) document.getElementById('orch-chain-id').value = savedId;
+      btn.dataset.edit = '1';
+    } else {
+      // 保存成功后清除编辑标记，恢复默认文案
+      btn.dataset.edit = '';
+    }
     setOrchTarget(isSub ? 'sub' : 'root');
   } catch(e) {
     showToast('生成失败: ' + e.message, 'error');
   } finally {
     btn.disabled = false;
-    btn.textContent = isSub ? (isEdit ? '💾 更新 Sub Chain' : '🔧 生成 Sub Chain') : (isEdit ? '💾 更新 Root Chain' : '🔧 生成 Root Chain');
+    const editNow = btn.dataset.edit === '1';
+    btn.textContent = isSub ? (editNow ? '💾 更新 Sub Chain' : '🔧 生成 Sub Chain') : (isEdit ? '💾 更新 Root Chain' : '🔧 生成 Root Chain');
   }
 }
 
@@ -9478,9 +9578,7 @@ function loadRootChainToOrch(c) {
     });
     // Check sub-chains
     const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
-    document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => {
-      cb.checked = subIds.includes(cb.value);
-    });
+    setOrchSelectedSubIds(subIds);
     onOrchSelectionChange();
 
     // 恢复已保存的节点参数配置（在勾选节点后 apply，renderOrchParamOverrides 会回显）
@@ -10275,6 +10373,12 @@ async function deleteUser(id) {
 }
 
 // 从列表页跳转到独立编排页（orch.html）编辑指定子链
+// 新标签页打开子链编排页（从根链 Live Preview 点击子链节点进入）
+function orchOpenSubChainInNewTab(instanceId) {
+  const p = encodeURIComponent(getProject() || '');
+  window.open('/orch?target=sub&chain_id=' + encodeURIComponent(orchSubBaseId(instanceId)) + (p ? '&project=' + p : ''), '_blank');
+}
+
 function orchOpenInPage(chainId) {
   const p = encodeURIComponent(getProject() || '');
   location.href = '/orch?target=sub&chain_id=' + encodeURIComponent(chainId) + (p ? '&project=' + p : '');
@@ -10320,7 +10424,7 @@ async function orchLoadRootChainById(chainId) {
       const nodeIds = (c.node_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
       restoreOrchNodeInstances(nodeIds, c.dsl_json);
       const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
-      document.querySelectorAll('#orch-sub-list input[type="checkbox"]').forEach(cb => { cb.checked = subIds.includes(cb.value); });
+      setOrchSelectedSubIds(subIds);
       applyOrchParamOverrides(c.node_param_overrides);
       applyOrchSwitchOverrides(c.node_switch_overrides);
       applyOrchNameOverrides(c.node_name_overrides);

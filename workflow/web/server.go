@@ -929,8 +929,9 @@ func (ws *WebServer) handleUpdateSubChain(w http.ResponseWriter, r *http.Request
 	}
 	def.Project = project
 	def.ChainID = chainID
-	if err := ws.svc.UpdateSubChain(r.Context(), &def); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	confirmed := r.URL.Query().Get("confirm_published") == "1"
+	if err := ws.svc.UpdateSubChainWithConfirm(r.Context(), &def, confirmed); err != nil {
+		writeSubChainSaveError(w, err)
 		return
 	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Msg("sub chain updated via web")
@@ -945,6 +946,10 @@ func (ws *WebServer) handleDeleteSubChain(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := ws.svc.DeleteSubChain(r.Context(), project, chainID); err != nil {
+		if errors.Is(err, workflow.ErrSubChainReferencedByRootChain) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1184,6 +1189,7 @@ type buildSubChainRequest struct {
 	NodeSwitchOverrides   map[string]string                 `json:"node_switch_overrides"`
 	NodeNameOverrides     map[string]string                 `json:"node_name_overrides"`
 	NodeCollapseOverrides map[string]bool                   `json:"node_collapse_overrides"`
+	ConfirmPublished      bool                              `json:"confirm_published"`
 }
 
 func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSubChainRequest {
@@ -1200,6 +1206,7 @@ func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSub
 		NodeSwitchOverrides:   r.NodeSwitchOverrides,
 		NodeNameOverrides:     r.NodeNameOverrides,
 		NodeCollapseOverrides: r.NodeCollapseOverrides,
+		ConfirmPublished:      r.ConfirmPublished,
 	}
 }
 
@@ -1223,13 +1230,27 @@ func (ws *WebServer) handleBuildSubChain(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "chain_name is required")
 		return
 	}
-	def, err := ws.svc.CreateSubChainBuild(r.Context(), req.toBuildRequest(req.Project))
+	// chain_id 对应的子链已存在则更新，不存在则新增（避免重复点击保存时生成多条子链）
+	def, err := ws.svc.SaveSubChainBuild(r.Context(), req.toBuildRequest(req.Project))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeSubChainSaveError(w, err)
 		return
 	}
 	log.Info().Str("project", def.Project).Str("chain_id", def.ChainID).Msg("sub chain built via web")
 	writeJSON(w, http.StatusOK, def)
+}
+
+// writeSubChainSaveError 子链保存失败：被已发布根链引用且未确认时返回 409 + code，前端据此弹确认框后带 confirm_published 重试。
+func writeSubChainSaveError(w http.ResponseWriter, err error) {
+	if errors.Is(err, workflow.ErrSubChainPublishedNeedConfirm) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "sub_chain_published"})
+		return
+	}
+	if errors.Is(err, workflow.ErrSubChainReferencedByRootChain) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
 }
 
 // handleUpdateSubChainBuild 编排方式更新子链 DSL（保留原 chain_id）。
@@ -1254,9 +1275,10 @@ func (ws *WebServer) handleUpdateSubChainBuild(w http.ResponseWriter, r *http.Re
 		return
 	}
 	req.ChainID = chainID
-	def, err := ws.svc.UpdateSubChainBuild(r.Context(), req.toBuildRequest(req.Project))
+	// 子链已存在则更新，不存在则按该 chain_id 新增
+	def, err := ws.svc.SaveSubChainBuild(r.Context(), req.toBuildRequest(req.Project))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeSubChainSaveError(w, err)
 		return
 	}
 	log.Info().Str("project", def.Project).Str("chain_id", def.ChainID).Msg("sub chain re-built via web")
