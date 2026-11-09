@@ -132,7 +132,10 @@
         <div class="orch-section">
           <h3 style="display:flex;justify-content:space-between;align-items:center">
             Connections
-            <button class="btn btn-sm btn-outline" onclick="addOrchConnRow()" type="button">+ 添加连接</button>
+            <span style="display:flex;gap:6px">
+              <button class="btn btn-sm btn-outline" onclick="addOrchConnRow()" type="button">+ 添加连接</button>
+              <button class="btn btn-sm btn-outline" onclick="refreshOrchConnSort()" type="button" title="按 from 节点 ID、relationType、to 节点 ID 重新排序连接列表">⟳ 刷新排序</button>
+            </span>
           </h3>
           <div id="orch-conn-cond-summary" class="orch-cond-summary" style="display:none"></div>
           <div class="orch-conn-rows" id="orch-conn-container">
