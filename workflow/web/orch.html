@@ -178,8 +178,15 @@
       <!-- Right: Preview Panel -->
       <div class="orch-panel orch-right">
         <div class="orch-section">
-          <h3 style="display:flex;justify-content:space-between;align-items:center">
-            Live Preview
+          <h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+            <span class="orch-preview-title">
+              Live Preview
+              <span class="orch-trace-box">
+                <input id="orch-trace-input" class="orch-trace-input" type="text" placeholder="输入 traceId 查看执行路径" onkeydown="if(event.key==='Enter')queryOrchTracePath()">
+                <button id="orch-trace-btn" class="btn btn-sm btn-primary" type="button" onclick="queryOrchTracePath()">查询</button>
+                <button id="orch-trace-clear" class="btn btn-sm btn-outline" type="button" onclick="clearOrchTrace()" style="display:none">清除</button>
+              </span>
+            </span>
             <span class="orch-zoom">
               <button class="btn btn-sm btn-outline" type="button" onclick="zoomOrchPreview(-0.2)" title="缩小">−</button>
               <span id="orch-zoom-label" class="orch-zoom-label">100%</span>
