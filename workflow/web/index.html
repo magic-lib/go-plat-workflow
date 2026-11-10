@@ -257,27 +257,32 @@
   <!-- Nodes Tab -->
   <div id="tab-nodes" class="tab-content">
     <div class="toolbar">
-      <input class="search-box" placeholder="搜索节点..." oninput="filterNodes()">
-      <select id="node-kind-filter" onchange="filterNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
-        <option value="">全部大类</option>
-        <option value="condition">查询获取</option>
-        <option value="action">策略执行</option>
-        <option value="return">返回值</option>
-        <option value="call">调用根链</option>
-        <option value="input">参数输入</option>
-        <option value="loop">循环</option>
-      </select>
-      <select id="node-namespace-filter" onchange="onNodeNamespaceFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
-        <option value="">全部命名空间</option>
-      </select>
-      <select id="node-tag-filter" onchange="onNodeTagFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
-        <option value="">全部标签</option>
-      </select>
-      <select id="node-env-filter" onchange="onNodeEnvFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
-        <option value="">全部环境</option>
-      </select>
-      <button class="btn btn-primary edit-only" onclick="openNodeModal()">+ 新增 Node</button>
-      <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
+      <!-- 查询条件靠左一组，新增/日志查看按钮靠右一组（.toolbar 为 space-between），与 Activities 工具栏一致 -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input class="search-box" placeholder="搜索节点..." oninput="filterNodes()">
+        <select id="node-kind-filter" onchange="filterNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">全部大类</option>
+          <option value="condition">查询获取</option>
+          <option value="action">策略执行</option>
+          <option value="return">返回值</option>
+          <option value="call">调用根链</option>
+          <option value="input">参数输入</option>
+          <option value="loop">循环</option>
+        </select>
+        <select id="node-namespace-filter" onchange="onNodeNamespaceFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">全部命名空间</option>
+        </select>
+        <select id="node-tag-filter" onchange="onNodeTagFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">全部标签</option>
+        </select>
+        <select id="node-env-filter" onchange="onNodeEnvFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">全部环境</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-primary edit-only" onclick="openNodeModal()">+ 新增 Node</button>
+        <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table id="nodes-table">
@@ -354,25 +359,28 @@
   <!-- Logs Tab：查看所有日志列表（Node 运行日志 / Activity 执行日志） -->
   <div id="tab-logs" class="tab-content">
     <div class="toolbar">
-      <select id="all-log-type" onchange="switchAllLogType()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="node">Node 运行日志</option>
-        <option value="activity">Activity 执行日志</option>
-      </select>
-      <select id="all-log-env" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部环境</option>
-      </select>
-      <select id="all-log-level" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部级别</option>
-        <option value="info">info</option>
-        <option value="error">error</option>
-      </select>
-      <select id="all-log-root-chain-id" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem;max-width:260px">
-        <option value="">全部 Root Chain</option>
-      </select>
-      <input id="all-log-trace-id" placeholder="trace_id" style="width:240px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
-      <input id="all-log-payload" placeholder="payload 内容（模糊匹配，留空忽略）" style="width:260px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
-      <button class="btn btn-primary" onclick="loadAllLogs()">搜索</button>
-      <button class="btn btn-outline" onclick="clearAllLogFilters()">重置</button>
+      <!-- 查询条件与搜索/重置按钮同属查询，整组紧靠左侧排列，与 Activities 工具栏一致 -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="all-log-type" onchange="switchAllLogType()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="node">Node 运行日志</option>
+          <option value="activity">Activity 执行日志</option>
+        </select>
+        <select id="all-log-env" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="">全部环境</option>
+        </select>
+        <select id="all-log-level" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="">全部级别</option>
+          <option value="info">info</option>
+          <option value="error">error</option>
+        </select>
+        <select id="all-log-root-chain-id" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem;max-width:260px">
+          <option value="">全部 Root Chain</option>
+        </select>
+        <input id="all-log-trace-id" placeholder="trace_id" style="width:240px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+        <input id="all-log-payload" placeholder="payload 内容（模糊匹配，留空忽略）" style="width:260px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+        <button class="btn btn-primary" onclick="loadAllLogs()">搜索</button>
+        <button class="btn btn-outline" onclick="clearAllLogFilters()">重置</button>
+      </div>
     </div>
     <div id="all-log-list" class="log-list"><div class="log-empty">加载中…</div></div>
     <div class="log-pager" id="all-log-pager" style="display:none">
