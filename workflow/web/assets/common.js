@@ -6780,6 +6780,7 @@ async function loadOrchData(force = false) {
       _orchSubChains = await api('/api/sub-chains?only_enabled=true');
       refreshOrchNodeNsFilter();
       refreshOrchNodeTagFilter();
+      refreshOrchNodeTypeFilter();
       renderOrchNodeList();
       renderOrchSubList();
       refreshOrchConnOptions();
@@ -6792,13 +6793,15 @@ async function loadOrchData(force = false) {
   return _orchDataLoadPromise;
 }
 
-function renderOrchNodeList(filterText, filterNs, filterTag) {
+function renderOrchNodeList(filterText, filterNs, filterTag, filterType) {
   const q = (filterText||'').toLowerCase();
   const ns = (filterNs||'').trim();
   const tag = (filterTag||'').trim();
+  const type = (filterType||'').trim();
   _orchNodeListFiltered = (_orchNodes || []).filter(n => {
     if (ns && (n.namespace||'') !== ns) return false;
     if (tag && !((n.tags||[]).includes(tag))) return false;
+    if (type && (n.type||'') !== type) return false;
     if (!q) return true;
     return (n.node_id||'').toLowerCase().includes(q) || (n.name||'').toLowerCase().includes(q) || (n.type||'').toLowerCase().includes(q);
   });
@@ -7140,7 +7143,8 @@ function filterOrchNodes() {
   const q = document.getElementById('orch-node-search').value;
   const ns = document.getElementById('orch-node-ns-filter').value;
   const tag = document.getElementById('orch-node-tag-filter').value;
-  renderOrchNodeList(q, ns, tag);
+  const typeSel = document.getElementById('orch-node-type-filter');
+  renderOrchNodeList(q, ns, tag, typeSel ? typeSel.value : '');
 }
 
 // 根据当前编排可选项节点刷新命名空间过滤下拉（去重）
@@ -7163,6 +7167,16 @@ function refreshOrchNodeTagFilter() {
   const tags = Object.keys(tagSet).sort();
   sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
   sel.value = tags.includes(cur) ? cur : '';
+}
+
+// 根据当前编排可选项节点刷新节点类型过滤下拉（去重）
+function refreshOrchNodeTypeFilter() {
+  const sel = document.getElementById('orch-node-type-filter');
+  if (!sel) return;
+  const cur = sel.value;
+  const types = Array.from(new Set((_orchNodes || []).map(n => (n.type || '').trim()).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">全部类型</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  sel.value = types.includes(cur) ? cur : '';
 }
 
 function renderOrchSubList(filterText) {
