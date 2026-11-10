@@ -62,6 +62,11 @@ table { width: 100%; border-collapse: collapse; }
 .act-ns-name .code-cell { max-width: 200px; white-space: normal; word-break: break-all; overflow: visible; }
 .act-ns-name .code-cell + .code-cell { margin-top: 2px; }
 .act-ns-name .act-ns { color: var(--text-muted); } /* 第一行命名空间用灰色，与第二行活动名称区分 */
+/* Activities 列表：参数数 / 已发布引用 / 引用 Nodes 只显示数字，表头分两行，列宽收到最小并居中 */
+#tab-activities th.act-num-col,
+#tab-activities td.arg-count,
+#tab-activities td.pubref-count,
+#tab-activities td.noderef-count { width: 1%; padding-left: 8px; padding-right: 8px; text-align: center; white-space: nowrap; }
 /* Nodes 列表：分配列宽，避免内容折成两行（描述/分类/状态/版本列已隐藏） */
 #nodes-table { min-width: 1400px; table-layout: fixed; }
 #nodes-table th, #nodes-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
