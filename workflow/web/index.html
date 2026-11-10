@@ -59,27 +59,38 @@
   <!-- Activities Tab -->
   <div id="tab-activities" class="tab-content active">
     <div class="toolbar">
-      <input class="search-box" id="act-search" placeholder="搜索 activity..." oninput="onActivitySearchChange()">
-      <select id="act-env-filter" onchange="onActivityEnvFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部环境</option>
-      </select>
-      <select id="act-tag-filter" onchange="onActivityTagFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部标签</option>
-      </select>
-      <button class="btn btn-primary edit-only" onclick="openActivityModal()">新建 Activity</button>
-      <button class="btn btn-outline edit-only" onclick="openCopyActivityModal()">复制 Activity</button>
+      <!-- 查询条件靠左一组，新建/复制按钮靠右一组（.toolbar 为 space-between） -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input class="search-box" id="act-search" placeholder="搜索 activity..." oninput="onActivitySearchChange()">
+        <select id="act-env-filter" onchange="onActivityEnvFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="">全部环境</option>
+        </select>
+        <select id="act-tag-filter" onchange="onActivityTagFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="">全部标签</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-primary edit-only" onclick="openActivityModal()">新建 Activity</button>
+        <button class="btn btn-outline edit-only" onclick="openCopyActivityModal()">复制 Activity</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>Activity ID</th><th>名称</th><th>标签</th><th>命名空间</th><th>活动名称</th><th>参数数</th><th>已发布引用</th><th>引用 Nodes</th><th>创建时间</th><th>操作</th>
+          <th class="act-col-id">ID</th><th>名称</th><th class="act-col-tag">标签</th><th>命名空间 / 活动名称</th><th class="act-num-col">参数数</th><th class="act-num-col">已发布<br>引用</th><th class="act-num-col">引用<br>Nodes</th><th class="act-col-time">创建时间</th><th class="act-col-ops">操作</th>
         </tr></thead>
-        <tbody id="act-table"><tr><td colspan="10" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr></tbody>
+        <tbody id="act-table"><tr><td colspan="9" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr></tbody>
       </table>
       <div class="log-pager" id="act-pager" style="display:none">
         <button class="btn btn-sm btn-outline" id="act-prev" onclick="changeActivityPage(-1)">上一页</button>
         <span class="log-page-info" id="act-page-info"></span>
         <button class="btn btn-sm btn-outline" id="act-next" onclick="changeActivityPage(1)">下一页</button>
+        <select id="act-page-size" class="pager-size-select" onchange="onActivityPageSizeChange()">
+          <option value="10">10 条/页</option>
+          <option value="20" selected>20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
       </div>
     </div>
   </div>
@@ -104,7 +115,8 @@
           <input id="act-act-name" placeholder="例如 register">
         </div>
       </div>
-      <div class="form-row">
+      <!-- 活动类型、状态目前未使用，页面隐藏；保留输入框以便编辑时原值随表单回传，新建时状态默认启用 -->
+      <div class="form-row" style="display:none">
         <div class="form-group">
           <label>活动类型 (activity_type)</label>
           <input id="act-activity-type" placeholder="可选，如 http">
@@ -245,39 +257,55 @@
   <!-- Nodes Tab -->
   <div id="tab-nodes" class="tab-content">
     <div class="toolbar">
-      <input class="search-box" placeholder="搜索节点..." oninput="filterNodes()">
-      <select id="node-kind-filter" onchange="filterNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
-        <option value="">全部大类</option>
-        <option value="condition">查询获取</option>
-        <option value="action">策略执行</option>
-        <option value="return">返回值</option>
-        <option value="call">调用根链</option>
-        <option value="input">参数输入</option>
-      </select>
-      <select id="node-namespace-filter" onchange="loadNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
-        <option value="">全部命名空间</option>
-      </select>
-      <select id="node-tag-filter" onchange="onNodeTagFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
-        <option value="">全部标签</option>
-      </select>
-      <select id="node-env-filter" onchange="onNodeEnvFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
-        <option value="">全部环境</option>
-      </select>
-      <button class="btn btn-primary edit-only" onclick="openNodeModal()">+ 新增 Node</button>
-      <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
+      <!-- 查询条件靠左一组，新增/日志查看按钮靠右一组（.toolbar 为 space-between），与 Activities 工具栏一致 -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input class="search-box" placeholder="搜索节点..." oninput="filterNodes()">
+        <select id="node-kind-filter" onchange="filterNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">全部大类</option>
+          <option value="condition">查询获取</option>
+          <option value="action">策略执行</option>
+          <option value="return">返回值</option>
+          <option value="call">调用根链</option>
+          <option value="input">参数输入</option>
+        </select>
+        <select id="node-namespace-filter" onchange="onNodeNamespaceFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">全部命名空间</option>
+        </select>
+        <select id="node-tag-filter" onchange="onNodeTagFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">全部标签</option>
+        </select>
+        <select id="node-env-filter" onchange="onNodeEnvFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+          <option value="">全部环境</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-primary edit-only" onclick="openNodeModal()">+ 新增 Node</button>
+        <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table id="nodes-table">
         <thead><tr><th>Node ID</th><th>名称</th><th>类型</th><th>大类</th><th>标签</th><th>命名空间</th><th>已发布引用</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="log-pager" id="node-pager" style="display:none">
+        <button class="btn btn-sm btn-outline" id="node-prev" onclick="changeNodePage(-1)">上一页</button>
+        <span class="log-page-info" id="node-page-info"></span>
+        <button class="btn btn-sm btn-outline" id="node-next" onclick="changeNodePage(1)">下一页</button>
+        <select id="node-page-size" class="pager-size-select" onchange="onNodePageSizeChange()">
+          <option value="10">10 条/页</option>
+          <option value="20" selected>20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
+      </div>
     </div>
   </div>
 
   <!-- Sub Chains Tab -->
   <div id="tab-sub-chains" class="tab-content">
     <div class="toolbar">
-      <input class="search-box" placeholder="搜索子链..." oninput="filterTable('sub-table', this.value)">
+      <input class="search-box" placeholder="搜索子链..." oninput="onChainListSearch('sub')">
       <div style="display:flex;gap:8px">
         <button class="btn btn-outline edit-only" onclick="newSubChainViaOrch()">&#128736; 编排新建</button>
         <button class="btn btn-primary edit-only" onclick="openSubChainModal()">+ 新增 Sub Chain</button>
@@ -288,13 +316,24 @@
         <thead><tr><th>Chain ID</th><th>名称</th><th>描述</th><th>状态</th><th>DSL 大小</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="log-pager" id="sub-pager" style="display:none">
+        <button class="btn btn-sm btn-outline" id="sub-prev" onclick="changeChainListPage('sub', -1)">上一页</button>
+        <span class="log-page-info" id="sub-page-info"></span>
+        <button class="btn btn-sm btn-outline" id="sub-next" onclick="changeChainListPage('sub', 1)">下一页</button>
+        <select id="sub-page-size" class="pager-size-select" onchange="onChainListPageSizeChange('sub')">
+          <option value="10">10 条/页</option>
+          <option value="20" selected>20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
+      </div>
     </div>
   </div>
 
   <!-- Root Chains Tab -->
   <div id="tab-root-chains" class="tab-content">
     <div class="toolbar">
-      <input class="search-box" placeholder="搜索根链..." oninput="filterTable('root-table', this.value)">
+      <input class="search-box" placeholder="搜索根链..." oninput="onChainListSearch('root')">
       <button class="btn btn-primary edit-only" onclick="openCreateRootChainModal()">新增 Root Chain</button>
     </div>
     <div class="table-wrap">
@@ -302,31 +341,45 @@
         <thead><tr><th>Chain ID</th><th>Chain Key</th><th>名称</th><th>状态</th><th>线上版本</th><th>必需参数</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="log-pager" id="root-pager" style="display:none">
+        <button class="btn btn-sm btn-outline" id="root-prev" onclick="changeChainListPage('root', -1)">上一页</button>
+        <span class="log-page-info" id="root-page-info"></span>
+        <button class="btn btn-sm btn-outline" id="root-next" onclick="changeChainListPage('root', 1)">下一页</button>
+        <select id="root-page-size" class="pager-size-select" onchange="onChainListPageSizeChange('root')">
+          <option value="10">10 条/页</option>
+          <option value="20" selected>20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
+      </div>
     </div>
   </div>
 
   <!-- Logs Tab：查看所有日志列表（Node 运行日志 / Activity 执行日志） -->
   <div id="tab-logs" class="tab-content">
     <div class="toolbar">
-      <select id="all-log-type" onchange="switchAllLogType()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="node">Node 运行日志</option>
-        <option value="activity">Activity 执行日志</option>
-      </select>
-      <select id="all-log-env" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部环境</option>
-      </select>
-      <select id="all-log-level" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部级别</option>
-        <option value="info">info</option>
-        <option value="error">error</option>
-      </select>
-      <select id="all-log-root-chain-id" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem;max-width:260px">
-        <option value="">全部 Root Chain</option>
-      </select>
-      <input id="all-log-trace-id" placeholder="trace_id" style="width:240px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
-      <input id="all-log-payload" placeholder="payload 内容（模糊匹配，留空忽略）" style="width:260px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
-      <button class="btn btn-primary" onclick="loadAllLogs()">搜索</button>
-      <button class="btn btn-outline" onclick="clearAllLogFilters()">重置</button>
+      <!-- 查询条件与搜索/重置按钮同属查询，整组紧靠左侧排列，与 Activities 工具栏一致 -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="all-log-type" onchange="switchAllLogType()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="node">Node 运行日志</option>
+          <option value="activity">Activity 执行日志</option>
+        </select>
+        <select id="all-log-env" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="">全部环境</option>
+        </select>
+        <select id="all-log-level" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="">全部级别</option>
+          <option value="info">info</option>
+          <option value="error">error</option>
+        </select>
+        <select id="all-log-root-chain-id" onchange="loadAllLogs()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem;max-width:260px">
+          <option value="">全部 Root Chain</option>
+        </select>
+        <input id="all-log-trace-id" placeholder="trace_id" style="width:240px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+        <input id="all-log-payload" placeholder="payload 内容（模糊匹配，留空忽略）" style="width:260px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
+        <button class="btn btn-primary" onclick="loadAllLogs()">搜索</button>
+        <button class="btn btn-outline" onclick="clearAllLogFilters()">重置</button>
+      </div>
     </div>
     <div id="all-log-list" class="log-list"><div class="log-empty">加载中…</div></div>
     <div class="log-pager" id="all-log-pager" style="display:none">

@@ -56,30 +56,57 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .table-wrap { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 #tab-activities .table-wrap > table { min-width: 1100px; max-width: 100%; }
+/* Activities 列表：标签每个一行，宽度限 4 个汉字（badge 字号 .75rem，左右内边距各 10px），超出省略 */
+.badge.act-tag-badge { display: block; width: max-content; max-width: calc(4.4em + 20px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 0; }
+/* Activities 列表：命名空间 / 活动名称合并一列上下两行，超宽时自动换行而非省略 */
+/* 不限内容宽度（覆盖 .code-cell 的 max-width:200px），随列宽自动扩展，列宽不够时才换行 */
+.act-ns-name .code-cell { max-width: none; white-space: normal; word-break: break-all; overflow: visible; }
+.act-ns-name .code-cell + .code-cell { margin-top: 2px; }
+.act-ns-name .act-ns { color: var(--text-muted); } /* 第一行命名空间用灰色，与第二行活动名称区分 */
+/* Activities 列表：参数数 / 已发布引用 / 引用 Nodes 只显示数字，表头分两行，列宽收到最小并居中 */
+#tab-activities th.act-num-col,
+#tab-activities td.arg-count,
+#tab-activities td.pubref-count,
+#tab-activities td.noderef-count { width: 1%; padding-left: 8px; padding-right: 8px; text-align: center; white-space: nowrap; }
+/* Activities 列表：ID / 标签 / 创建时间 / 操作 四列内容宽度固定，用固定像素宽，多余宽度留给名称、命名空间 / 活动名称两列
+   ID 为 A%06d（7 个等宽字符）；标签最宽 4 个汉字（见 .act-tag-badge，约 73px）；创建时间为 YYYY-MM-DD；
+   操作为 5 个图标按钮（每个约 34px，间距 6px） */
+#tab-activities .act-col-id,
+#tab-activities .act-col-tag,
+#tab-activities .act-col-time,
+#tab-activities .act-col-ops { padding-left: 12px; padding-right: 12px; white-space: nowrap; }
+#tab-activities .act-col-id { width: 84px; min-width: 84px; }
+#tab-activities .act-col-tag { width: 100px; min-width: 100px; }
+#tab-activities .act-col-time { width: 104px; min-width: 104px; }
+#tab-activities .act-col-ops { width: 220px; min-width: 220px; }
 /* Nodes 列表：分配列宽，避免内容折成两行（描述/分类/状态/版本列已隐藏） */
 #nodes-table { min-width: 1400px; table-layout: fixed; }
 #nodes-table th, #nodes-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 注意：本表为 table-layout:fixed 且按列序号硬编码宽度，
    增删列时必须同步调整下列 nth-child 序号，否则表头与数据行会错位。 */
-/* Node ID 由 fmt.Sprintf("N%06d") 生成，固定 7 个字符（如 N000001），
-   故用固定像素宽（mono 字号 .8rem，7 字符约 60px + 单元格内边距 32px），
-   避免百分比在宽屏下空出大片留白。 */
+/* Node ID / 已发布引用 / 操作 三列内容宽度固定，用固定像素宽，窗口变宽变窄都不变；
+   名称列不设宽度，吸收剩余空间（固定布局下若所有列都设了宽度，多余宽度会按比例摊到每一列，
+   像素宽的列也会被撑宽）；其余列保持百分比。
+   Node ID 由 fmt.Sprintf("N%06d") 生成，固定 7 个字符（如 N000001，mono 字号 .8rem 约 60px + 内边距 32px）。 */
 #nodes-table th:nth-child(1), #nodes-table td:nth-child(1) { width: 110px; } /* Node ID */
-#nodes-table th:nth-child(2), #nodes-table td:nth-child(2) { width: 20%; }  /* 名称 */
+/* 名称（第 2 列）不设宽度 */
 #nodes-table th:nth-child(3), #nodes-table td:nth-child(3) { width: 11%; } /* 类型 */
 #nodes-table th:nth-child(4), #nodes-table td:nth-child(4) { width: 7%; }  /* 大类 */
 #nodes-table th:nth-child(5), #nodes-table td:nth-child(5) { width: 10%; } /* 标签 */
 #nodes-table th:nth-child(6), #nodes-table td:nth-child(6) { width: 8%; }  /* 命名空间 */
-#nodes-table th:nth-child(7), #nodes-table td:nth-child(7) { width: 6%; }  /* 已发布引用 */
-/* 操作列用固定像素宽而非百分比：容纳 4 个按钮（编辑/测试/日志/删除约 270px），
-   取 300px 留余量；用百分比会在窄屏被压缩导致按钮显示不全。 */
-#nodes-table th:nth-child(8), #nodes-table td:nth-child(8) { width: 300px; overflow: visible; } /* 操作 */
+/* 已发布引用只显示数字，宽度够放下表头文字即可 */
+#nodes-table th:nth-child(7), #nodes-table td:nth-child(7) { width: 100px; } /* 已发布引用 */
+/* 操作列容纳 4 个图标按钮（编辑/测试/日志/删除，每个约 33px，间距 6px，约 150px）+ 内边距 32px */
+#nodes-table th:nth-child(8), #nodes-table td:nth-child(8) { width: 190px; overflow: visible; } /* 操作 */
 th, td { padding: 12px 16px; text-align: left; font-size: .875rem; }
 th { background: #f9fafb; font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; border-bottom: 2px solid var(--border); }
 td { border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: #f9fafb; }
 .actions { display: flex; gap: 6px; }
+/* 操作列图标按钮：只显示图标，文字放在 title 里悬停显示 */
+.btn.btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; line-height: 1; }
+.btn.btn-icon svg { width: 16px; height: 16px; display: block; pointer-events: none; }
 /* 根链列表操作按钮较多，窄屏时按钮文字不换行，由表格横向滚动；
    按钮包在单元格内的 div.actions 里，单元格保持 table-cell，行高、分隔线与其它列一致 */
 #root-table .actions .btn { white-space: nowrap; }
@@ -452,6 +479,7 @@ path.orch-trace-edge { stroke: #ef4444 !important; stroke-width: 3.5px !importan
 .log-pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px; border-top: 1px solid var(--border); background: var(--card-bg); }
 .log-pager .btn:disabled { opacity: .45; cursor: not-allowed; }
 .log-page-info { font-size: .82rem; color: var(--text-muted); font-weight: 600; }
+.pager-size-select { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: .8rem; background: var(--card-bg); color: var(--text); outline: none; }
 .log-section-title { font-size: .8rem; font-weight: 700; color: var(--text-muted); margin: 14px 2px 6px; padding-bottom: 4px; border-bottom: 2px solid var(--border); }
 .mini-btn { font-size: .7rem; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--primary); cursor: pointer; margin-left: 8px; }
 .mini-btn:hover { background: var(--primary); color: #fff; }

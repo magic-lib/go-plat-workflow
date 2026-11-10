@@ -740,31 +740,118 @@ function filterTable(tableId, q) {
   rows.forEach(r => r.style.display = r.textContent.toLowerCase().includes(lq) ? '' : 'none');
 }
 
+// Nodes 列表分页状态（前端分页：接口返回当前命名空间/标签/环境下的全量节点，搜索与大类筛选在前端完成）
+let _nodePage = 1;
+let _nodePageSize = 20;
+let _nodeListRows = []; // 最近一次 /api/nodes 返回的列表（为空时不覆盖 _nodesForEdit，故单独记录）
+
+// 搜索框 / 大类筛选变化：结果集改变，回到第一页
 function filterNodes() {
+  _nodePage = 1;
+  renderNodeTable();
+}
+
+// 按搜索词、大类、标签过滤当前列表；保留原始下标（与 _nodesForEdit 一致，编辑按钮按下标取节点）
+function applyNodeListFilter() {
   const searchEl = document.querySelector('#tab-nodes .search-box');
   const kindEl = document.getElementById('node-kind-filter');
   const tagEl = document.getElementById('node-tag-filter');
-  const q = (searchEl ? searchEl.value : '').toLowerCase();
+  const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
   const kind = kindEl ? kindEl.value : '';
   const tag = tagEl ? tagEl.value : '';
-  const rows = document.querySelectorAll('#nodes-table tbody tr');
-  rows.forEach(r => {
-    let show = true;
-    if (q && !r.textContent.toLowerCase().includes(q)) show = false;
-    if (show && kind) {
-      // 第4列是"大类"列（0-based index 3），按 data-kind 记录的大类值比较
-      const kindCell = r.cells[3];
-      if (kindCell && kindCell.getAttribute('data-kind') !== kind) show = false;
+  const result = [];
+  _nodeListRows.forEach((n, i) => {
+    const meta = nodeKindMeta(n.kind);
+    if (kind && meta.kind !== kind) return;
+    if (tag && !(n.tags || []).includes(tag)) return;
+    if (q) {
+      const text = [n.node_id, n.name, n.type, meta.label, n.namespace].concat(n.tags || []).join(' ').toLowerCase();
+      if (!text.includes(q)) return;
     }
-    if (show && tag) {
-      // 第5列是"标签"列（0-based index 4），取所有 chip 文本
-      // 注意：原实现误用 index 5（实为命名空间列），添加「已发布引用」列后一并修正
-      const tagCell = r.cells[4];
-      const has = tagCell && Array.prototype.some.call(tagCell.querySelectorAll('.tag-chip'), c => c.textContent.replace(' ✓','').trim() === tag);
-      if (!has) show = false;
-    }
-    r.style.display = show ? '' : 'none';
+    result.push({ n: n, i: i });
   });
+  return result;
+}
+
+// 渲染 Nodes 表格当前页；数据变少（筛选/删除）导致页码越界时退回最后一页
+function renderNodeTable() {
+  const tbody = document.querySelector('#nodes-table tbody');
+  if (!tbody) return;
+  const all = applyNodeListFilter();
+  if (all.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">🔍</div><p>无匹配节点</p></div></td></tr>';
+    renderNodePager(0);
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(all.length / _nodePageSize));
+  if (_nodePage > totalPages) _nodePage = totalPages;
+  if (_nodePage < 1) _nodePage = 1;
+  const start = (_nodePage - 1) * _nodePageSize;
+  tbody.innerHTML = all.slice(start, start + _nodePageSize).map(({ n, i }) => `
+      <tr>
+        <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
+        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
+        <td><span class="code-cell">${esc(n.type)}</span></td>
+        <td data-kind="${esc(nodeKindMeta(n.kind).kind)}"><span class="badge ${nodeKindMeta(n.kind).cls}">${nodeKindMeta(n.kind).label}</span></td>
+        <td>${renderTagChipsHtml(n.tags)}</td>
+        <td>${esc(n.namespace || '-')}</td>
+        <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
+        <td>
+          <div class="actions">
+            <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑', n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">${actionIconSvg('edit')}</button>
+            <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="openTestNodeModal('${esc(n.node_id)}')">${actionIconSvg('test')}</button>
+            <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('日志')} onclick="openNodeLogModal('${esc(n.node_id)}')">${actionIconSvg('log')}</button>
+            <button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除', n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">${actionIconSvg('delete')}</button>
+          </div>
+        </td>
+      </tr>`).join('');
+  renderNodePager(all.length);
+}
+
+// 渲染 Nodes 分页器：有数据即展示总数与页码，便于切换每页条数
+function renderNodePager(total) {
+  const pager = document.getElementById('node-pager');
+  if (!pager) return;
+  if (total <= 0) {
+    pager.style.display = 'none';
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(total / _nodePageSize));
+  pager.style.display = 'flex';
+  document.getElementById('node-page-info').textContent =
+    '第 ' + _nodePage + ' / ' + totalPages + ' 页（共 ' + total + ' 条）';
+  document.getElementById('node-prev').disabled = _nodePage <= 1;
+  document.getElementById('node-next').disabled = _nodePage >= totalPages;
+}
+
+// 切换 Nodes 页码（基于当前筛选结果）
+function changeNodePage(delta) {
+  const totalPages = Math.max(1, Math.ceil(applyNodeListFilter().length / _nodePageSize));
+  const newPage = _nodePage + delta;
+  if (newPage < 1 || newPage > totalPages) return;
+  _nodePage = newPage;
+  renderNodeTable();
+}
+
+// 每页条数变化：持久化选择并回到第一页
+function onNodePageSizeChange() {
+  const sel = document.getElementById('node-page-size');
+  const size = parseInt(sel ? sel.value : '', 10);
+  if (!(size > 0)) return;
+  _nodePageSize = size;
+  try { localStorage.setItem('wf_node_page_size', String(size)); } catch (_) {}
+  _nodePage = 1;
+  renderNodeTable();
+}
+
+// 恢复上次选择的每页条数（仅接受下拉中存在的选项）
+function restoreNodePageSize() {
+  const sel = document.getElementById('node-page-size');
+  if (!sel) return;
+  let saved = '';
+  try { saved = localStorage.getItem('wf_node_page_size') || ''; } catch (_) {}
+  if (saved && Array.prototype.some.call(sel.options, o => o.value === saved)) sel.value = saved;
+  _nodePageSize = parseInt(sel.value, 10) || 20;
 }
 
 // 渲染标签 chip 列表（列表列展示用，不可点击）
@@ -841,6 +928,13 @@ function refreshNodeTagFilter() {
 
 // 标签筛选变化：结果集改变并重新加载列表
 function onNodeTagFilterChange() {
+  _nodePage = 1;
+  loadNodes();
+}
+
+// 命名空间筛选变化：结果集改变，回到第一页并重新加载列表
+function onNodeNamespaceFilterChange() {
+  _nodePage = 1;
   loadNodes();
 }
 
@@ -853,6 +947,7 @@ function getNodeListEnv() {
 // 环境筛选变化：持久化选择 + 重新加载列表（有环境才带心跳）
 function onNodeEnvFilterChange() {
   try { localStorage.setItem('wf_node_env', document.getElementById('node-env-filter').value); } catch (_) {}
+  _nodePage = 1;
   loadNodes();
 }
 
@@ -873,6 +968,8 @@ async function loadNodeEnvOptions(force = false) {
     return _nodeEnvLoadPromise;
   }
   _nodeEnvLoadedProject = p;
+  _nodePage = 1;
+  restoreNodePageSize();
   _nodeEnvLoadPromise = (async () => {
     try {
       const envs = await fetchEnvConfigs();
@@ -931,31 +1028,17 @@ async function loadNodes() {
     const envQ = params.length ? ('?' + params.join('&')) : '';
     const nodes = await api('/api/nodes' + envQ);
     const tbody = document.querySelector('#nodes-table tbody');
+    _nodeListRows = nodes || [];
     if (!nodes.length) {
       tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
+      renderNodePager(0);
       return;
     }
     window._nodesForEdit = nodes; // 缓存供编辑按钮索引使用
     refreshNodeNamespaceFilter(); // 同步命名空间过滤下拉（基于当前项目 Activity 缓存）
     refreshNodeTagFilter(); // 同步标签过滤下拉（基于当前列表已有标签）
-    tbody.innerHTML = nodes.map((n, i) => `
-      <tr>
-        <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
-        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
-        <td><span class="code-cell">${esc(n.type)}</span></td>
-        <td data-kind="${esc(nodeKindMeta(n.kind).kind)}"><span class="badge ${nodeKindMeta(n.kind).cls}">${nodeKindMeta(n.kind).label}</span></td>
-        <td>${renderTagChipsHtml(n.tags)}</td>
-        <td>${esc(n.namespace || '-')}</td>
-        <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
-        <td>
-          <div class="actions">
-            <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">编辑</button>
-            <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
-            <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
-            <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">删除</button>
-          </div>
-        </td>
-      </tr>`).join('');
+    // 保持当前页码（删除/编辑后刷新仍停留在当前页；当前页删空时 renderNodeTable 自动退回上一页）
+    renderNodeTable();
   } catch (e) { showToast('加载节点失败: ' + e.message, 'error'); }
 }
 
@@ -2366,7 +2449,7 @@ async function loadActivities() {
   try {
     const data = await api('/api/activities' + '?_=1' + envQ);
     window._activityCache = data || []; // 全量缓存（已按所选环境带心跳/测试状态）
-    _actPage = 1; // 重新加载后回到第一页
+    // 保持当前页码（删除/编辑后刷新仍停留在当前页；当前页删空时 renderActivityTable 自动退回上一页）
     renderActivityTable(applyActivityTagFilter(window._activityCache));
     refreshActivityTagFilterOptions();
   } catch (e) { showToast('加载 activities 失败: ' + e.message, 'error'); }
@@ -2422,6 +2505,8 @@ async function loadActivityEnvOptions(force = false) {
     return _activityEnvLoadPromise;
   }
   _activityEnvLoadedProject = p;
+  _actPage = 1;
+  restoreActivityPageSize();
   _activityEnvLoadPromise = (async () => {
     try {
       const envs = await fetchEnvConfigs();
@@ -2512,11 +2597,12 @@ function inferOrchParamPreset(val) {
 
 // Activities 列表分页状态（前端分页：接口返回全量，保证标签筛选项稳定）
 let _actPage = 1;
-const _actPageSize = 50;
+let _actPageSize = 20;
 
 // 环境筛选变化：持久化选择 + 重新加载列表
 function onActivityEnvFilterChange() {
   try { localStorage.setItem('wf_activity_env', document.getElementById('act-env-filter').value); } catch (_) {}
+  _actPage = 1;
   loadActivities();
 }
 
@@ -2530,7 +2616,7 @@ function renderActivityTable(list) {
   const tbody = document.getElementById('act-table');
   const all = list || [];
   if (all.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
     renderActivityPager(0);
     return;
   }
@@ -2553,7 +2639,8 @@ function renderActivityTable(list) {
       }
     } catch(e) {}
     const argJson = escAttr(JSON.stringify(argData));
-    const tagsHtml = (a.tags || []).map(t => '<span class="badge ' + tagColorClass(t) + '" style="margin-right:4px">' + escHtml(t) + '</span>').join('') || '<span style="color:var(--text-muted)">-</span>';
+    // 标签每个一行，最多显示 4 个汉字宽，超出用省略号，悬停看全名
+    const tagsHtml = (a.tags || []).map(t => '<span class="badge act-tag-badge ' + tagColorClass(t) + '" title="' + escAttr(t) + '">' + escHtml(t) + '</span>').join('') || '<span style="color:var(--text-muted)">-</span>';
     // 测试状态图标：success=绿色勾，failed=红色叉，none/无=灰色图标。
     // 未选择具体环境时不展示（避免多环境聚合导致的误判）。
     let testIcon = '';
@@ -2567,33 +2654,32 @@ function renderActivityTable(list) {
       testIcon += ' ';
     }
     return `<tr>
-      <td><span class="code-cell">${escHtml(a.activity_id)}</span></td>
+      <td class="act-col-id"><span class="code-cell">${escHtml(a.activity_id)}</span></td>
       <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span>${a.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
-      <td>${tagsHtml}</td>
-      <td><span class="code-cell">${escHtml(a.act_namespace)}</span></td>
-      <td><span class="code-cell">${escHtml(a.act_name)}</span></td>
+      <td class="act-col-tag">${tagsHtml}</td>
+      <td class="act-ns-name"><div class="code-cell act-ns" title="命名空间：${escAttr(a.act_namespace)}">${escHtml(a.act_namespace)}</div><div class="code-cell" title="活动名称：${escAttr(a.act_name)}">${escHtml(a.act_name)}</div></td>
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
       <td class="pubref-count" data-chains="${publishedRefsJsonAttr(a)}" data-empty="${(a.published_root_chains && a.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(a)}</td>
       <td class="noderef-count" data-nodes="${refNodesJsonAttr(a)}" data-empty="${activityRefNodes(a).length ? '' : '1'}">${refNodesCountHtml(a)}</td>
-      <td>${escHtml(a.created_at ? a.created_at.substring(0,10) : '-')}</td>
-      <td><div class="actions">
-        <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(a.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editActivity('${escHtml(a.activity_id)}')">编辑</button>
-        <button class="btn btn-sm btn-primary" onclick="openTestActivityModal('${escHtml(a.activity_id)}')">测试</button>
-        <button class="btn btn-sm btn-outline" onclick="showActivityListenerCode('${escHtml(a.activity_id)}')">监听代码</button>
-        <button class="btn btn-sm btn-outline" onclick="openActivityLogsModal('${escHtml(a.activity_id)}', '${escHtml(a.act_name)}')">日志</button>
-        <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(a.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteActivityById('${escHtml(a.activity_id)}')">删除</button>
+      <td class="act-col-time">${escHtml(a.created_at ? a.created_at.substring(0,10) : '-')}</td>
+      <td class="act-col-ops"><div class="actions">
+        <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑', a.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editActivity('${escHtml(a.activity_id)}')">${actionIconSvg('edit')}</button>
+        <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="openTestActivityModal('${escHtml(a.activity_id)}')">${actionIconSvg('test')}</button>
+        <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('监听代码')} onclick="showActivityListenerCode('${escHtml(a.activity_id)}')">${actionIconSvg('code')}</button>
+        <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('日志')} onclick="openActivityLogsModal('${escHtml(a.activity_id)}', '${escHtml(a.act_name)}')">${actionIconSvg('log')}</button>
+        <button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除', a.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteActivityById('${escHtml(a.activity_id)}')">${actionIconSvg('delete')}</button>
       </div></td>
     </tr>`;
   }).join('');
   renderActivityPager(all.length);
 }
 
-// 渲染 Activities 分页器；总数不超过一页时隐藏
+// 渲染 Activities 分页器：有数据即展示总数与页码，便于切换每页条数
 function renderActivityPager(total) {
   const pager = document.getElementById('act-pager');
   if (!pager) return;
   const totalPages = Math.max(1, Math.ceil(total / _actPageSize));
-  if (total <= _actPageSize) {
+  if (total <= 0) {
     pager.style.display = 'none';
     return;
   }
@@ -2612,6 +2698,27 @@ function changeActivityPage(delta) {
   if (newPage < 1 || newPage > totalPages) return;
   _actPage = newPage;
   renderActivityTable(list);
+}
+
+// 每页条数变化：持久化选择并回到第一页
+function onActivityPageSizeChange() {
+  const sel = document.getElementById('act-page-size');
+  const size = parseInt(sel ? sel.value : '', 10);
+  if (!(size > 0)) return;
+  _actPageSize = size;
+  try { localStorage.setItem('wf_activity_page_size', String(size)); } catch (_) {}
+  _actPage = 1;
+  renderActivityTable(applyActivityTagFilter(window._activityCache));
+}
+
+// 恢复上次选择的每页条数（仅接受下拉中存在的选项）
+function restoreActivityPageSize() {
+  const sel = document.getElementById('act-page-size');
+  if (!sel) return;
+  let saved = '';
+  try { saved = localStorage.getItem('wf_activity_page_size') || ''; } catch (_) {}
+  if (saved && Array.prototype.some.call(sel.options, o => o.value === saved)) sel.value = saved;
+  _actPageSize = parseInt(sel.value, 10) || 20;
 }
 
 // 根据心跳信息渲染心跳图标（♥）：最近1分钟内无心跳（count==0）显示灰色（worker 未启动/已挂），
@@ -5145,6 +5252,125 @@ function clearActParamRows() {
 }
 
 // ============================================================
+// Sub Chains / Root Chains 列表前端分页（两个列表共用）
+// ============================================================
+// rows 为最近一次接口返回的全量列表；搜索在前端按字段匹配，筛选/翻页时保留原始下标（编辑等按钮按下标取数据）。
+// project 记录 rows 所属项目，切换项目后回到第 1 页。
+const _chainListPagers = {
+  sub:  { page: 1, size: 20, rows: [], project: '', sizeRestored: false, colspan: 6, tbody: '#sub-table tbody', search: '#tab-sub-chains .search-box', storageKey: 'wf_sub_page_size' },
+  root: { page: 1, size: 20, rows: [], project: '', sizeRestored: false, colspan: 7, tbody: '#root-table tbody', search: '#tab-root-chains .search-box', storageKey: 'wf_root_page_size' },
+};
+
+// 根链线上版本映射（chain_id → version），loadRootChains 时刷新，供行渲染与搜索使用
+let _rootCurVerMap = {};
+
+// 接口数据到达后更新列表缓存并渲染当前页（删除/编辑后刷新仍停留在当前页；当前页删空时自动退回上一页）
+function setChainListRows(key, rows) {
+  const st = _chainListPagers[key];
+  if (!st.sizeRestored) {
+    st.sizeRestored = true;
+    const sel = document.getElementById(key + '-page-size');
+    let saved = '';
+    try { saved = localStorage.getItem(st.storageKey) || ''; } catch (_) {}
+    if (sel && saved && Array.prototype.some.call(sel.options, o => o.value === saved)) sel.value = saved;
+    st.size = parseInt(sel ? sel.value : '', 10) || 20;
+  }
+  const p = getProject();
+  if (st.project !== p) { st.project = p; st.page = 1; }
+  st.rows = rows || [];
+  renderChainList(key);
+}
+
+// 按搜索框关键字过滤，返回 [{ c, i }]（i 为在 rows 中的原始下标）
+function filterChainListRows(key) {
+  const st = _chainListPagers[key];
+  const el = document.querySelector(st.search);
+  const q = (el ? el.value : '').trim().toLowerCase();
+  const result = [];
+  st.rows.forEach((c, i) => {
+    if (q && !chainListSearchText(key, c).toLowerCase().includes(q)) return;
+    result.push({ c: c, i: i });
+  });
+  return result;
+}
+
+// 参与搜索的字段（对应表格中展示的文字列）
+function chainListSearchText(key, c) {
+  const fields = [c.chain_id, c.name, c.description, c.status == 1 ? '启用' : '禁用'];
+  if (key === 'root') {
+    const curVer = _rootCurVerMap[c.chain_id];
+    fields.push(c.chain_key, curVer ? 'v' + curVer : '未发布');
+    fields.push.apply(fields, c.must_input_params || []);
+  }
+  return fields.filter(Boolean).join(' ');
+}
+
+// 渲染列表当前页与分页条
+function renderChainList(key) {
+  const st = _chainListPagers[key];
+  const tbody = document.querySelector(st.tbody);
+  if (!tbody) return;
+  const all = filterChainListRows(key);
+  if (all.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="' + st.colspan + '"><div class="empty-state"><div class="icon">🔍</div><p>无匹配数据</p></div></td></tr>';
+    renderChainListPager(key, 0);
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(all.length / st.size));
+  if (st.page > totalPages) st.page = totalPages;
+  if (st.page < 1) st.page = 1;
+  const start = (st.page - 1) * st.size;
+  const rowHtml = key === 'sub' ? subChainRowHtml : rootChainRowHtml;
+  tbody.innerHTML = all.slice(start, start + st.size).map(({ c, i }) => rowHtml(c, i)).join('');
+  renderChainListPager(key, all.length);
+}
+
+// 渲染分页条：有数据即展示总数与页码；无数据时隐藏
+function renderChainListPager(key, total) {
+  const st = _chainListPagers[key];
+  const pager = document.getElementById(key + '-pager');
+  if (!pager) return;
+  if (total <= 0) {
+    pager.style.display = 'none';
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(total / st.size));
+  pager.style.display = 'flex';
+  document.getElementById(key + '-page-info').textContent =
+    '第 ' + st.page + ' / ' + totalPages + ' 页（共 ' + total + ' 条）';
+  document.getElementById(key + '-prev').disabled = st.page <= 1;
+  document.getElementById(key + '-next').disabled = st.page >= totalPages;
+}
+
+// 搜索关键字变化：结果集改变，回到第一页
+function onChainListSearch(key) {
+  _chainListPagers[key].page = 1;
+  renderChainList(key);
+}
+
+// 切换页码（基于当前搜索结果）
+function changeChainListPage(key, delta) {
+  const st = _chainListPagers[key];
+  const totalPages = Math.max(1, Math.ceil(filterChainListRows(key).length / st.size));
+  const newPage = st.page + delta;
+  if (newPage < 1 || newPage > totalPages) return;
+  st.page = newPage;
+  renderChainList(key);
+}
+
+// 每页条数变化：持久化选择并回到第一页
+function onChainListPageSizeChange(key) {
+  const st = _chainListPagers[key];
+  const sel = document.getElementById(key + '-page-size');
+  const size = parseInt(sel ? sel.value : '', 10);
+  if (!(size > 0)) return;
+  st.size = size;
+  try { localStorage.setItem(st.storageKey, String(size)); } catch (_) {}
+  st.page = 1;
+  renderChainList(key);
+}
+
+// ============================================================
 // Sub Chains
 // ============================================================
 async function loadSubChains() {
@@ -5152,14 +5378,21 @@ async function loadSubChains() {
     const chains = await api('/api/sub-chains');
     const tbody = document.querySelector('#sub-table tbody');
     if (!chains.length) {
+      _chainListPagers.sub.rows = [];
       tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="icon">🔗</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无子链数据</p></div></td></tr>';
+      renderChainListPager('sub', 0);
       return;
     }
     window._subChainsForEdit = chains; // 缓存供编辑按钮索引使用
-    tbody.innerHTML = chains.map((c, i) => {
-      let dslSize = '-';
-      try { dslSize = (c.dsl_json || '').length + ' chars'; } catch(e){}
-      return `
+    setChainListRows('sub', chains);
+  } catch (e) { showToast('加载子链失败: ' + e.message, 'error'); }
+}
+
+// 子链列表单行（i 为 _subChainsForEdit 中的原始下标）
+function subChainRowHtml(c, i) {
+  let dslSize = '-';
+  try { dslSize = (c.dsl_json || '').length + ' chars'; } catch(e){}
+  return `
       <tr>
         <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
         <td>${esc(c.name)}</td>
@@ -5173,8 +5406,6 @@ async function loadSubChains() {
           <button class="btn btn-sm btn-danger edit-only" onclick="deleteSubChain('${esc(c.chain_id)}')">删除</button>
         </td>
       </tr>`;
-    }).join('');
-  } catch (e) { showToast('加载子链失败: ' + e.message, 'error'); }
 }
 
 function openSubChainModal(chain) {
@@ -5259,58 +5490,64 @@ async function loadRootChains() {
     ]);
     const curVerMap = {};
     (currents || []).forEach(r => { curVerMap[r.chain_id] = r.version; });
+    _rootCurVerMap = curVerMap;
     const tbody = document.querySelector('#root-table tbody');
     if (!chains.length) {
+      _chainListPagers.root.rows = [];
       tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="icon">🌳</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无根链数据，通过 Execute 页面执行工作流后会自动生成</p></div></td></tr>';
+      renderChainListPager('root', 0);
       return;
     }
     window._rootChainsForEdit = chains; // 缓存供按钮索引使用
-    tbody.innerHTML = chains.map((c, i) => {
-      const curVer = curVerMap[c.chain_id];
-      // 必需入参：与 Activity 列表展示参数方式一致，用芯片展示每个 {{arguments.xxx}} 的参数名
-      // 最多显示 2 个，多余数量用 "+N" 触发泡泡窗（复用 showHbPop/moveHbPop/hideHbPop 浮层）列出全部
-      const params = c.must_input_params || [];
-      let paramsHtml;
-      if (!params.length) {
-        paramsHtml = '<span style="color:var(--text-muted);font-size:.78rem">无</span>';
-      } else {
-        const shown = params.slice(0, 2);
-        const chip = k => '<span style="font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
-        // 列表里的参数名可能是多级私有参数（如 N000002__fim5n.N000001__eka03.phone），过长时截断显示，悬停看全名，
-        // 避免撑宽「必需参数」列把名称、描述挤成竖排；泡泡窗里仍用完整芯片列出全部参数
-        const shortChip = k => '<span title="' + esc(k) + '" style="display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
-        const shownHtml = shown.map(shortChip).join('');
-        const moreHtml = params.length > 2
-          ? '<span class="param-more" style="font-family:monospace;font-size:.74rem;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;white-space:nowrap;cursor:pointer" ' +
-            'onmouseenter="showHbPop(event,this)" onmousemove="moveHbPop(event)" onmouseleave="hideHbPop()">+' + (params.length - 2) + '</span>'
-          : '';
-        const popItems = params.map(k => '<div class="hb-pop-item">' + chip(k) + '</div>').join('');
-        const popHtml = '<div class="hb-pop-title">必需入参（共 ' + params.length + ' 个）</div>' + popItems;
-        paramsHtml = '<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:4px 8px;display:flex;flex-wrap:wrap;align-items:center;gap:4px;width:max-content;max-width:240px">' +
-          shownHtml + moreHtml +
-          (moreHtml ? '<span style="display:none" data-pop="' + encodeURIComponent(popHtml) + '"></span>' : '') +
-          '</div>';
-      }
-      return `
-      <tr>
-        <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
-        <td class="code-cell" title="${esc(c.chain_key||'')}">${esc(c.chain_key||'')}</td>
-        <td style="min-width:7em" title="${esc(c.description||'')}">${esc(c.name)}</td>
-        <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
-        <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
-        <td>${paramsHtml}</td>
-        <td><div class="actions">
-          <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
-          <button class="btn btn-sm btn-primary edit-only" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
-          <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
-          <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
-          <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
-          <button class="btn btn-sm btn-outline edit-only" onclick="copyRootChain('${esc(c.chain_id)}')">复制</button>
-          ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>`}
-        </div></td>
-      </tr>`;
-    }).join('');
+    setChainListRows('root', chains);
   } catch (e) { showToast('加载根链失败: ' + e.message, 'error'); }
+}
+
+// 根链列表单行（i 为 _rootChainsForEdit 中的原始下标）
+function rootChainRowHtml(c, i) {
+  const curVer = _rootCurVerMap[c.chain_id];
+  // 必需入参：与 Activity 列表展示参数方式一致，用芯片展示每个 {{arguments.xxx}} 的参数名
+  // 最多显示 2 个，多余数量用 "+N" 触发泡泡窗（复用 showHbPop/moveHbPop/hideHbPop 浮层）列出全部
+  const params = c.must_input_params || [];
+  let paramsHtml;
+  if (!params.length) {
+    paramsHtml = '<span style="color:var(--text-muted);font-size:.78rem">无</span>';
+  } else {
+    const shown = params.slice(0, 2);
+    const chip = k => '<span style="font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
+    // 列表里的参数名可能是多级私有参数（如 N000002__fim5n.N000001__eka03.phone），过长时截断显示，悬停看全名，
+    // 避免撑宽「必需参数」列把名称、描述挤成竖排；泡泡窗里仍用完整芯片列出全部参数
+    const shortChip = k => '<span title="' + esc(k) + '" style="display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
+    const shownHtml = shown.map(shortChip).join('');
+    const moreHtml = params.length > 2
+      ? '<span class="param-more" style="font-family:monospace;font-size:.74rem;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;white-space:nowrap;cursor:pointer" ' +
+        'onmouseenter="showHbPop(event,this)" onmousemove="moveHbPop(event)" onmouseleave="hideHbPop()">+' + (params.length - 2) + '</span>'
+      : '';
+    const popItems = params.map(k => '<div class="hb-pop-item">' + chip(k) + '</div>').join('');
+    const popHtml = '<div class="hb-pop-title">必需入参（共 ' + params.length + ' 个）</div>' + popItems;
+    paramsHtml = '<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:4px 8px;display:flex;flex-wrap:wrap;align-items:center;gap:4px;width:max-content;max-width:240px">' +
+      shownHtml + moreHtml +
+      (moreHtml ? '<span style="display:none" data-pop="' + encodeURIComponent(popHtml) + '"></span>' : '') +
+      '</div>';
+  }
+  return `
+  <tr>
+    <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
+    <td class="code-cell" title="${esc(c.chain_key||'')}">${esc(c.chain_key||'')}</td>
+    <td style="min-width:7em" title="${esc(c.description||'')}">${esc(c.name)}</td>
+    <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
+    <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
+    <td>${paramsHtml}</td>
+    <td><div class="actions">
+      <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
+      <button class="btn btn-sm btn-primary edit-only" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
+      <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
+      <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
+      <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
+      <button class="btn btn-sm btn-outline edit-only" onclick="copyRootChain('${esc(c.chain_id)}')">复制</button>
+      ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>`}
+    </div></td>
+  </tr>`;
 }
 
 // 复制根链：新建一条内容与该链当前草稿一致的根链（名称加「-副本」，不复制发布记录）
@@ -6328,6 +6565,7 @@ async function loadOrchData(force = false) {
       _orchSubChains = await api('/api/sub-chains?only_enabled=true');
       refreshOrchNodeNsFilter();
       refreshOrchNodeTagFilter();
+      refreshOrchNodeTypeFilter();
       renderOrchNodeList();
       renderOrchSubList();
       refreshOrchConnOptions();
@@ -6340,13 +6578,15 @@ async function loadOrchData(force = false) {
   return _orchDataLoadPromise;
 }
 
-function renderOrchNodeList(filterText, filterNs, filterTag) {
+function renderOrchNodeList(filterText, filterNs, filterTag, filterType) {
   const q = (filterText||'').toLowerCase();
   const ns = (filterNs||'').trim();
   const tag = (filterTag||'').trim();
+  const type = (filterType||'').trim();
   _orchNodeListFiltered = (_orchNodes || []).filter(n => {
     if (ns && (n.namespace||'') !== ns) return false;
     if (tag && !((n.tags||[]).includes(tag))) return false;
+    if (type && (n.type||'') !== type) return false;
     if (!q) return true;
     return (n.node_id||'').toLowerCase().includes(q) || (n.name||'').toLowerCase().includes(q) || (n.type||'').toLowerCase().includes(q);
   });
@@ -6670,7 +6910,8 @@ function filterOrchNodes() {
   const q = document.getElementById('orch-node-search').value;
   const ns = document.getElementById('orch-node-ns-filter').value;
   const tag = document.getElementById('orch-node-tag-filter').value;
-  renderOrchNodeList(q, ns, tag);
+  const typeSel = document.getElementById('orch-node-type-filter');
+  renderOrchNodeList(q, ns, tag, typeSel ? typeSel.value : '');
 }
 
 // 根据当前编排可选项节点刷新命名空间过滤下拉（去重）
@@ -6693,6 +6934,16 @@ function refreshOrchNodeTagFilter() {
   const tags = Object.keys(tagSet).sort();
   sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
   sel.value = tags.includes(cur) ? cur : '';
+}
+
+// 根据当前编排可选项节点刷新节点类型过滤下拉（去重）
+function refreshOrchNodeTypeFilter() {
+  const sel = document.getElementById('orch-node-type-filter');
+  if (!sel) return;
+  const cur = sel.value;
+  const types = Array.from(new Set((_orchNodes || []).map(n => (n.type || '').trim()).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">全部类型</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  sel.value = types.includes(cur) ? cur : '';
 }
 
 function renderOrchSubList(filterText) {
@@ -9568,6 +9819,24 @@ function publishedLockAttrs(published, title) {
   if (isAdmin()) return 'title="' + esc(title || '已发布到根链，管理员可直接编辑/删除（操作前会二次确认）') + '"';
   return 'disabled title="' + esc(title || '已发布到根链，禁止编辑/删除') + '"';
 }
+// 列表「操作」列图标按钮用的内联 SVG 图标（线条风格，颜色跟随按钮文字色）
+const ACTION_ICON_PATHS = {
+  edit:   '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  test:   '<polygon points="6 3 20 12 6 21 6 3"/>',
+  code:   '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  log:    '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+  delete: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+};
+function actionIconSvg(name) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ACTION_ICON_PATHS[name] || '') + '</svg>';
+}
+// 图标按钮的 title / aria-label：悬停显示按钮文字；已发布锁定时沿用 publishedLockAttrs（含 disabled），提示前加上按钮文字
+function actionIconAttrs(label, published, lockTitle) {
+  const aria = 'aria-label="' + esc(label) + '"';
+  if (published) return aria + ' ' + publishedLockAttrs(true, label + '：' + lockTitle);
+  return aria + ' title="' + esc(label) + '"';
+}
+
 // 统一的已发布保护提示（后端也会拦截，此处用于前端即时反馈）
 function showPublishedLockedToast(kind) {
   showToast((kind || '该记录') + '已发布到根链，禁止编辑/删除。请先发布新版本或改用新建副本。', 'error');
