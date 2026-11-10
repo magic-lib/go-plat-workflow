@@ -84,19 +84,20 @@ table { width: 100%; border-collapse: collapse; }
 #nodes-table th, #nodes-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 注意：本表为 table-layout:fixed 且按列序号硬编码宽度，
    增删列时必须同步调整下列 nth-child 序号，否则表头与数据行会错位。 */
-/* Node ID 由 fmt.Sprintf("N%06d") 生成，固定 7 个字符（如 N000001），
-   故用固定像素宽（mono 字号 .8rem，7 字符约 60px + 单元格内边距 32px），
-   避免百分比在宽屏下空出大片留白。 */
+/* Node ID / 已发布引用 / 操作 三列内容宽度固定，用固定像素宽，窗口变宽变窄都不变；
+   名称列不设宽度，吸收剩余空间（固定布局下若所有列都设了宽度，多余宽度会按比例摊到每一列，
+   像素宽的列也会被撑宽）；其余列保持百分比。
+   Node ID 由 fmt.Sprintf("N%06d") 生成，固定 7 个字符（如 N000001，mono 字号 .8rem 约 60px + 内边距 32px）。 */
 #nodes-table th:nth-child(1), #nodes-table td:nth-child(1) { width: 110px; } /* Node ID */
-#nodes-table th:nth-child(2), #nodes-table td:nth-child(2) { width: 20%; }  /* 名称 */
+/* 名称（第 2 列）不设宽度 */
 #nodes-table th:nth-child(3), #nodes-table td:nth-child(3) { width: 11%; } /* 类型 */
 #nodes-table th:nth-child(4), #nodes-table td:nth-child(4) { width: 7%; }  /* 大类 */
 #nodes-table th:nth-child(5), #nodes-table td:nth-child(5) { width: 10%; } /* 标签 */
 #nodes-table th:nth-child(6), #nodes-table td:nth-child(6) { width: 8%; }  /* 命名空间 */
-#nodes-table th:nth-child(7), #nodes-table td:nth-child(7) { width: 6%; }  /* 已发布引用 */
-/* 操作列用固定像素宽而非百分比：容纳 4 个图标按钮（编辑/测试/日志/删除，每个约 30px + 间距），
-   取 180px 留余量；用百分比会在窄屏被压缩导致按钮显示不全。 */
-#nodes-table th:nth-child(8), #nodes-table td:nth-child(8) { width: 180px; overflow: visible; } /* 操作 */
+/* 已发布引用只显示数字，宽度够放下表头文字即可 */
+#nodes-table th:nth-child(7), #nodes-table td:nth-child(7) { width: 100px; } /* 已发布引用 */
+/* 操作列容纳 4 个图标按钮（编辑/测试/日志/删除，每个约 33px，间距 6px，约 150px）+ 内边距 32px */
+#nodes-table th:nth-child(8), #nodes-table td:nth-child(8) { width: 190px; overflow: visible; } /* 操作 */
 th, td { padding: 12px 16px; text-align: left; font-size: .875rem; }
 th { background: #f9fafb; font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; border-bottom: 2px solid var(--border); }
 td { border-bottom: 1px solid var(--border); }
