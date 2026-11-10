@@ -80,6 +80,12 @@
         <button class="btn btn-sm btn-outline" id="act-prev" onclick="changeActivityPage(-1)">上一页</button>
         <span class="log-page-info" id="act-page-info"></span>
         <button class="btn btn-sm btn-outline" id="act-next" onclick="changeActivityPage(1)">下一页</button>
+        <select id="act-page-size" class="pager-size-select" onchange="onActivityPageSizeChange()">
+          <option value="10">10 条/页</option>
+          <option value="20" selected>20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
       </div>
     </div>
   </div>
