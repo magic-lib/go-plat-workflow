@@ -34,11 +34,11 @@ type ActivityFlowConfig struct {
 	// project:chainID 对不上，子链实际调不到。请改用 SubChains。
 	SubChainDSL []*types.RuleChainBaseInfo
 	// SubChains 根链 flow 节点（含嵌套）引用的子链完整 DSL，按 project:chainID 注册到引擎池
-	SubChains []*types.RuleChain
-	FlowContext  *paramx.FlowContext        //前端传入的参数
-	MsgType      string
-	IsAsync      bool
-	EndFunc      func(ctx context.Context, relationType string, param *paramx.FlowContext, err error)
+	SubChains   []*types.RuleChain
+	FlowContext *paramx.FlowContext //前端传入的参数
+	MsgType     string
+	IsAsync     bool
+	EndFunc     func(ctx context.Context, relationType string, param *paramx.FlowContext, err error)
 	// UseCache 是否复用全局 rulego 引擎池中已存在的同名链（以 RootChainID 为 key）。
 	// true：命中则直接复用旧实例，性能更好、配置保持稳定（适合正式环境高频复用）；
 	// false：每次都基于最新 DSL 通过 rulego.New 覆盖重建，配置更新可立即生效（适合 node 测试/开发环境）。
@@ -54,7 +54,7 @@ type ActivityFlowConfig struct {
 }
 
 type ActivityMetaData struct {
-	RootChainID string        `json:"root_chain_id,omitempty"`
+	RootChainID string `json:"root_chain_id,omitempty"`
 	// RootChainName 根链（流程）名称，由 StartWorkFlow 自 DSL 的 RuleChain.Name 填充，
 	// 随 msg.Metadata 透传给各节点，用于失败告警/日志展示更直观的流程名。
 	RootChainName string        `json:"root_chain_name,omitempty"`
@@ -145,7 +145,7 @@ func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData 
 
 	if actConfig.RootChainDSL.Metadata.FirstNodeIndex == 0 {
 		// 默认没有设置，则尝试找一下
-		fileNodeIndex := getFirstNodeIndexByConnection(actConfig.RootChainDSL.Metadata.Connections, actConfig.RootChainDSL.Metadata.Nodes)
+		fileNodeIndex := engine.FirstNodeIndexByConnection(actConfig.RootChainDSL.Metadata.Connections, actConfig.RootChainDSL.Metadata.Nodes)
 		if fileNodeIndex != -1 {
 			actConfig.RootChainDSL.Metadata.FirstNodeIndex = fileNodeIndex
 		}
@@ -309,43 +309,6 @@ func commDebugFunction(chainId string, flowType string, nodeId string, msg types
 	}, msg.GetMetadata().Values(), msg.GetData())
 }
 
-// getFirstNodeIndexByConnection 将 connections 连成一个有向图（fromId -> toId），
-// 找出第一个节点（入度为 0 的起点，即只作为 fromId 出现、未被任何边指向的节点），
-// 然后通过该节点的 id 在 nodeList 中查找，返回其在 nodeList 中的索引值；找不到返回 -1。
-func getFirstNodeIndexByConnection(connections []types.NodeConnection, nodeList []*types.RuleNode) int {
-	if len(connections) == 0 {
-		return -1
-	}
-
-	// 收集所有被指向的节点 id（toId），用于判断入度
-	toSet := make(map[string]bool, len(connections))
-	for _, c := range connections {
-		if c.ToId != "" {
-			toSet[c.ToId] = true
-		}
-	}
-
-	// 找第一个入度为 0 的起点：fromId 存在且不在 toSet 中
-	firstID := ""
-	for _, c := range connections {
-		if c.FromId != "" && !toSet[c.FromId] {
-			firstID = c.FromId
-			break
-		}
-	}
-	// 若所有节点都有入度（成环），回退到第一条边的起点
-	if firstID == "" {
-		firstID = connections[0].FromId
-	}
-
-	// 在 nodeList 中按 id 查找索引
-	for i, n := range nodeList {
-		if n != nil && n.Id == firstID {
-			return i
-		}
-	}
-	return -1
-}
 func hasEndNode(nodeList []*types.RuleNode) bool {
 	if len(nodeList) == 0 {
 		return false

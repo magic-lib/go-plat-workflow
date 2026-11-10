@@ -61,7 +61,7 @@
 <div class="tabs">
   <button class="tab-btn" data-tab="activities" onclick="location.href='/?tab=activities'">Activities</button>
   <button class="tab-btn" data-tab="nodes" onclick="location.href='/?tab=nodes'">Nodes</button>
-  <button class="tab-btn" data-tab="sub-chains" onclick="location.href='/?tab=sub-chains'" style="display:none;">Sub Chains</button>
+  <button class="tab-btn" data-tab="sub-chains" onclick="location.href='/?tab=sub-chains'">Sub Chains</button>
   <button class="tab-btn" data-tab="root-chains" onclick="location.href='/?tab=root-chains'">Root Chains</button>
   <button class="tab-btn active" data-tab="orchestrate">Orchestrate</button>
 </div>
@@ -120,7 +120,7 @@
         </div>
 
         <!-- Sub-Chains Selection -->
-        <div class="orch-section" id="orch-sub-section" style="display:none;">
+        <div class="orch-section" id="orch-sub-section">
           <h3>Sub Chains <span class="count" id="orch-sub-count">0 selected</span></h3>
           <input class="search-box" placeholder="搜索子链..." oninput="filterOrchSubChains()" style="width:100%;margin-bottom:6px;padding:7px 10px;font-size:.8rem">
           <div class="orch-select-list" id="orch-sub-list">
@@ -157,10 +157,10 @@
           </div>
         </div>
 
-        <!-- 根节点返回值定义（仅 Root Chain） -->
-        <div class="orch-section root-only" id="orch-rr-section" style="margin-top:12px">
+        <!-- 返回值定义：Root Chain 为根节点返回值，Sub Chain 为子链返回值（引用该子链的节点把它作为本节点返回值） -->
+        <div class="orch-section" id="orch-rr-section" style="margin-top:12px">
           <h3 style="display:flex;justify-content:space-between;align-items:center">
-            根节点返回值定义
+            <span id="orch-rr-title">根节点返回值定义</span>
             <span style="display:flex;align-items:center;gap:6px">
               <span class="count" id="orch-rr-count" style="font-weight:400;color:var(--text-muted);font-size:.78rem">0 个字段</span>
               <button class="btn btn-sm btn-outline" onclick="addOrchRootResponseRow()" type="button">+ 添加字段</button>

@@ -36,4 +36,8 @@ const (
 	// LoopBodySubChain / LoopBodyRootChain 循环体类型：子链 / 已发布的根链。
 	LoopBodySubChain  = "subchain"
 	LoopBodyRootChain = "rootchain"
+	// SubChainCallNodeTypeName 调用子链节点类型标识：根链（或子链）里添加的子链实例按普通节点处理，
+	// 入参按本实例的参数配置解析后作为子链内的 arguments，子链返回值（子链里返回值节点写入的值）
+	// 写入本节点的 steps.<实例ID>.responses，供下游节点引用。旧数据里的 flow 节点仍按 rulego 原生子链节点执行。
+	SubChainCallNodeTypeName = "custom/SubChainCall"
 )

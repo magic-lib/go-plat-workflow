@@ -6,10 +6,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rulego/rulego/api/types"
+
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
-	"github.com/rulego/rulego/api/types"
 )
 
 // ============================================================
@@ -18,7 +20,7 @@ import (
 // 节点/activity 一旦被包含在「当前生效」的根链（生产快照，is_current=true）中，即禁止编辑与删除，
 // 避免改动影响线上调用。判断依据为发布快照的 DSL（含子链传递引用）：
 //   - 根链发布快照 wf_root_chain_releases.dsl_json（生产执行的真实 DSL，仅 is_current=true 的版本）
-//   - 被根链 flow 节点引用的子链 DSL（生产执行时按 ID 实时加载，同样属于线上内容）
+//   - 被根链 flow 节点引用的子链 DSL（优先取根链 DSL 里嵌入的保存时子链内容，即生产执行的内容；未嵌入的旧数据按 ID 实时读取）
 //
 // 重要：仅以 is_current=true 的「线上生效版本」为准。
 // 历史发布版本（可回滚候选、未上线）不计入，即出现在历史版本里的节点/activity 仍可正常编辑、删除。
@@ -136,7 +138,7 @@ func (s *WorkflowService) ListPublishedActivities(ctx context.Context, project s
 
 // buildPublishedRefIndex 构建指定项目下「当前生效发布引用集合」：
 // 仅遍历 is_current=true（当前生产生效）的发布快照 DSL，收集直接引用的节点与 activity，
-// 并对快照中引用的子链做深度遍历（生产执行时子链 DSL 实时加载，同样计入线上内容）。
+// 并对快照中引用的子链做深度遍历（子链内容取快照里嵌入的，未嵌入的旧数据实时读取，同样计入线上内容）。
 //
 // 注意：以「当前生效版本」为准，历史版本（仅回滚候选，未上线）不计入。
 func (s *WorkflowService) buildPublishedRefIndex(ctx context.Context, project string) (*publishedRefIndex, error) {
@@ -153,49 +155,69 @@ func (s *WorkflowService) buildPublishedRefIndex(ctx context.Context, project st
 
 	// visited 用「根链+子链」复合 key，避免跨根链共用子链时被判定为已访问而漏记归属。
 	visited := make(map[string]bool)
-	var visit func(dslJSON, nodeIDsCSV, subChainIDsCSV string, cur *workflow.PublishedRootChainRef)
-	visit = func(dslJSON, nodeIDsCSV, subChainIDsCSV string, cur *workflow.PublishedRootChainRef) {
-		var subChainIDs []string
-		if dslJSON != "" {
-			nodes, activities, flowSubIDs, ok := parseReleasedDSL(dslJSON)
-			if ok {
-				for id := range nodes {
-					idx.nodes[id] = struct{}{}
-					addRef(idx.nodeChains, id, cur)
-				}
-				for k := range activities {
-					idx.activities[k] = struct{}{}
-					addRef(idx.activityChains, k, cur)
-				}
-				subChainIDs = append(subChainIDs, flowSubIDs...)
-			} else {
-				// DSL 异常（旧数据/格式变化）时回退溯源字段，避免漏判
-				for _, id := range splitCSV(nodeIDsCSV) {
-					base := baseNodeID(id)
-					idx.nodes[base] = struct{}{}
-					addRef(idx.nodeChains, base, cur)
-				}
-			}
+	// visit 记录一条链 DSL 里的节点/activity 引用，并递归它引用的子链：
+	// 子链内容优先取 DSL 里嵌入的（保存链时的子链内容，即线上实际执行的内容），未嵌入的旧数据按子链 ID 实时读取。
+	// DSL 解析失败时回退溯源字段（node_ids / sub_chain_ids），避免漏判。
+	var visit func(dslJSON, nodeIDsCSV, subChainIDsCSV string, embedded map[string][]byte, cur *workflow.PublishedRootChainRef)
+	visitLive := func(sid string, cur *workflow.PublishedRootChainRef) {
+		vk := sid
+		if cur != nil {
+			vk = cur.ChainID + "/" + sid
 		}
-		subChainIDs = append(subChainIDs, splitCSV(subChainIDsCSV)...)
-		for _, sid := range subChainIDs {
-			if sid == "" {
+		if sid == "" || visited[vk] {
+			return
+		}
+		visited[vk] = true
+		sc, err := s.subChainRepo.GetByID(ctx, project, sid)
+		if err != nil || sc == nil {
+			return
+		}
+		more, _ := engine.ExtractEmbeddedSubChains([]byte(sc.DSLJSON))
+		// 子链内引用仍归属当前遍历的根链（生产执行时被该根链加载）
+		visit(sc.DSLJSON, sc.NodeIDs, sc.SubChainIDs, more, cur)
+	}
+	visit = func(dslJSON, nodeIDsCSV, subChainIDsCSV string, embedded map[string][]byte, cur *workflow.PublishedRootChainRef) {
+		nodes, activities, _, ok := parseReleasedDSL(dslJSON)
+		if !ok {
+			// DSL 异常（旧数据/格式变化）时回退溯源字段，避免漏判
+			for _, id := range splitCSV(nodeIDsCSV) {
+				base := baseNodeID(id)
+				idx.nodes[base] = struct{}{}
+				addRef(idx.nodeChains, base, cur)
+			}
+			for _, raw := range splitCSV(subChainIDsCSV) {
+				// sub_chain_ids 里可能是子链实例 ID（F000001__ab12c），按子链 ID 查询
+				visitLive(baseNodeID(raw), cur)
+			}
+			return
+		}
+		for id := range nodes {
+			idx.nodes[id] = struct{}{}
+			addRef(idx.nodeChains, id, cur)
+		}
+		for k := range activities {
+			idx.activities[k] = struct{}{}
+			addRef(idx.activityChains, k, cur)
+		}
+		chain := new(types.RuleChain)
+		if err := json.Unmarshal([]byte(dslJSON), chain); err != nil {
+			return
+		}
+		for _, ft := range engine.FlowTargets(chain.Metadata.Nodes) {
+			sub, isEmbedded := embedded[ft.TargetID]
+			if !isEmbedded {
+				visitLive(ft.SubChainID, cur)
 				continue
 			}
-			vk := sid
+			vk := ft.TargetID
 			if cur != nil {
-				vk = cur.ChainID + "/" + sid
+				vk = cur.ChainID + "/" + ft.TargetID
 			}
 			if visited[vk] {
 				continue
 			}
 			visited[vk] = true
-			sc, err := s.subChainRepo.GetByID(ctx, project, sid)
-			if err != nil || sc == nil {
-				continue
-			}
-			// 子链内引用仍归属当前遍历的根链（生产执行时被该根链加载）
-			visit(sc.DSLJSON, sc.NodeIDs, sc.SubChainIDs, cur)
+			visit(string(sub), "", "", embedded, cur)
 		}
 	}
 
@@ -205,7 +227,8 @@ func (s *WorkflowService) buildPublishedRefIndex(ctx context.Context, project st
 		}
 		// cur 携带根链信息（名称取发布时快照，无需额外查库）
 		cur := &workflow.PublishedRootChainRef{ChainID: rel.ChainID, Name: rel.Name, Version: rel.Version}
-		visit(rel.DSLJSON, rel.NodeIDs, rel.SubChainIDs, cur)
+		embedded, _ := engine.ExtractEmbeddedSubChains([]byte(rel.DSLJSON))
+		visit(rel.DSLJSON, rel.NodeIDs, rel.SubChainIDs, embedded, cur)
 	}
 	return idx, nil
 }
@@ -359,7 +382,7 @@ func parseReleasedDSL(dslJSON string) (nodes map[string]struct{}, activities map
 		switch n.Type {
 		case "custom/Activity", "activity":
 			collectActivityRefs(n.Configuration, activities)
-		case "flow":
+		case "flow", common.SubChainCallNodeTypeName:
 			if sid := flowSubChainID(n.Configuration); sid != "" {
 				subChainIDs = append(subChainIDs, sid)
 			}

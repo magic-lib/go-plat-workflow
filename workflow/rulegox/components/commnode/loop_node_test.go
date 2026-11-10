@@ -65,13 +65,15 @@ const loopSubDSL = `{
   "metadata": {"nodes": [{"id": "N000021__body", "type": "test/loopBody", "name": "body"}], "connections": []}
 }`
 
-// runLoopChain 加载子链 p1:S000001 与根链后执行一次，返回结束关系、上下文与错误。
+// runLoopChain 加载子链 p1:S000001（以及嵌入形式的 p1:S000001#e1）与根链后执行一次，返回结束关系、上下文与错误。
 func runLoopChain(t *testing.T, chainID, loopCfg, args string, payload map[string]any) (string, *paramx.FlowContext, error) {
 	t.Helper()
-	if _, err := rulego.New("p1:S000001", []byte(loopSubDSL)); err != nil {
-		t.Fatalf("new sub chain: %v", err)
+	for _, key := range []string{"p1:S000001", "p1:S000001#e1"} {
+		if _, err := rulego.New(key, []byte(loopSubDSL)); err != nil {
+			t.Fatalf("new sub chain: %v", err)
+		}
+		defer rulego.Del(key)
 	}
-	defer rulego.Del("p1:S000001")
 	ruleEngine, err := rulego.New(chainID, []byte(loopRootDSL(chainID, loopCfg, args)))
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -324,6 +326,18 @@ func TestLoopNode_ParallelFailStop(t *testing.T) {
 		t.Fatalf("relation=%s err=%v", relation, err)
 	}
 	if res := loopResultOf(t, out); res.Failed != 1 {
+		t.Fatalf("unexpected result: %s", conv.String(res))
+	}
+}
+
+func TestLoopNode_SubChainByEmbeddedTarget(t *testing.T) {
+	// body_target 指向嵌入的子链；body_id 对应的实例不存在也能执行
+	cfg := `{"mode":"count","count":"2","body_type":"subchain","body_id":"S000009","body_target":"p1:S000001#e1"}`
+	relation, out, err := runLoopChain(t, "loop_embedded", cfg, "", nil)
+	if err != nil || relation != types.Success {
+		t.Fatalf("relation=%s err=%v", relation, err)
+	}
+	if res := loopResultOf(t, out); res.Count != 2 || res.Success != 2 {
 		t.Fatalf("unexpected result: %s", conv.String(res))
 	}
 }

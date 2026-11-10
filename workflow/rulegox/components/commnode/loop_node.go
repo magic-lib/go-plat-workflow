@@ -61,6 +61,9 @@ type LoopConfig struct {
 	BodyType string `json:"body_type"`
 	// BodyID 循环体的子链 ID 或根链 ID
 	BodyID string `json:"body_id"`
+	// BodyTarget 循环体为子链时，保存时嵌入本链 DSL 的子链 ID（子链ID#内容哈希），执行时用它在引擎池里找子链；
+	// 为空（子链未能嵌入）时按 BodyID 实时加载
+	BodyTarget string `json:"body_target,omitempty"`
 	// MaxIterations 最大循环次数，默认 100，上限 1000
 	MaxIterations int `json:"max_iterations,omitempty"`
 	// Concurrency 并发数，默认 1（串行）；只有遍历和固定次数模式、且没有跳出条件时可以大于 1
@@ -123,6 +126,10 @@ func (c *LoopConfig) normalize() error {
 	}
 	c.BodyType = strings.TrimSpace(c.BodyType)
 	c.BodyID = strings.TrimSpace(c.BodyID)
+	c.BodyTarget = strings.TrimSpace(c.BodyTarget)
+	if i := strings.LastIndex(c.BodyTarget, ":"); i >= 0 {
+		c.BodyTarget = c.BodyTarget[i+1:]
+	}
 	c.FailPolicy = strings.TrimSpace(c.FailPolicy)
 	if c.FailPolicy == "" {
 		c.FailPolicy = LoopFailStop
@@ -286,7 +293,7 @@ func (x *LoopNode) run(ctx types.RuleContext, msg types.RuleMsg, allParam *param
 		goCtx = context.Background()
 	}
 	if x.Config.BodyType == common.LoopBodySubChain {
-		if _, ok := rulego.Get(loopSubChainKey(meta.Project, x.Config.BodyID)); !ok {
+		if _, ok := rulego.Get(loopSubChainKey(meta.Project, x.Config.subChainTarget())); !ok {
 			return result, fmt.Errorf("循环体子链 %s 未加载", x.Config.BodyID)
 		}
 	}
@@ -479,7 +486,7 @@ func (x *LoopNode) runIteration(goCtx context.Context, ctx types.RuleContext, ms
 		args := replaceBindConfig(templates.NewRuleExprEngine(), dataMap, x.Arguments)
 		return invokeRootChainTarget(goCtx, meta, x.Config.BodyID, args)
 	}
-	return runLoopSubChain(goCtx, ctx, msg, loopSubChainKey(meta.Project, x.Config.BodyID), iterCtx)
+	return runLoopSubChain(goCtx, ctx, msg, loopSubChainKey(meta.Project, x.Config.subChainTarget()), iterCtx)
 }
 
 // runLoopSubChain 用 iterCtx 作为消息体执行一次子链，等全部节点执行完后返回本轮结果：
@@ -545,6 +552,14 @@ func runLoopSubChain(goCtx context.Context, ctx types.RuleContext, msg types.Rul
 		}
 	}
 	return nil, nil
+}
+
+// subChainTarget 循环体子链在引擎池里的 ID：优先用嵌入的子链 ID，没有嵌入时用子链 ID。
+func (c *LoopConfig) subChainTarget() string {
+	if c.BodyTarget != "" {
+		return c.BodyTarget
+	}
+	return c.BodyID
 }
 
 // loopSubChainKey 子链在引擎池里的 key，与 flow 节点、rulego_flow 注册子链时一致：project:chainID。
