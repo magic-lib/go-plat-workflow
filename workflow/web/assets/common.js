@@ -6685,7 +6685,7 @@ function addOrchNodeInstance(nodeId) {
 function seedOrchReturnDefaults(instanceId) {
   const inst = (window._orchNodeInstances || []).find(i => i.instanceId === instanceId);
   if (!inst) return;
-  const preset = window._orchParamPreset || (window._orchParamPreset = {});
+  const preset = _orchParamPreset;
   (_orchRootResponses || []).forEach(rr => {
     const key = (rr.key || '').trim();
     if (!key) return;
@@ -6727,9 +6727,9 @@ function removeOrchNodeInstance(instanceId) {
   }
   window._orchNodeInstances = window._orchNodeInstances.filter(i => i.instanceId !== instanceId);
   // 同步清理该实例残留的覆盖配置，避免保存时写入已删除节点的冗余/错误数据
-  if (window._orchParamPreset) delete window._orchParamPreset[instanceId];
-  if (window._orchNameOverrides) delete window._orchNameOverrides[instanceId];
-  if (window._orchSwitchOverrides) delete window._orchSwitchOverrides[instanceId];
+  delete _orchParamPreset[instanceId];
+  delete _orchNameOverrides[instanceId];
+  delete _orchSwitchOverrides[instanceId];
   // 端点节点（仅 to 或仅 from）删除时，顺带删除 Connections 中与之相关的连线，保持拓扑完整
   removeOrchConnRowsByInstance(instanceId);
   renderOrchNodeSelected();
@@ -7021,6 +7021,9 @@ function removeOrchSubChain(instanceId) {
     if (!window.confirm('确定要移除该子链吗？\n\n子链：' + name + '\n实例ID：' + instanceId + '\n\n与它相关的 ' + related + ' 条连线会一起删除。')) return false;
   }
   window._orchSelectedSubIds = window._orchSelectedSubIds.filter(id => id !== instanceId);
+  // 同步清理该子链实例的参数配置与名称覆盖，避免保存时写入已移除实例的冗余数据
+  delete _orchParamPreset[instanceId];
+  delete _orchNameOverrides[instanceId];
   rerenderOrchSubList();
   removeOrchConnRowsByInstance(instanceId);
   onOrchSelectionChange();
@@ -7576,10 +7579,13 @@ function orchBuildDslPreview() {
     return { id, type: n.type, name: finalName, configuration: config };
   });
 
+  // 子链实例生成调用子链节点（与后端一致）：ID 为子链实例 ID，引用的子链为 project:子链ID，
+  // arguments 为本实例参数配置（按 key 排序）
+  const subOverrides = collectOrchParamOverrides();
   const subNodes = subIds.map(id => {
-    const s = orchSubDefOf(id);
-    // Flow Node 的 ID 为子链实例 ID，引用的子链为 project:子链ID
-    return { id: id, type: 'flow', name: s? s.name : id, configuration: { ruleChainId: getProject()+':'+orchSubBaseId(id) } };
+    const ov = subOverrides[id] || {};
+    const args = Object.keys(ov).sort().map(k => (ov[k].type ? { key: k, value: ov[k].value, type: ov[k].type } : { key: k, value: ov[k].value }));
+    return { id: id, type: ORCH_SUB_NODE_TYPE, name: orchSubDisplayName(id), configuration: { ruleChainId: getProject()+':'+orchSubBaseId(id), arguments: args } };
   });
 
   return JSON.stringify({
@@ -7681,6 +7687,7 @@ function parseNodeParams(node) {
 function getOrchInstanceParams(inst) {
   if (!inst) return [];
   if (isOrchCallInst(inst)) return getOrchCallParams(inst);
+  if (isOrchSubInst(inst)) return getOrchSubParams(inst.instanceId);
   if (isOrchInputInst(inst)) return getOrchInputParams(inst.instanceId);
   if (inst.type === 'custom/ReturnValue') {
     return (_orchRootResponses || [])
@@ -7701,7 +7708,8 @@ function renderOrchParamOverrides() {
   // 以"实例"为单位渲染（同一节点可多次添加），每个实例独立配置参数。
   // instances: [{instanceId, nodeId, name, type, ...}]，仅保留有参数定义的实例。
   // 按 instanceId 升序排序，方便在参数配置区快速定位某个节点的实例
-  const instances = (window._orchNodeInstances || []).filter(inst => {
+  // 子链实例按普通节点处理：参数取子链调用签名的入参，一并列出
+  const instances = orchParamInstances().filter(inst => {
     return getOrchInstanceParams(inst).length > 0;
   }).sort((a, b) => cmpInstanceId(a.instanceId, b.instanceId));
   const nodes = instances.map(inst => ({
@@ -7874,7 +7882,7 @@ function collectOrchBrokenRefs() {
 // （存在不经过它的分支路径），运行时可能走不到那条、取值不正确。仅提示，不修改配置、不阻断保存。
 function collectOrchNonCommonRefs() {
   const out = [];
-  (window._orchNodeInstances || []).forEach(inst => {
+  orchParamInstances().forEach(inst => {
     getOrchInstanceParams(inst).forEach(p => {
       const preset = resolveOrchParamPreset(inst.instanceId, p.key);
       if (!preset || preset.src !== PARAM_SRC_UPSTREAM) return;
@@ -7997,6 +8005,8 @@ function onParamSrcChange(sel) {
 
   if (src === PARAM_SRC_REF_ACT) {
     preset.src = PARAM_SRC_UPSTREAM;
+    // 由「调用传入」切来：原值是入参名（子链 / 调用根链实例默认带入参名），不是引用路径，清空后再选
+    if (prevSrc === PARAM_SRC_ENTRY) preset.value = '';
     renderOrchRefNodeControl(slot, nodeId, preset.value);
   } else if (src === PARAM_SRC_REF_NODE) {
     preset.src = PARAM_SRC_ENTRY;
@@ -8135,7 +8145,8 @@ function getOrchRefNodeCandidates(excludeId) {
     if (!ancestorIds.has(subId)) return;
     const s = orchSubDefOf(subId);
     if (!s) return;
-    cands.push({ id: subId, name: s.name || s.chain_id, type: 'sub', params: parseNodeParams(s), outputs: parseNodeOutputs(s) });
+    // 子链实例按普通节点处理：参数为子链入参，返回值为子链返回值定义
+    cands.push({ id: subId, name: orchSubDisplayName(subId), type: 'sub', params: getOrchSubParams(subId), outputs: getOrchSubOutputs(subId) });
   });
   return cands;
 }
@@ -9495,6 +9506,8 @@ function setOrchTarget(type) {
   // 标题与区分提示
   const titleEl = document.getElementById('orch-target-title');
   const hintEl = document.getElementById('orch-target-hint');
+  const rrTitle = document.getElementById('orch-rr-title');
+  if (rrTitle) rrTitle.textContent = showRoot ? '根节点返回值定义' : '子链返回值定义';
   if (titleEl) titleEl.textContent = showRoot ? '编排 Root Chain' : '编排 Sub Chain';
   if (hintEl) hintEl.textContent = showRoot
     ? 'Root Chain 为流程入口，可设置全局唯一的 Chain Key 供外部按业务键调用。'
@@ -9575,6 +9588,8 @@ function orchSubChainByIndex(i) {
     restoreOrchNodeInstances(nodeIds);
     const subIds = (c.sub_chain_ids||'').split(',').map(s=>s.trim()).filter(Boolean);
     setOrchSelectedSubIds(subIds);
+    // 恢复子链返回值定义（存在子链 DSL 的 ruleChain.additionalInfo.root_responses）—— 必须在节点实例恢复之后
+    applyOrchRootResponses(orchDslRootResponses(c.dsl_json));
     onOrchSelectionChange();
 
     document.querySelectorAll('#orch-conn-container .orch-conn-row').forEach(r => r.remove());
@@ -9686,8 +9701,8 @@ async function generateOrchRootChain() {
     node_switch_overrides: collectOrchSwitchOverrides(),
     node_name_overrides: collectOrchNameOverrides(),
     node_collapse_overrides: collectOrchCollapseOverrides(),
-    // 仅 Root Chain 有「根节点返回值定义」；子链目标下为空数组
-    root_responses: (window._orchTarget === 'sub') ? [] : collectOrchRootResponses(),
+    // 返回值定义：根链为根节点返回值；子链为子链返回值（引用该子链的节点把它作为本节点返回值）
+    root_responses: collectOrchRootResponses(),
   };
 
   const btn = document.getElementById('orch-generate-btn');
@@ -10640,6 +10655,101 @@ async function orchLoadRootChainById(chainId) {
 
 // 启动：先鉴权，再加载主界面
 bootstrapAuth();
+
+// ============================================================
+// 子链实例按普通节点处理（custom/SubChainCall）
+// ============================================================
+// 子链实例（ID 形如 F000001__ab12c）在「节点参数配置」里和普通节点一样为每个入参选择来源，
+// 入参取子链调用签名的 arguments（子链里所有 {{arguments.xxx}}），返回值取子链返回值定义，供下游「引用节点」选择。
+// 参数配置随 node_param_overrides 保存（key 为子链实例 ID），后端组装 DSL 时写入调用子链节点的 arguments。
+const ORCH_SUB_NODE_TYPE = 'custom/SubChainCall';
+const _orchSubSigCache = {}; // 子链 ID -> { loading } | { sig } | { error }
+
+function isOrchSubInst(inst) {
+  return !!(inst && inst.type === ORCH_SUB_NODE_TYPE);
+}
+
+// 子链实例在参数配置区使用的实例对象（与节点实例同结构）
+function orchSubParamInstances() {
+  return getSelectedOrchSubIds().map(id => ({
+    instanceId: id,
+    nodeId: orchSubBaseId(id),
+    name: orchSubDisplayName(id),
+    type: ORCH_SUB_NODE_TYPE,
+  }));
+}
+
+// 参数配置区的全部实例：节点实例 + 子链实例
+function orchParamInstances() {
+  return (window._orchNodeInstances || []).concat(orchSubParamInstances());
+}
+
+// 子链实例展示名：本链名称覆盖 > 子链名称 > 子链 ID
+function orchSubDisplayName(instanceId) {
+  const ov = (_orchNameOverrides || {})[instanceId];
+  if (ov && String(ov).trim()) return String(ov).trim();
+  const s = orchSubDefOf(instanceId);
+  return (s && s.name) ? s.name : orchSubBaseId(instanceId);
+}
+
+// 取子链调用签名；未加载时异步拉取，拉取完成后刷新编排页
+function getOrchSubSig(instanceId) {
+  const base = orchSubBaseId(instanceId);
+  if (!base) return null;
+  const c = _orchSubSigCache[base];
+  if (c && c.sig) return c.sig;
+  if (!c) {
+    _orchSubSigCache[base] = { loading: true };
+    api('/api/sub-chains/' + encodeURIComponent(base) + '/call-signature').then(sig => {
+      _orchSubSigCache[base] = { sig: sig };
+      onOrchSelectionChange();
+    }).catch(e => {
+      _orchSubSigCache[base] = { error: e.message || String(e) };
+      showToast('获取子链 ' + base + ' 的参数失败：' + (e.message || e), 'error');
+    });
+  }
+  return null;
+}
+
+// 子链实例的参数：子链所需的入参。签名加载后同步实例的参数配置：
+// 新增的入参预置来源=调用传入（同名参数，与子链直接读取本链入参的行为一致），子链已没有的入参删除。
+function getOrchSubParams(instanceId) {
+  const sig = getOrchSubSig(instanceId);
+  if (!sig) return [];
+  const keys = (sig.arguments || []).filter(Boolean);
+  syncOrchSubParamPreset(instanceId, keys);
+  return keys.map(k => ({ key: k, label: k, type: 'string', required: false }));
+}
+
+function syncOrchSubParamPreset(instanceId, keys) {
+  if (!_orchParamPreset[instanceId]) _orchParamPreset[instanceId] = {};
+  const preset = _orchParamPreset[instanceId];
+  keys.forEach(k => {
+    if (!preset[k]) preset[k] = { src: PARAM_SRC_ENTRY, value: k, type: 'string' };
+  });
+  Object.keys(preset).forEach(k => {
+    if (!keys.includes(k)) delete preset[k];
+  });
+}
+
+// 子链实例的返回值：子链返回值定义（供下游「引用节点」选择）
+function getOrchSubOutputs(instanceId) {
+  const sig = getOrchSubSig(instanceId);
+  if (!sig) return [];
+  return (sig.responses || []).filter(r => r && r.key)
+    .map(r => ({ key: r.key, label: r.label || r.key, type: r.type || '' }));
+}
+
+// 从链 DSL 里取返回值定义（ruleChain.additionalInfo.root_responses），解析失败返回空数组
+function orchDslRootResponses(dslJson) {
+  try {
+    const dsl = typeof dslJson === 'string' ? JSON.parse(dslJson || '{}') : (dslJson || {});
+    const rr = ((dsl.ruleChain || {}).additionalInfo || {}).root_responses;
+    return Array.isArray(rr) ? rr : [];
+  } catch (e) {
+    return [];
+  }
+}
 
 // ============================================================
 // 调用根链节点（custom/RootChainCall）

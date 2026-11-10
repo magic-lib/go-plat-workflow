@@ -9,6 +9,9 @@ import (
 	"strings"
 
 	"github.com/magic-lib/go-plat-workflow/workflow"
+	"github.com/magic-lib/go-plat-workflow/workflow/builder"
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
+	"github.com/rulego/rulego/api/types"
 )
 
 // SaveSubChainBuild 编排方式保存子链：ChainID 对应的子链已存在则更新，否则新增（ChainID 为空时自动生成）。
@@ -112,7 +115,7 @@ func flowSubChainInstanceIDs(dslJSON string) ([]string, bool) {
 	var ids []string
 	seen := make(map[string]bool)
 	for _, n := range chain.Metadata.Nodes {
-		if n.Type != "flow" {
+		if n.Type != "flow" && n.Type != common.SubChainCallNodeTypeName {
 			continue
 		}
 		sid := flowSubChainID(n.Configuration)
@@ -145,3 +148,56 @@ func subChainDSLChanged(oldDSL, newDSL string) bool {
 	}
 	return !reflect.DeepEqual(a, b)
 }
+
+// GetSubChainCallSignature 获取子链的调用签名（入参列表 + 返回值定义），编排页把子链实例当作普通节点时，
+// 据此生成参数配置与可引用的返回值字段。取子链当前内容（保存引用它的链时就嵌入的是当前内容）。
+func (s *WorkflowService) GetSubChainCallSignature(ctx context.Context, project, chainID string) (*workflow.SubChainCallSignature, error) {
+	def, err := s.subChainRepo.GetByID(ctx, project, chainID)
+	if err != nil {
+		return nil, fmt.Errorf("子链 %s 不存在: %w", chainID, err)
+	}
+	chain := &types.RuleChain{}
+	if err := json.Unmarshal([]byte(def.DSLJSON), chain); err != nil {
+		return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", chainID, err)
+	}
+	_, _, subArgNodes, err := s.collectSubChainsWithArgNodes(ctx, project, chain)
+	if err != nil {
+		return nil, err
+	}
+	argNodes := append(append(make([]*types.RuleNode, 0, len(chain.Metadata.Nodes)+len(subArgNodes)), chain.Metadata.Nodes...), subArgNodes...)
+	return &workflow.SubChainCallSignature{
+		ChainID:   def.ChainID,
+		Name:      def.Name,
+		Arguments: builder.CollectAllInputArguments(argNodes),
+		Responses: subChainResponses(chain),
+	}, nil
+}
+
+// subChainResponses 取子链 DSL 里的返回值定义（additionalInfo.root_responses），没有定义时返回空列表。
+func subChainResponses(chain *types.RuleChain) []workflow.RootResponseItem {
+	out := make([]workflow.RootResponseItem, 0)
+	if chain == nil || chain.RuleChain.AdditionalInfo == nil {
+		return out
+	}
+	raw, ok := chain.RuleChain.AdditionalInfo[subChainResponsesDSLKey]
+	if !ok || raw == nil {
+		return out
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return out
+	}
+	var items []workflow.RootResponseItem
+	if err := json.Unmarshal(b, &items); err != nil {
+		return out
+	}
+	for _, it := range items {
+		if strings.TrimSpace(it.Key) != "" {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// subChainResponsesDSLKey 子链返回值定义在 DSL 中的存放键（与根链相同，见 builder.injectRootResponses）。
+const subChainResponsesDSLKey = "root_responses"

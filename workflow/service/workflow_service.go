@@ -1249,7 +1249,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	}
 
 	// 1-2. 从 flow 节点提取子链 ID 并查询完整 DSL（含嵌套子链），同时校验子链不能并行扇出
-	subChains, subChainNodes, err := s.collectSubChains(execCtx, project, ruleChain)
+	subChains, _, subChainArgNodes, err := s.collectSubChainsWithArgNodes(execCtx, project, ruleChain)
 	if err != nil {
 		return nil, err
 	}
@@ -1258,7 +1258,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	// 过滤多余入参：仅保留链实际需要的入参，避免恶意传入无关参数造成变量名污染。
 	// originalPayload 保留原始入参，子链加载后再按根链+子链所需参数重新过滤一次。
 	originalPayload := jsonPayload
-	jsonPayload = s.filterPayloadArguments(originalPayload, ruleChain.Metadata.Nodes, subChainNodes)
+	jsonPayload = s.filterPayloadArguments(originalPayload, ruleChain.Metadata.Nodes, subChainArgNodes)
 
 	// 2.1 根据项目+环境解析 Redis 配置（按环境将运行数据打入对应 Redis）
 	redisCfg, err := s.GetRedisConnect(execCtx, project, envName)
@@ -1326,58 +1326,92 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	}
 }
 
-// collectSubChains 收集链里 flow 节点引用的子链完整 DSL（含子链里再引用的子链，按 ID 去重，限制层数防止循环引用），
-// 返回子链列表及其全部节点（用于提取入参）。每条子链都必须满足 checkSubChainSingleExit。
+// collectSubChains 收集链里子链节点引用的子链完整 DSL（含子链里再引用的子链，按 ID 去重，限制层数防止循环引用），
+// 返回子链列表及其全部节点。每条子链都必须满足 checkSubChainSingleExit。
 // 子链内容优先取链 DSL 里嵌入的（保存链时的子链内容，ID 形如 F000001#hash）；未嵌入的旧数据按子链 ID 从库里实时读取。
 func (s *WorkflowService) collectSubChains(ctx context.Context, project string, chain *types.RuleChain) ([]*types.RuleChain, []*types.RuleNode, error) {
+	subChains, subChainNodes, _, err := s.collectSubChainsWithArgNodes(ctx, project, chain)
+	return subChains, subChainNodes, err
+}
+
+// collectSubChainsWithArgNodes 同 collectSubChains，另外返回与本链共用入参的子链节点（argNodes），用于提取本链入参：
+// 只有一路经旧的 flow 节点引用的子链与本链共用 arguments；经调用子链节点（custom/SubChainCall）引用的子链，
+// 其 {{arguments.x}} 取的是该节点按参数配置传入的值，本链需要的入参已体现在该节点的 arguments 里，不再重复收集。
+func (s *WorkflowService) collectSubChainsWithArgNodes(ctx context.Context, project string, chain *types.RuleChain) ([]*types.RuleChain, []*types.RuleNode, []*types.RuleNode, error) {
 	const maxSubChainDepth = 10
 	if chain == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
+	}
+	type pendingNodes struct {
+		nodes  []*types.RuleNode
+		shared bool // 这些节点是否与本链共用入参
 	}
 	embedded := embeddedSubChainsOf(chain)
 	var subChains []*types.RuleChain
 	var subChainNodes []*types.RuleNode
-	seen := make(map[string]bool)
-	pending := chain.Metadata.Nodes
+	var argNodes []*types.RuleNode
+	loaded := make(map[string]*types.RuleChain) // TargetID -> 已收集的子链
+	shared := make(map[string]bool)             // TargetID -> 已按共用入参收集
+	pending := []pendingNodes{{nodes: chain.Metadata.Nodes, shared: true}}
 	for depth := 0; len(pending) > 0 && depth < maxSubChainDepth; depth++ {
-		var next []*types.RuleNode
-		for _, ft := range engine.FlowTargets(pending) {
-			if seen[ft.TargetID] {
-				continue
-			}
-			seen[ft.TargetID] = true
-			subChain := &types.RuleChain{}
-			if dsl, ok := embedded[ft.TargetID]; ok {
-				if err := json.Unmarshal(dsl, subChain); err != nil {
-					return nil, nil, fmt.Errorf("parse embedded sub chain %s dsl failed: %w", ft.TargetID, err)
-				}
-			} else {
-				subDef, err := s.subChainRepo.GetByID(ctx, project, ft.SubChainID)
-				if err != nil {
-					return nil, nil, fmt.Errorf("get sub chain %s failed: %w", ft.SubChainID, err)
-				}
-				if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
-					return nil, nil, fmt.Errorf("parse sub chain %s dsl failed: %w", ft.SubChainID, err)
-				}
-				// 实时读取的子链里若嵌入了下级子链，一并纳入
-				if more, ok := engine.ExtractEmbeddedSubChains([]byte(subDef.DSLJSON)); ok {
-					for k, v := range more {
-						if _, exists := embedded[k]; !exists {
-							embedded[k] = v
-						}
+		var next []pendingNodes
+		for _, group := range pending {
+			for _, ft := range engine.FlowTargets(group.nodes) {
+				isShared := group.shared && !ft.Scoped
+				subChain, ok := loaded[ft.TargetID]
+				if !ok {
+					var err error
+					if subChain, err = s.loadCollectedSubChain(ctx, project, ft, embedded); err != nil {
+						return nil, nil, nil, err
 					}
+					loaded[ft.TargetID] = subChain
+					subChains = append(subChains, subChain)
+					subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
+				} else if !isShared || shared[ft.TargetID] {
+					continue
 				}
+				// 首次收集，或此前只以独立入参收集过、这次一路经 flow 节点引用（需补记为共用入参并继续向下）
+				if isShared {
+					shared[ft.TargetID] = true
+					argNodes = append(argNodes, subChain.Metadata.Nodes...)
+				}
+				next = append(next, pendingNodes{nodes: subChain.Metadata.Nodes, shared: isShared})
 			}
-			if err := checkSubChainSingleExit(ft.SubChainID, subChain); err != nil {
-				return nil, nil, err
-			}
-			subChains = append(subChains, subChain)
-			subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
-			next = append(next, subChain.Metadata.Nodes...)
 		}
 		pending = next
 	}
-	return subChains, subChainNodes, nil
+	return subChains, subChainNodes, argNodes, nil
+}
+
+// loadCollectedSubChain 读取一个子链节点引用的子链 DSL：优先取嵌入内容，否则按子链 ID 从库里实时读取
+// （实时读取的子链里若嵌入了下级子链，一并并入 embedded），并校验子链单出口。
+func (s *WorkflowService) loadCollectedSubChain(ctx context.Context, project string, ft engine.FlowTarget, embedded map[string][]byte) (*types.RuleChain, error) {
+	subChain := &types.RuleChain{}
+	if dsl, ok := embedded[ft.TargetID]; ok {
+		if err := json.Unmarshal(dsl, subChain); err != nil {
+			return nil, fmt.Errorf("parse embedded sub chain %s dsl failed: %w", ft.TargetID, err)
+		}
+	} else {
+		subDef, err := s.subChainRepo.GetByID(ctx, project, ft.SubChainID)
+		if err != nil {
+			return nil, fmt.Errorf("get sub chain %s failed: %w", ft.SubChainID, err)
+		}
+		if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
+			return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", ft.SubChainID, err)
+		}
+		// 实时读取的子链里若嵌入了下级子链，一并纳入
+		if more, ok := engine.ExtractEmbeddedSubChains([]byte(subDef.DSLJSON)); ok {
+			for k, v := range more {
+				if _, exists := embedded[k]; !exists {
+					embedded[k] = v
+				}
+			}
+		}
+	}
+	if err := checkSubChainSingleExit(ft.SubChainID, subChain); err != nil {
+		return nil, err
+	}
+	return subChain, nil
 }
 
 // embeddedSubChainsOf 取出链 DSL 里嵌入的全部子链（含多级嵌入），key 为嵌入子链 ID。

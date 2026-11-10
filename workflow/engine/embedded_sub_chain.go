@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/rulego/rulego/api/types"
 )
 
@@ -105,19 +106,27 @@ func collectEmbedded(dsl []byte, out map[string][]byte, depth int) bool {
 	return true
 }
 
-// FlowTarget flow 节点引用的子链：SubChainID 为子链 ID，TargetID 为 targetId 去掉 project: 前缀后的值
-// （嵌入子链 ID，或旧数据的子链 ID）。
+// FlowTarget 子链节点（flow / custom/SubChainCall）引用的子链：SubChainID 为子链 ID，
+// TargetID 为 targetId 去掉 project: 前缀后的值（嵌入子链 ID，或旧数据的子链 ID）。
+// Scoped 为 true 表示由调用子链节点引用：子链内的 {{arguments.x}} 取的是该节点按参数配置传入的值，
+// 不是外层链的入参；为 false（旧的 flow 节点）时子链与外层链共用入参。
 type FlowTarget struct {
 	SubChainID string
 	TargetID   string
+	Scoped     bool
 }
 
-// FlowTargets 返回节点列表里 flow 节点引用的子链（按出现顺序，按 TargetID 去重）。
+// IsSubChainNode 节点是否引用子链：旧数据的 flow 节点，或调用子链节点（custom/SubChainCall）。
+func IsSubChainNode(n *types.RuleNode) bool {
+	return n != nil && (n.Type == flowNodeType || n.Type == common.SubChainCallNodeTypeName)
+}
+
+// FlowTargets 返回节点列表里子链节点引用的子链（按出现顺序，按 TargetID 去重）。
 func FlowTargets(nodes []*types.RuleNode) []FlowTarget {
 	var out []FlowTarget
 	seen := make(map[string]bool)
 	for _, n := range nodes {
-		if n == nil || n.Type != flowNodeType {
+		if !IsSubChainNode(n) {
 			continue
 		}
 		ref, _ := n.Configuration["ruleChainId"].(string)
@@ -125,7 +134,7 @@ func FlowTargets(nodes []*types.RuleNode) []FlowTarget {
 		if target == "" {
 			target = ref
 		}
-		ft := FlowTarget{SubChainID: stripProject(ref), TargetID: stripProject(target)}
+		ft := FlowTarget{SubChainID: stripProject(ref), TargetID: stripProject(target), Scoped: n.Type == common.SubChainCallNodeTypeName}
 		if ft.SubChainID == "" {
 			ft.SubChainID = EmbeddedSubChainBaseID(ft.TargetID)
 		}

@@ -9,6 +9,7 @@ import (
 	"github.com/rulego/rulego/api/types"
 
 	"github.com/magic-lib/go-plat-workflow/workflow"
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 )
 
@@ -380,7 +381,7 @@ func parseReleasedDSL(dslJSON string) (nodes map[string]struct{}, activities map
 		switch n.Type {
 		case "custom/Activity", "activity":
 			collectActivityRefs(n.Configuration, activities)
-		case "flow":
+		case "flow", common.SubChainCallNodeTypeName:
 			if sid := flowSubChainID(n.Configuration); sid != "" {
 				subChainIDs = append(subChainIDs, sid)
 			}

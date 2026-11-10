@@ -104,7 +104,10 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	// 序列化前先裁剪：删除已被删除节点残留的覆盖配置，避免数据冗余/对应错误；
 	// 再按节点定义同步每个实例的参数覆盖：节点已无的参数删除、节点新增的参数补充（以默认值），
 	// 使 node_param_overrides 与节点实时变化保持一致。
-	nodeParamOverrides := reconcileNodeParamOverrides(pruneOverrides(req.NodeParamOverrides, validInstances), nodes)
+	prunedParamOverrides := pruneOverrides(req.NodeParamOverrides, validInstances)
+	nodeParamOverrides := reconcileNodeParamOverrides(prunedParamOverrides, nodes)
+	// 子链实例的参数配置（子链入参来源）没有节点定义可对照，原样保留
+	keepSubChainOverrides(nodeParamOverrides, prunedParamOverrides, req.SubChainIDs)
 
 	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
 	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
@@ -230,6 +233,8 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 	ruleChain := b.buildRuleChain(fullReq, nodes, subChains)
 	// 子链标记为非 Root
 	ruleChain.RuleChain.Root = false
+	// 子链返回值定义与根链一样写入 DSL（additionalInfo.root_responses），随子链内容嵌入引用它的链
+	injectRootResponses(ruleChain, req.RootResponses)
 
 	dslJSON, err := json.Marshal(ruleChain)
 	if err != nil {
@@ -742,9 +747,9 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 	}
 	ruleNodes = append(ruleNodes, mainNodes...)
 
-	// 3b. 处理子链：为每个子链创建一个 Flow Node 节点
-	// Flow Node 使用 type="flow" + configuration.ruleChainId 引用子链，
-	// 替代已废弃的 RuleChainConnections 机制。
+	// 3b. 处理子链：为每个子链实例创建一个调用子链节点（custom/SubChainCall），
+	// configuration.ruleChainId 为 project:子链ID，targetId 为引擎池里的子链 ID。
+	// 旧数据里的 type="flow" 节点仍由 rulego 原生 flow 组件执行。
 	// 子链 DSL 需提前加载到 rulego pool 中。
 	// 同一子链可添加多次：sub_chain_ids 里是实例 ID（形如 F000001__ab12c），每个实例生成一个 flow 节点，
 	// 节点 ID 即实例 ID（连线、参数覆盖都按实例 ID 对应），引用的子链仍是 project:子链ID。
@@ -777,22 +782,26 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 		idMap[flowNodeID] = true
 
 		// 子链引用必须与 engine 加载子链时用的 pool key 一致：project:chainID。
-		// rulego 的 flow 组件只认 targetId；ruleChainId 保留给发布检查、前端解析使用。
-		// extend=true：子链输出原样转发给下游（合并模式会把输出包成数组，下游无法按 FlowContext 解析）。
+		// 执行只认 targetId；ruleChainId 保留给发布检查、前端解析使用。
 		poolKey := req.Project + ":" + sc.ChainID
 		targetKey := poolKey
 		if eid, ok := embeddedIDs[sc.ChainID]; ok {
 			targetKey = req.Project + ":" + eid
 		}
+		// 子链实例按普通节点处理（custom/SubChainCall）：入参按本实例的参数配置解析后作为子链内的 arguments，
+		// 子链返回值写入本节点 steps.<实例ID>.responses，供下游引用。
 		flowNode := &types.RuleNode{
 			Id:   flowNodeID,
-			Type: "flow",
+			Type: common.SubChainCallNodeTypeName,
 			Name: sc.Name,
 			Configuration: types.Configuration{
-				"ruleChainId": poolKey,
-				"targetId":    targetKey,
-				"extend":      true,
+				"ruleChainId":      poolKey,
+				"targetId":         targetKey,
+				activity.Arguments: subChainCallArguments(req.NodeParamOverrides[inst.instanceId]),
 			},
+		}
+		if nm, ok := req.NodeNameOverrides[inst.instanceId]; ok && strings.TrimSpace(nm) != "" {
+			flowNode.Name = strings.TrimSpace(nm)
 		}
 		ruleNodes = append(ruleNodes, flowNode)
 	}
@@ -869,4 +878,41 @@ func parseParamInputDefs(raw any) []*workflow.ParamInputDef {
 		out = append(out, d)
 	}
 	return out
+}
+
+// subChainCallArguments 把子链实例的参数配置（node_param_overrides[实例ID]，与普通节点同结构）转成
+// 调用子链节点的 arguments：每个入参的取值表达式（固定值 / {{steps.x...}} / {{arguments.x}}）。
+// 没有配置任何入参时返回空数组。
+func subChainCallArguments(overrides map[string]interface{}) []*param.BindConfig {
+	args := make([]*param.BindConfig, 0, len(overrides))
+	for k, v := range overrides {
+		if k == "" {
+			continue
+		}
+		bc := &param.BindConfig{Key: k, Policy: param.KeyPolicyBackendOnly}
+		if m, ok := v.(map[string]any); ok {
+			bc.Value = m["value"]
+			if t, ok := m["type"].(string); ok {
+				bc.Type = t
+			}
+		} else {
+			bc.Value = v
+		}
+		args = append(args, bc)
+	}
+	sortBindConfigsByKey(args)
+	return args
+}
+
+// keepSubChainOverrides 把子链实例的参数配置从裁剪后的覆盖项补回 out：reconcileNodeParamOverrides 只按节点定义
+// 保留覆盖项，子链实例没有节点定义会被丢弃，这里按 sub_chain_ids 里的实例 ID 原样保留。
+func keepSubChainOverrides(out, pruned map[string]map[string]interface{}, subChainIDs []string) {
+	if out == nil {
+		return
+	}
+	for _, id := range subChainIDs {
+		if entry, ok := pruned[id]; ok {
+			out[id] = entry
+		}
+	}
 }
