@@ -59,15 +59,20 @@
   <!-- Activities Tab -->
   <div id="tab-activities" class="tab-content active">
     <div class="toolbar">
-      <input class="search-box" id="act-search" placeholder="搜索 activity..." oninput="onActivitySearchChange()">
-      <select id="act-env-filter" onchange="onActivityEnvFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部环境</option>
-      </select>
-      <select id="act-tag-filter" onchange="onActivityTagFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
-        <option value="">全部标签</option>
-      </select>
-      <button class="btn btn-primary edit-only" onclick="openActivityModal()">新建 Activity</button>
-      <button class="btn btn-outline edit-only" onclick="openCopyActivityModal()">复制 Activity</button>
+      <!-- 查询条件靠左一组，新建/复制按钮靠右一组（.toolbar 为 space-between） -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input class="search-box" id="act-search" placeholder="搜索 activity..." oninput="onActivitySearchChange()">
+        <select id="act-env-filter" onchange="onActivityEnvFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="">全部环境</option>
+        </select>
+        <select id="act-tag-filter" onchange="onActivityTagFilterChange()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+          <option value="">全部标签</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-primary edit-only" onclick="openActivityModal()">新建 Activity</button>
+        <button class="btn btn-outline edit-only" onclick="openCopyActivityModal()">复制 Activity</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
