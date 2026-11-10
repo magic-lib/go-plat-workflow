@@ -254,7 +254,7 @@
         <option value="call">调用根链</option>
         <option value="input">参数输入</option>
       </select>
-      <select id="node-namespace-filter" onchange="loadNodes()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
+      <select id="node-namespace-filter" onchange="onNodeNamespaceFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
         <option value="">全部命名空间</option>
       </select>
       <select id="node-tag-filter" onchange="onNodeTagFilterChange()" style="padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none">
@@ -271,6 +271,17 @@
         <thead><tr><th>Node ID</th><th>名称</th><th>类型</th><th>大类</th><th>标签</th><th>命名空间</th><th>已发布引用</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="log-pager" id="node-pager" style="display:none">
+        <button class="btn btn-sm btn-outline" id="node-prev" onclick="changeNodePage(-1)">上一页</button>
+        <span class="log-page-info" id="node-page-info"></span>
+        <button class="btn btn-sm btn-outline" id="node-next" onclick="changeNodePage(1)">下一页</button>
+        <select id="node-page-size" class="pager-size-select" onchange="onNodePageSizeChange()">
+          <option value="10">10 条/页</option>
+          <option value="20" selected>20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
+      </div>
     </div>
   </div>
 

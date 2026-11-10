@@ -740,31 +740,118 @@ function filterTable(tableId, q) {
   rows.forEach(r => r.style.display = r.textContent.toLowerCase().includes(lq) ? '' : 'none');
 }
 
+// Nodes 列表分页状态（前端分页：接口返回当前命名空间/标签/环境下的全量节点，搜索与大类筛选在前端完成）
+let _nodePage = 1;
+let _nodePageSize = 20;
+let _nodeListRows = []; // 最近一次 /api/nodes 返回的列表（为空时不覆盖 _nodesForEdit，故单独记录）
+
+// 搜索框 / 大类筛选变化：结果集改变，回到第一页
 function filterNodes() {
+  _nodePage = 1;
+  renderNodeTable();
+}
+
+// 按搜索词、大类、标签过滤当前列表；保留原始下标（与 _nodesForEdit 一致，编辑按钮按下标取节点）
+function applyNodeListFilter() {
   const searchEl = document.querySelector('#tab-nodes .search-box');
   const kindEl = document.getElementById('node-kind-filter');
   const tagEl = document.getElementById('node-tag-filter');
-  const q = (searchEl ? searchEl.value : '').toLowerCase();
+  const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
   const kind = kindEl ? kindEl.value : '';
   const tag = tagEl ? tagEl.value : '';
-  const rows = document.querySelectorAll('#nodes-table tbody tr');
-  rows.forEach(r => {
-    let show = true;
-    if (q && !r.textContent.toLowerCase().includes(q)) show = false;
-    if (show && kind) {
-      // 第4列是"大类"列（0-based index 3），按 data-kind 记录的大类值比较
-      const kindCell = r.cells[3];
-      if (kindCell && kindCell.getAttribute('data-kind') !== kind) show = false;
+  const result = [];
+  _nodeListRows.forEach((n, i) => {
+    const meta = nodeKindMeta(n.kind);
+    if (kind && meta.kind !== kind) return;
+    if (tag && !(n.tags || []).includes(tag)) return;
+    if (q) {
+      const text = [n.node_id, n.name, n.type, meta.label, n.namespace].concat(n.tags || []).join(' ').toLowerCase();
+      if (!text.includes(q)) return;
     }
-    if (show && tag) {
-      // 第5列是"标签"列（0-based index 4），取所有 chip 文本
-      // 注意：原实现误用 index 5（实为命名空间列），添加「已发布引用」列后一并修正
-      const tagCell = r.cells[4];
-      const has = tagCell && Array.prototype.some.call(tagCell.querySelectorAll('.tag-chip'), c => c.textContent.replace(' ✓','').trim() === tag);
-      if (!has) show = false;
-    }
-    r.style.display = show ? '' : 'none';
+    result.push({ n: n, i: i });
   });
+  return result;
+}
+
+// 渲染 Nodes 表格当前页；数据变少（筛选/删除）导致页码越界时退回最后一页
+function renderNodeTable() {
+  const tbody = document.querySelector('#nodes-table tbody');
+  if (!tbody) return;
+  const all = applyNodeListFilter();
+  if (all.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">🔍</div><p>无匹配节点</p></div></td></tr>';
+    renderNodePager(0);
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(all.length / _nodePageSize));
+  if (_nodePage > totalPages) _nodePage = totalPages;
+  if (_nodePage < 1) _nodePage = 1;
+  const start = (_nodePage - 1) * _nodePageSize;
+  tbody.innerHTML = all.slice(start, start + _nodePageSize).map(({ n, i }) => `
+      <tr>
+        <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
+        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
+        <td><span class="code-cell">${esc(n.type)}</span></td>
+        <td data-kind="${esc(nodeKindMeta(n.kind).kind)}"><span class="badge ${nodeKindMeta(n.kind).cls}">${nodeKindMeta(n.kind).label}</span></td>
+        <td>${renderTagChipsHtml(n.tags)}</td>
+        <td>${esc(n.namespace || '-')}</td>
+        <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
+        <td>
+          <div class="actions">
+            <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">编辑</button>
+            <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
+            <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
+            <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">删除</button>
+          </div>
+        </td>
+      </tr>`).join('');
+  renderNodePager(all.length);
+}
+
+// 渲染 Nodes 分页器：有数据即展示总数与页码，便于切换每页条数
+function renderNodePager(total) {
+  const pager = document.getElementById('node-pager');
+  if (!pager) return;
+  if (total <= 0) {
+    pager.style.display = 'none';
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(total / _nodePageSize));
+  pager.style.display = 'flex';
+  document.getElementById('node-page-info').textContent =
+    '第 ' + _nodePage + ' / ' + totalPages + ' 页（共 ' + total + ' 条）';
+  document.getElementById('node-prev').disabled = _nodePage <= 1;
+  document.getElementById('node-next').disabled = _nodePage >= totalPages;
+}
+
+// 切换 Nodes 页码（基于当前筛选结果）
+function changeNodePage(delta) {
+  const totalPages = Math.max(1, Math.ceil(applyNodeListFilter().length / _nodePageSize));
+  const newPage = _nodePage + delta;
+  if (newPage < 1 || newPage > totalPages) return;
+  _nodePage = newPage;
+  renderNodeTable();
+}
+
+// 每页条数变化：持久化选择并回到第一页
+function onNodePageSizeChange() {
+  const sel = document.getElementById('node-page-size');
+  const size = parseInt(sel ? sel.value : '', 10);
+  if (!(size > 0)) return;
+  _nodePageSize = size;
+  try { localStorage.setItem('wf_node_page_size', String(size)); } catch (_) {}
+  _nodePage = 1;
+  renderNodeTable();
+}
+
+// 恢复上次选择的每页条数（仅接受下拉中存在的选项）
+function restoreNodePageSize() {
+  const sel = document.getElementById('node-page-size');
+  if (!sel) return;
+  let saved = '';
+  try { saved = localStorage.getItem('wf_node_page_size') || ''; } catch (_) {}
+  if (saved && Array.prototype.some.call(sel.options, o => o.value === saved)) sel.value = saved;
+  _nodePageSize = parseInt(sel.value, 10) || 20;
 }
 
 // 渲染标签 chip 列表（列表列展示用，不可点击）
@@ -841,6 +928,13 @@ function refreshNodeTagFilter() {
 
 // 标签筛选变化：结果集改变并重新加载列表
 function onNodeTagFilterChange() {
+  _nodePage = 1;
+  loadNodes();
+}
+
+// 命名空间筛选变化：结果集改变，回到第一页并重新加载列表
+function onNodeNamespaceFilterChange() {
+  _nodePage = 1;
   loadNodes();
 }
 
@@ -853,6 +947,7 @@ function getNodeListEnv() {
 // 环境筛选变化：持久化选择 + 重新加载列表（有环境才带心跳）
 function onNodeEnvFilterChange() {
   try { localStorage.setItem('wf_node_env', document.getElementById('node-env-filter').value); } catch (_) {}
+  _nodePage = 1;
   loadNodes();
 }
 
@@ -873,6 +968,8 @@ async function loadNodeEnvOptions(force = false) {
     return _nodeEnvLoadPromise;
   }
   _nodeEnvLoadedProject = p;
+  _nodePage = 1;
+  restoreNodePageSize();
   _nodeEnvLoadPromise = (async () => {
     try {
       const envs = await fetchEnvConfigs();
@@ -931,31 +1028,17 @@ async function loadNodes() {
     const envQ = params.length ? ('?' + params.join('&')) : '';
     const nodes = await api('/api/nodes' + envQ);
     const tbody = document.querySelector('#nodes-table tbody');
+    _nodeListRows = nodes || [];
     if (!nodes.length) {
       tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
+      renderNodePager(0);
       return;
     }
     window._nodesForEdit = nodes; // 缓存供编辑按钮索引使用
     refreshNodeNamespaceFilter(); // 同步命名空间过滤下拉（基于当前项目 Activity 缓存）
     refreshNodeTagFilter(); // 同步标签过滤下拉（基于当前列表已有标签）
-    tbody.innerHTML = nodes.map((n, i) => `
-      <tr>
-        <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
-        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
-        <td><span class="code-cell">${esc(n.type)}</span></td>
-        <td data-kind="${esc(nodeKindMeta(n.kind).kind)}"><span class="badge ${nodeKindMeta(n.kind).cls}">${nodeKindMeta(n.kind).label}</span></td>
-        <td>${renderTagChipsHtml(n.tags)}</td>
-        <td>${esc(n.namespace || '-')}</td>
-        <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
-        <td>
-          <div class="actions">
-            <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">编辑</button>
-            <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
-            <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
-            <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">删除</button>
-          </div>
-        </td>
-      </tr>`).join('');
+    // 保持当前页码（删除/编辑后刷新仍停留在当前页；当前页删空时 renderNodeTable 自动退回上一页）
+    renderNodeTable();
   } catch (e) { showToast('加载节点失败: ' + e.message, 'error'); }
 }
 
