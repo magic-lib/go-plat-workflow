@@ -453,6 +453,7 @@ path.orch-trace-edge { stroke: #ef4444 !important; stroke-width: 3.5px !importan
 .log-pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px; border-top: 1px solid var(--border); background: var(--card-bg); }
 .log-pager .btn:disabled { opacity: .45; cursor: not-allowed; }
 .log-page-info { font-size: .82rem; color: var(--text-muted); font-weight: 600; }
+.pager-size-select { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: .8rem; background: var(--card-bg); color: var(--text); outline: none; }
 .log-section-title { font-size: .8rem; font-weight: 700; color: var(--text-muted); margin: 14px 2px 6px; padding-bottom: 4px; border-bottom: 2px solid var(--border); }
 .mini-btn { font-size: .7rem; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--primary); cursor: pointer; margin-left: 8px; }
 .mini-btn:hover { background: var(--primary); color: #fff; }
