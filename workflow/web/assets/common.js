@@ -2470,7 +2470,7 @@ async function loadActivities() {
   try {
     const data = await api('/api/activities' + '?_=1' + envQ);
     window._activityCache = data || []; // 全量缓存（已按所选环境带心跳/测试状态）
-    _actPage = 1; // 重新加载后回到第一页
+    // 保持当前页码（删除/编辑后刷新仍停留在当前页；当前页删空时 renderActivityTable 自动退回上一页）
     renderActivityTable(applyActivityTagFilter(window._activityCache));
     refreshActivityTagFilterOptions();
   } catch (e) { showToast('加载 activities 失败: ' + e.message, 'error'); }
@@ -2526,6 +2526,8 @@ async function loadActivityEnvOptions(force = false) {
     return _activityEnvLoadPromise;
   }
   _activityEnvLoadedProject = p;
+  _actPage = 1;
+  restoreActivityPageSize();
   _activityEnvLoadPromise = (async () => {
     try {
       const envs = await fetchEnvConfigs();
@@ -2616,11 +2618,12 @@ function inferOrchParamPreset(val) {
 
 // Activities 列表分页状态（前端分页：接口返回全量，保证标签筛选项稳定）
 let _actPage = 1;
-const _actPageSize = 50;
+let _actPageSize = 20;
 
 // 环境筛选变化：持久化选择 + 重新加载列表
 function onActivityEnvFilterChange() {
   try { localStorage.setItem('wf_activity_env', document.getElementById('act-env-filter').value); } catch (_) {}
+  _actPage = 1;
   loadActivities();
 }
 
@@ -2692,12 +2695,12 @@ function renderActivityTable(list) {
   renderActivityPager(all.length);
 }
 
-// 渲染 Activities 分页器；总数不超过一页时隐藏
+// 渲染 Activities 分页器：有数据即展示总数与页码，便于切换每页条数
 function renderActivityPager(total) {
   const pager = document.getElementById('act-pager');
   if (!pager) return;
   const totalPages = Math.max(1, Math.ceil(total / _actPageSize));
-  if (total <= _actPageSize) {
+  if (total <= 0) {
     pager.style.display = 'none';
     return;
   }
@@ -2716,6 +2719,27 @@ function changeActivityPage(delta) {
   if (newPage < 1 || newPage > totalPages) return;
   _actPage = newPage;
   renderActivityTable(list);
+}
+
+// 每页条数变化：持久化选择并回到第一页
+function onActivityPageSizeChange() {
+  const sel = document.getElementById('act-page-size');
+  const size = parseInt(sel ? sel.value : '', 10);
+  if (!(size > 0)) return;
+  _actPageSize = size;
+  try { localStorage.setItem('wf_activity_page_size', String(size)); } catch (_) {}
+  _actPage = 1;
+  renderActivityTable(applyActivityTagFilter(window._activityCache));
+}
+
+// 恢复上次选择的每页条数（仅接受下拉中存在的选项）
+function restoreActivityPageSize() {
+  const sel = document.getElementById('act-page-size');
+  if (!sel) return;
+  let saved = '';
+  try { saved = localStorage.getItem('wf_activity_page_size') || ''; } catch (_) {}
+  if (saved && Array.prototype.some.call(sel.options, o => o.value === saved)) sel.value = saved;
+  _actPageSize = parseInt(sel.value, 10) || 20;
 }
 
 // 根据心跳信息渲染心跳图标（♥）：最近1分钟内无心跳（count==0）显示灰色（worker 未启动/已挂），
