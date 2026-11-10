@@ -2616,7 +2616,7 @@ function renderActivityTable(list) {
   const tbody = document.getElementById('act-table');
   const all = list || [];
   if (all.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
     renderActivityPager(0);
     return;
   }
@@ -2639,7 +2639,8 @@ function renderActivityTable(list) {
       }
     } catch(e) {}
     const argJson = escAttr(JSON.stringify(argData));
-    const tagsHtml = (a.tags || []).map(t => '<span class="badge ' + tagColorClass(t) + '" style="margin-right:4px">' + escHtml(t) + '</span>').join('') || '<span style="color:var(--text-muted)">-</span>';
+    // 标签每个一行，最多显示 4 个汉字宽，超出用省略号，悬停看全名
+    const tagsHtml = (a.tags || []).map(t => '<span class="badge act-tag-badge ' + tagColorClass(t) + '" title="' + escAttr(t) + '">' + escHtml(t) + '</span>').join('') || '<span style="color:var(--text-muted)">-</span>';
     // 测试状态图标：success=绿色勾，failed=红色叉，none/无=灰色图标。
     // 未选择具体环境时不展示（避免多环境聚合导致的误判）。
     let testIcon = '';
@@ -2656,8 +2657,7 @@ function renderActivityTable(list) {
       <td><span class="code-cell">${escHtml(a.activity_id)}</span></td>
       <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span>${a.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
       <td>${tagsHtml}</td>
-      <td><span class="code-cell">${escHtml(a.act_namespace)}</span></td>
-      <td><span class="code-cell">${escHtml(a.act_name)}</span></td>
+      <td class="act-ns-name"><div class="code-cell act-ns" title="命名空间：${escAttr(a.act_namespace)}">${escHtml(a.act_namespace)}</div><div class="code-cell" title="活动名称：${escAttr(a.act_name)}">${escHtml(a.act_name)}</div></td>
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
       <td class="pubref-count" data-chains="${publishedRefsJsonAttr(a)}" data-empty="${(a.published_root_chains && a.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(a)}</td>
       <td class="noderef-count" data-nodes="${refNodesJsonAttr(a)}" data-empty="${activityRefNodes(a).length ? '' : '1'}">${refNodesCountHtml(a)}</td>
