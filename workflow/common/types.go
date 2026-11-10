@@ -22,7 +22,7 @@ const (
 	ParamInputDefsKey = "__input_params"
 	// ParamInputConfigKey 参数输入节点 DSL configuration 中参数定义的字段名。
 	ParamInputConfigKey = "input_params"
-	// LoopNodeTypeName 循环节点类型标识：按遍历数组 / 固定次数 / 条件三种模式重复执行循环体，
+	// LoopNodeTypeName 循环节点类型标识：按遍历数组 / 条件循环两种模式重复执行循环体，
 	// 循环体可以是一条子链（共享执行上下文）或一条已发布的根链（按入参映射调用）。
 	LoopNodeTypeName = "custom/Loop"
 	// LoopConfigKey 编排时循环配置（JSON 对象）在 node_param_overrides 中的保留 key，
@@ -33,6 +33,9 @@ const (
 	// LoopVarKey 每轮执行时写入 arguments 的循环变量名，循环体内用 {{arguments._loop.item}} 等引用；
 	// 它不是调用方入参，提取必传入参时跳过。
 	LoopVarKey = "_loop"
+	// LoopItemsKey 循环节点在参数配置里的保留参数：遍历模式的循环数据。
+	// 和普通参数一样配置来源（引用节点 / 调用传入 / 固定配置），不作为入参传给目标根链。
+	LoopItemsKey = "loop_items"
 	// LoopBodySubChain / LoopBodyRootChain 循环体类型：子链 / 已发布的根链。
 	LoopBodySubChain  = "subchain"
 	LoopBodyRootChain = "rootchain"

@@ -1058,6 +1058,10 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		if err != nil {
 			return nil, err
 		}
+		// 循环节点：配置必须能通过执行时的校验（如遍历模式要配置 loop_items）
+		if err := checkLoopNodes(append(draftChain.Metadata.Nodes, subNodes...)); err != nil {
+			return nil, err
+		}
 		// 调用根链节点：目标根链必须已发布、入参配置齐全，且不能形成循环调用
 		if err := s.checkRootChainCalls(ctx, project, chainID, append(draftChain.Metadata.Nodes, subNodes...)); err != nil {
 			return nil, err

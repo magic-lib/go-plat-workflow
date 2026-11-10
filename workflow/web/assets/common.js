@@ -11555,13 +11555,17 @@ async function loadNodeChainCallSignature(chainId) {
 // ============================================================
 // 循环节点（custom/Loop）
 // ============================================================
-// 每个实例的循环配置（模式、数据来源、循环体等）以 JSON 字符串存在 _orchParamPreset[instanceId][ORCH_LOOP_CONFIG_KEY]，
+// 每个实例的循环配置（模式、条件、循环体等）以 JSON 字符串存在 _orchParamPreset[instanceId][ORCH_LOOP_CONFIG_KEY]，
 // 随 node_param_overrides 保存，后端组装 DSL 时移到 configuration.loop。
+// 遍历模式的循环数据是参数 loop_items，在「节点参数配置」里像普通参数一样配置来源（引用节点 / 调用传入 / 固定配置）；
 // 循环体为根链时，其余参数是传给目标根链的入参映射（参数取目标根链当前发布版本的入参），
 // 可引用循环变量 {{arguments._loop.item}} / {{arguments._loop.index}} / {{arguments._loop.last}}。
 const ORCH_LOOP_NODE_TYPE = 'custom/Loop';
 const ORCH_LOOP_CONFIG_KEY = '__loop_config';
-const ORCH_LOOP_MODES = { foreach: '遍历数组', count: '固定次数', while: '条件循环' };
+const ORCH_LOOP_MODES = { foreach: '遍历数组', while: '条件循环' };
+const ORCH_LOOP_ITEMS_KEY = 'loop_items';
+const ORCH_LOOP_ITEMS_PARAM = { key: ORCH_LOOP_ITEMS_KEY, label: '循环数据', type: 'slice', required: true,
+  description: '要遍历的数组（或对象，按键遍历），每个元素执行一次循环体' };
 const ORCH_LOOP_OUTPUTS = [
   { key: 'items', label: '每轮结果（数组）', type: 'slice' },
   { key: 'count', label: '执行轮数', type: 'int64' },
@@ -11577,7 +11581,7 @@ function isOrchLoopInst(inst) {
 
 // 取实例的循环配置（带默认值）
 function getOrchLoopConfig(instanceId) {
-  const def = { mode: 'foreach', range: '', count: '', condition: '', break_condition: '', body_type: 'subchain', body_id: '',
+  const def = { mode: 'foreach', condition: '', break_condition: '', body_type: 'subchain', body_id: '',
     max_iterations: 100, concurrency: 1, interval_ms: 0, fail_policy: 'stop' };
   const p = _orchParamPreset[instanceId] && _orchParamPreset[instanceId][ORCH_LOOP_CONFIG_KEY];
   if (!p || !p.value) return def;
@@ -11594,13 +11598,17 @@ function setOrchLoopConfig(instanceId, cfg) {
   _orchParamPreset[instanceId][ORCH_LOOP_CONFIG_KEY] = { src: PARAM_SRC_FIXED, value: JSON.stringify(cfg) };
 }
 
-// 循环节点的参数：循环体为根链时为目标根链所需的入参，循环体为子链时没有参数（子链直接共享执行上下文）
+// 循环节点的参数：遍历模式先是循环数据 loop_items；循环体为根链时再加上目标根链所需的入参
+// （循环体为子链时子链直接共享执行上下文，没有入参）
 function getOrchLoopParams(inst) {
   const cfg = getOrchLoopConfig(inst.instanceId);
-  if (cfg.body_type !== 'rootchain' || !cfg.body_id) return [];
+  const params = cfg.mode === 'foreach' ? [Object.assign({}, ORCH_LOOP_ITEMS_PARAM)] : [];
+  if (cfg.body_type !== 'rootchain' || !cfg.body_id) return params;
   const sig = getOrchCallSig(cfg.body_id);
-  if (!sig) return [];
-  return (sig.arguments || []).filter(Boolean).map(k => ({ key: k, label: k, type: 'string', required: true }));
+  if (!sig) return params;
+  (sig.arguments || []).filter(k => k && k !== ORCH_LOOP_ITEMS_KEY)
+    .forEach(k => params.push({ key: k, label: k, type: 'string', required: true }));
+  return params;
 }
 
 // 循环体显示名
@@ -11618,7 +11626,6 @@ function orchLoopBodyLabel(cfg) {
 function orchLoopSummary(instanceId) {
   const cfg = getOrchLoopConfig(instanceId);
   const parts = [ORCH_LOOP_MODES[cfg.mode] || cfg.mode];
-  if (cfg.mode === 'count' && cfg.count) parts[0] += ' ' + cfg.count + ' 次';
   if (Number(cfg.concurrency) > 1) parts.push('并发 ' + cfg.concurrency);
   parts.push('循环体：' + orchLoopBodyLabel(cfg));
   return '循环：' + parts.join(' · ');
@@ -11644,7 +11651,6 @@ async function openOrchLoopEditor(instanceId) {
           <label>循环模式</label>
           <select id="orch-loop-mode" onchange="refreshOrchLoopEditorFields()">
             <option value="foreach">遍历数组：每个元素执行一次</option>
-            <option value="count">固定次数</option>
             <option value="while">条件循环：满足条件就继续</option>
           </select>
         </div>
@@ -11657,13 +11663,7 @@ async function openOrchLoopEditor(instanceId) {
         </div>
       </div>
       <div class="form-group" id="orch-loop-range-wrap">
-        <label>数据来源</label>
-        <input type="text" id="orch-loop-range" list="orch-loop-ref-list" placeholder="如 {{steps.N000001__abcde.responses.list}}，也可直接写 JSON 数组" style="font-family:monospace">
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">取上游节点返回的数组（或对象，按键遍历），可从下拉提示中选择。</div>
-      </div>
-      <div class="form-group" id="orch-loop-count-wrap">
-        <label>循环次数</label>
-        <input type="text" id="orch-loop-count" list="orch-loop-ref-list" placeholder="如 3，或 {{steps.N000001__abcde.responses.total}}" style="font-family:monospace">
+        <div style="font-size:.75rem;color:var(--text-muted)">遍历的数据在确定后的「节点参数配置」里配置：参数 <code>loop_items</code>（循环数据），可引用上游节点返回的数组、由调用方传入，或固定写一个 JSON 数组。</div>
       </div>
       <div class="form-group" id="orch-loop-cond-wrap">
         <label>继续条件（每轮执行前判断，为 true 才执行）</label>
@@ -11673,7 +11673,6 @@ async function openOrchLoopEditor(instanceId) {
         <label>跳出条件（选填，每轮执行后判断，为 true 即结束循环）</label>
         <input type="text" id="orch-loop-break" placeholder='如 [arguments._loop.last.ok] == true' style="font-family:monospace">
       </div>
-      <datalist id="orch-loop-ref-list"></datalist>
       <div class="form-group">
         <label>循环体</label>
         <input type="text" id="orch-loop-body-search" placeholder="按名称 / ID 过滤" oninput="renderOrchLoopBodyOptions()" style="margin-bottom:6px">
@@ -11697,6 +11696,7 @@ async function openOrchLoopEditor(instanceId) {
         <code>{{arguments._loop.key}}</code> 遍历对象时的键、<code>{{arguments._loop.last}}</code> 上一轮结果。
         循环体为子链时，在子链节点参数里用「固定配置」引用这些变量；为根链时，在本节点的参数配置里把它们映射到目标根链的入参。
         条件表达式里的字段路径要用方括号括起来，如 <code>[arguments._loop.index] &lt; 3</code>。
+        需要固定执行 N 次时用条件循环，继续条件写 <code>[arguments._loop.index] &lt; N</code>。
         条件循环、配置了跳出条件时只能串行执行。下游节点可引用本节点的 items / count / success / failed / errors / break_index。
       </div>
       </div>
@@ -11710,8 +11710,6 @@ async function openOrchLoopEditor(instanceId) {
   const cfg = getOrchLoopConfig(instanceId);
   document.getElementById('orch-loop-mode').value = cfg.mode || 'foreach';
   document.getElementById('orch-loop-body-type').value = cfg.body_type || 'subchain';
-  document.getElementById('orch-loop-range').value = cfg.range || '';
-  document.getElementById('orch-loop-count').value = cfg.count || '';
   document.getElementById('orch-loop-condition').value = cfg.condition || '';
   document.getElementById('orch-loop-break').value = cfg.break_condition || '';
   document.getElementById('orch-loop-max').value = cfg.max_iterations || 100;
@@ -11720,13 +11718,6 @@ async function openOrchLoopEditor(instanceId) {
   document.getElementById('orch-loop-fail').value = cfg.fail_policy || 'stop';
   document.getElementById('orch-loop-body-search').value = '';
   window._orchLoopBodyCur = cfg.body_id || '';
-  // 数据来源 / 次数的下拉提示：上游节点的返回值与参数
-  const refs = [];
-  (getOrchRefNodeCandidates(instanceId) || []).forEach(c => {
-    (c.outputs || []).forEach(o => o && o.key && refs.push({ v: '{{steps.' + c.id + '.responses.' + o.key + '}}', l: (c.name || c.id) + ' 返回值 ' + (o.label || o.key) }));
-    (c.params || []).forEach(p => p && p.key && refs.push({ v: '{{steps.' + c.id + '.arguments.' + p.key + '}}', l: (c.name || c.id) + ' 参数 ' + (p.label || p.key) }));
-  });
-  document.getElementById('orch-loop-ref-list').innerHTML = refs.map(r => `<option value="${esc(r.v)}">${esc(r.l)}</option>`).join('');
   refreshOrchLoopEditorFields();
   overlay.classList.add('show');
   // 根链列表：只列出已发布、启用的根链，排除当前正在编辑的根链
@@ -11746,7 +11737,6 @@ async function openOrchLoopEditor(instanceId) {
 function refreshOrchLoopEditorFields() {
   const mode = (document.getElementById('orch-loop-mode') || {}).value || 'foreach';
   document.getElementById('orch-loop-range-wrap').style.display = mode === 'foreach' ? 'block' : 'none';
-  document.getElementById('orch-loop-count-wrap').style.display = mode === 'count' ? 'block' : 'none';
   document.getElementById('orch-loop-cond-wrap').style.display = mode === 'while' ? 'block' : 'none';
 }
 
@@ -11787,8 +11777,6 @@ function collectOrchLoopEditor() {
   const v = id => (document.getElementById(id).value || '').trim();
   const cfg = {
     mode: v('orch-loop-mode') || 'foreach',
-    range: v('orch-loop-range'),
-    count: v('orch-loop-count'),
     condition: v('orch-loop-condition'),
     break_condition: v('orch-loop-break'),
     body_type: v('orch-loop-body-type') || 'subchain',
@@ -11799,12 +11787,8 @@ function collectOrchLoopEditor() {
     fail_policy: v('orch-loop-fail') || 'stop',
   };
   // 只保留当前模式用到的字段，避免切换模式后残留旧配置
-  if (cfg.mode !== 'foreach') cfg.range = '';
-  if (cfg.mode !== 'count') cfg.count = '';
   if (cfg.mode !== 'while') cfg.condition = '';
   const err = msg => { showToast(msg, 'error'); return null; };
-  if (cfg.mode === 'foreach' && !cfg.range) return err('请填写数据来源');
-  if (cfg.mode === 'count' && !cfg.count) return err('请填写循环次数');
   if (cfg.mode === 'while' && !cfg.condition) return err('请填写继续条件');
   if (!cfg.body_id) return err('请选择循环体');
   if (cfg.max_iterations < 1 || cfg.max_iterations > 1000) return err('最大循环次数需在 1~1000 之间');
@@ -11815,7 +11799,8 @@ function collectOrchLoopEditor() {
   return cfg;
 }
 
-// 「循环配置」弹框确定：循环体为根链时按目标根链入参重置参数（保留同名参数已配置的来源），为子链时清掉参数
+// 「循环配置」弹框确定：重置参数——遍历模式保留 loop_items（旧配置里写在循环配置的数据来源迁移过来），
+// 循环体为根链时按目标根链入参重置（保留同名参数已配置的来源），为子链时没有入参
 async function confirmOrchLoopEditor() {
   const instanceId = _orchLoopEditInstId;
   if (!instanceId) { closeOrchLoopEditor(); return; }
@@ -11828,9 +11813,15 @@ async function confirmOrchLoopEditor() {
   }
   storeParamPreset(); // 先把参数配置区当前的编辑结果写回暂存
   const oldPreset = _orchParamPreset[instanceId] || {};
+  const oldCfg = getOrchLoopConfig(instanceId);
   const preset = {};
+  if (cfg.mode === 'foreach') {
+    const legacyRange = String(oldCfg.range || '').trim();
+    preset[ORCH_LOOP_ITEMS_KEY] = oldPreset[ORCH_LOOP_ITEMS_KEY]
+      || { src: legacyRange ? PARAM_SRC_FIXED : PARAM_SRC_UPSTREAM, value: legacyRange, type: 'slice' };
+  }
   if (sig) {
-    (sig.arguments || []).filter(Boolean).forEach(k => {
+    (sig.arguments || []).filter(k => k && k !== ORCH_LOOP_ITEMS_KEY).forEach(k => {
       preset[k] = oldPreset[k] || { src: PARAM_SRC_FIXED, value: '', type: 'string' };
     });
   }

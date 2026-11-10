@@ -160,14 +160,15 @@ func TestLoopNode_ForeachObjectSortedByKey(t *testing.T) {
 	}
 }
 
-func TestLoopNode_CountRootChain(t *testing.T) {
+func TestLoopNode_ItemsParamRootChain(t *testing.T) {
 	fake := &fakeRootChainInvoker{resp: map[string]any{"ok": true}}
 	SetRootChainInvoker(fake)
 	defer SetRootChainInvoker(nil)
 
-	cfg := `{"mode":"count","count":"{{steps.N000001__src.responses.n}}","body_type":"rootchain","body_id":"R000009"}`
-	args := `[{"key":"idx","value":"{{arguments._loop.index}}"},{"key":"uid","value":"{{arguments.uid}}"}]`
-	relation, out, err := runLoopChain(t, "loop_count_root", cfg, args, map[string]any{"uid": 5})
+	// 循环数据来自参数 loop_items（引用上游数组），优先于循环配置里的旧字段 range
+	cfg := `{"mode":"foreach","range":"[1]","body_type":"rootchain","body_id":"R000009"}`
+	args := `[{"key":"loop_items","value":"{{steps.N000001__src.responses.list}}","type":"slice"},{"key":"idx","value":"{{arguments._loop.index}}"},{"key":"name","value":"{{arguments._loop.item}}"},{"key":"uid","value":"{{arguments.uid}}"}]`
+	relation, out, err := runLoopChain(t, "loop_items_root", cfg, args, map[string]any{"uid": 5})
 	if err != nil || relation != types.Success {
 		t.Fatalf("relation=%s err=%v", relation, err)
 	}
@@ -175,10 +176,13 @@ func TestLoopNode_CountRootChain(t *testing.T) {
 		t.Fatalf("invoked=%d", fake.invoked)
 	}
 	// 最后一次调用的入参
-	if conv.String(fake.req.Payload["idx"]) != "2" || conv.String(fake.req.Payload["uid"]) != "5" || fake.req.ChainID != "R000009" {
+	if conv.String(fake.req.Payload["idx"]) != "2" || fake.req.Payload["name"] != "c" || conv.String(fake.req.Payload["uid"]) != "5" || fake.req.ChainID != "R000009" {
 		t.Fatalf("unexpected req: %+v", fake.req)
 	}
-	if strings.Join(fake.path, ",") != "loop_count_root,R000009" {
+	if _, ok := fake.req.Payload["loop_items"]; ok {
+		t.Fatalf("loop_items should not be passed to target root chain: %v", fake.req.Payload)
+	}
+	if strings.Join(fake.path, ",") != "loop_items_root,R000009" {
 		t.Fatalf("unexpected call path: %v", fake.path)
 	}
 	res := loopResultOf(t, out)
@@ -271,8 +275,22 @@ func TestLoopNode_TooManyItems(t *testing.T) {
 	}
 }
 
+func TestLoopNode_ItemsFromEntryArgument(t *testing.T) {
+	// 调用传入：loop_items 取调用方传入的数组
+	cfg := `{"mode":"foreach","body_type":"subchain","body_id":"S000001"}`
+	args := `[{"key":"loop_items","value":"{{arguments.phones}}"}]`
+	relation, out, err := runLoopChain(t, "loop_entry_items", cfg, args, map[string]any{"phones": []any{"138", "139"}})
+	if err != nil || relation != types.Success {
+		t.Fatalf("relation=%s err=%v", relation, err)
+	}
+	res := loopResultOf(t, out)
+	if res.Count != 2 || conv.String(res.Items[1].(map[string]any)["item"]) != "139" {
+		t.Fatalf("unexpected result: %s", conv.String(res))
+	}
+}
+
 func TestLoopNode_SubChainNotLoaded(t *testing.T) {
-	cfg := `{"mode":"count","count":"1","body_type":"subchain","body_id":"S999999"}`
+	cfg := `{"mode":"foreach","range":"[1]","body_type":"subchain","body_id":"S999999"}`
 	relation, _, err := runLoopChain(t, "loop_no_sub", cfg, "", nil)
 	if relation != types.Failure || err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("relation=%s err=%v", relation, err)
@@ -284,17 +302,17 @@ func TestLoopConfigNormalize(t *testing.T) {
 		cfg  LoopConfig
 		want string
 	}{
-		{LoopConfig{Mode: "foreach", BodyType: "subchain", BodyID: "S1"}, "数据来源"},
-		{LoopConfig{Mode: "count", BodyType: "subchain", BodyID: "S1"}, "次数"},
+		{LoopConfig{Mode: "foreach", BodyType: "subchain", BodyID: "S1"}, "loop_items"},
+		{LoopConfig{Mode: "count", Range: "[1]", BodyType: "subchain", BodyID: "S1"}, "不支持的循环模式"},
 		{LoopConfig{Mode: "while", BodyType: "subchain", BodyID: "S1"}, "继续条件"},
 		{LoopConfig{Mode: "x", BodyType: "subchain", BodyID: "S1"}, "不支持的循环模式"},
-		{LoopConfig{Mode: "count", Count: "1", BodyType: "y", BodyID: "S1"}, "循环体类型"},
-		{LoopConfig{Mode: "count", Count: "1", BodyType: "subchain"}, "未选择循环体"},
-		{LoopConfig{Mode: "count", Count: "1", BodyType: "subchain", BodyID: "S1", MaxIterations: 1001}, "最大循环次数"},
-		{LoopConfig{Mode: "count", Count: "1", BodyType: "subchain", BodyID: "S1", Concurrency: 21}, "并发数"},
+		{LoopConfig{Mode: "foreach", Range: "[1]", BodyType: "y", BodyID: "S1"}, "循环体类型"},
+		{LoopConfig{Mode: "foreach", Range: "[1]", BodyType: "subchain"}, "未选择循环体"},
+		{LoopConfig{Mode: "foreach", Range: "[1]", BodyType: "subchain", BodyID: "S1", MaxIterations: 1001}, "最大循环次数"},
+		{LoopConfig{Mode: "foreach", Range: "[1]", BodyType: "subchain", BodyID: "S1", Concurrency: 21}, "并发数"},
 		{LoopConfig{Mode: "while", Condition: "true", BodyType: "subchain", BodyID: "S1", Concurrency: 2}, "串行"},
-		{LoopConfig{Mode: "count", Count: "1", BreakCondition: "true", BodyType: "subchain", BodyID: "S1", Concurrency: 2}, "串行"},
-		{LoopConfig{Mode: "count", Count: "1", BodyType: "subchain", BodyID: "S1", FailPolicy: "z"}, "失败策略"},
+		{LoopConfig{Mode: "foreach", Range: "[1]", BreakCondition: "true", BodyType: "subchain", BodyID: "S1", Concurrency: 2}, "串行"},
+		{LoopConfig{Mode: "foreach", Range: "[1]", BodyType: "subchain", BodyID: "S1", FailPolicy: "z"}, "失败策略"},
 	}
 	for _, c := range cases {
 		cfg := c.cfg
@@ -302,7 +320,7 @@ func TestLoopConfigNormalize(t *testing.T) {
 			t.Fatalf("cfg=%+v err=%v want %s", c.cfg, err, c.want)
 		}
 	}
-	ok := LoopConfig{Count: "1", BodyType: "rootchain", BodyID: "R1", Mode: "count"}
+	ok := LoopConfig{Range: "[1]", BodyType: "rootchain", BodyID: "R1"}
 	if err := ok.normalize(); err != nil || ok.MaxIterations != DefaultLoopMaxIterations || ok.Concurrency != 1 || ok.FailPolicy != LoopFailStop {
 		t.Fatalf("normalize defaults: %+v err=%v", ok, err)
 	}
@@ -332,7 +350,7 @@ func TestLoopNode_ParallelFailStop(t *testing.T) {
 
 func TestLoopNode_SubChainByEmbeddedTarget(t *testing.T) {
 	// body_target 指向嵌入的子链；body_id 对应的实例不存在也能执行
-	cfg := `{"mode":"count","count":"2","body_type":"subchain","body_id":"S000009","body_target":"p1:S000001#e1"}`
+	cfg := `{"mode":"foreach","range":"[1,2]","body_type":"subchain","body_id":"S000009","body_target":"p1:S000001#e1"}`
 	relation, out, err := runLoopChain(t, "loop_embedded", cfg, "", nil)
 	if err != nil || relation != types.Success {
 		t.Fatalf("relation=%s err=%v", relation, err)

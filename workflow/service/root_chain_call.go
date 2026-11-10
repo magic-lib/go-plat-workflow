@@ -139,6 +139,9 @@ func (s *WorkflowService) walkRootChainCalls(ctx context.Context, project string
 		if err != nil {
 			return fmt.Errorf("%s %s：%w", label, n.Id, err)
 		}
+		if label == "循环节点" && lo.Contains(sig.Arguments, common.LoopItemsKey) {
+			return fmt.Errorf("循环节点 %s 的目标根链 %s 有入参 %s，与循环数据参数同名，请修改目标根链的入参名", n.Id, target, common.LoopItemsKey)
+		}
 		if checkArgs {
 			if missing := missingRootChainCallArgs(n, sig.Arguments); len(missing) > 0 {
 				return fmt.Errorf("%s %s 缺少目标根链 %s 的入参：%s，请在编排页重新选择该根链后补齐", label, n.Id, target, strings.Join(missing, ","))
@@ -147,6 +150,19 @@ func (s *WorkflowService) walkRootChainCalls(ctx context.Context, project string
 		next := append(append(make([]string, 0, len(path)+1), path...), target)
 		if err := s.walkRootChainCalls(ctx, project, next, targetNodes, false); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkLoopNodes 发布前按执行时的规则校验循环节点配置（模式、循环数据、循环体、次数与并发限制等）。
+func checkLoopNodes(nodes []*types.RuleNode) error {
+	for _, n := range nodes {
+		if n == nil || n.Type != common.LoopNodeTypeName {
+			continue
+		}
+		if err := commnode.ValidateLoopNodeConfig(n.Configuration); err != nil {
+			return fmt.Errorf("节点 %s：%w", n.Id, err)
 		}
 	}
 	return nil
