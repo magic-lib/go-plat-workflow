@@ -86,7 +86,7 @@ func (s *WorkflowService) rootChainCallSignature(ctx context.Context, project, c
 	if err := json.Unmarshal([]byte(release.DSLJSON), rc); err != nil {
 		return nil, nil, fmt.Errorf("parse root chain %s release dsl failed: %w", chainID, err)
 	}
-	_, subNodes, err := s.collectSubChains(ctx, project, rc.Metadata.Nodes)
+	_, subNodes, err := s.collectSubChains(ctx, project, rc)
 	if err != nil {
 		return nil, nil, err
 	}

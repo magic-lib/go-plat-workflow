@@ -733,8 +733,13 @@ func (s *WorkflowService) ListSubChains(ctx context.Context, project string, onl
 	return s.subChainRepo.List(ctx, project, onlyEnabled)
 }
 
-// UpdateSubChain 更新子链配置。
+// UpdateSubChain 更新子链配置。被未停用的根链引用时不允许停用。
 func (s *WorkflowService) UpdateSubChain(ctx context.Context, def *workflow.SubChainDef) error {
+	if def.Status != models.NodeStatusEnabled {
+		if err := s.checkSubChainNotReferenced(ctx, def.Project, def.ChainID); err != nil {
+			return err
+		}
+	}
 	// 同 RegisterSubChain：DSL 中 ruleChain.id 固定为子链 ID，name 同步为当前名称。
 	normalizeSubChainDSL(def)
 	return s.subChainRepo.Update(ctx, def)
@@ -767,8 +772,11 @@ func normalizeSubChainDSL(def *workflow.SubChainDef) {
 	}
 }
 
-// DeleteSubChain 软删除子链。
+// DeleteSubChain 软删除子链。被未停用的根链引用时不允许删除。
 func (s *WorkflowService) DeleteSubChain(ctx context.Context, project, chainID string) error {
+	if err := s.checkSubChainNotReferenced(ctx, project, chainID); err != nil {
+		return err
+	}
 	return s.subChainRepo.Delete(ctx, project, chainID)
 }
 
@@ -1018,7 +1026,7 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		if err := json.Unmarshal([]byte(draft.DSLJSON), draftChain); err != nil {
 			return nil, fmt.Errorf("parse root chain dsl failed: %w", err)
 		}
-		_, subNodes, err := s.collectSubChains(ctx, project, draftChain.Metadata.Nodes)
+		_, subNodes, err := s.collectSubChains(ctx, project, draftChain)
 		if err != nil {
 			return nil, err
 		}
@@ -1241,7 +1249,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	}
 
 	// 1-2. 从 flow 节点提取子链 ID 并查询完整 DSL（含嵌套子链），同时校验子链不能并行扇出
-	subChains, subChainNodes, err := s.collectSubChains(execCtx, project, ruleChain.Metadata.Nodes)
+	subChains, subChainNodes, err := s.collectSubChains(execCtx, project, ruleChain)
 	if err != nil {
 		return nil, err
 	}
@@ -1318,31 +1326,49 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	}
 }
 
-// collectSubChains 从 flow 节点（configuration.ruleChainId = "project:subChainID"）收集引用的子链完整 DSL，
-// 子链里再引用的子链也一并收集（按 ID 去重，限制层数防止循环引用）。返回子链列表及其全部节点（用于提取入参）。
-// 每条子链都必须满足 checkSubChainSingleExit。
-func (s *WorkflowService) collectSubChains(ctx context.Context, project string, nodes []*types.RuleNode) ([]*types.RuleChain, []*types.RuleNode, error) {
+// collectSubChains 收集链里 flow 节点引用的子链完整 DSL（含子链里再引用的子链，按 ID 去重，限制层数防止循环引用），
+// 返回子链列表及其全部节点（用于提取入参）。每条子链都必须满足 checkSubChainSingleExit。
+// 子链内容优先取链 DSL 里嵌入的（保存链时的子链内容，ID 形如 F000001#hash）；未嵌入的旧数据按子链 ID 从库里实时读取。
+func (s *WorkflowService) collectSubChains(ctx context.Context, project string, chain *types.RuleChain) ([]*types.RuleChain, []*types.RuleNode, error) {
 	const maxSubChainDepth = 10
+	if chain == nil {
+		return nil, nil, nil
+	}
+	embedded := embeddedSubChainsOf(chain)
 	var subChains []*types.RuleChain
 	var subChainNodes []*types.RuleNode
 	seen := make(map[string]bool)
-	pending := nodes
+	pending := chain.Metadata.Nodes
 	for depth := 0; len(pending) > 0 && depth < maxSubChainDepth; depth++ {
 		var next []*types.RuleNode
-		for _, subID := range flowSubChainIDs(pending) {
-			if seen[subID] {
+		for _, ft := range engine.FlowTargets(pending) {
+			if seen[ft.TargetID] {
 				continue
 			}
-			seen[subID] = true
-			subDef, err := s.subChainRepo.GetByID(ctx, project, subID)
-			if err != nil {
-				return nil, nil, fmt.Errorf("get sub chain %s failed: %w", subID, err)
-			}
+			seen[ft.TargetID] = true
 			subChain := &types.RuleChain{}
-			if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
-				return nil, nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
+			if dsl, ok := embedded[ft.TargetID]; ok {
+				if err := json.Unmarshal(dsl, subChain); err != nil {
+					return nil, nil, fmt.Errorf("parse embedded sub chain %s dsl failed: %w", ft.TargetID, err)
+				}
+			} else {
+				subDef, err := s.subChainRepo.GetByID(ctx, project, ft.SubChainID)
+				if err != nil {
+					return nil, nil, fmt.Errorf("get sub chain %s failed: %w", ft.SubChainID, err)
+				}
+				if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
+					return nil, nil, fmt.Errorf("parse sub chain %s dsl failed: %w", ft.SubChainID, err)
+				}
+				// 实时读取的子链里若嵌入了下级子链，一并纳入
+				if more, ok := engine.ExtractEmbeddedSubChains([]byte(subDef.DSLJSON)); ok {
+					for k, v := range more {
+						if _, exists := embedded[k]; !exists {
+							embedded[k] = v
+						}
+					}
+				}
 			}
-			if err := checkSubChainSingleExit(subID, subChain); err != nil {
+			if err := checkSubChainSingleExit(ft.SubChainID, subChain); err != nil {
 				return nil, nil, err
 			}
 			subChains = append(subChains, subChain)
@@ -1352,6 +1378,27 @@ func (s *WorkflowService) collectSubChains(ctx context.Context, project string, 
 		pending = next
 	}
 	return subChains, subChainNodes, nil
+}
+
+// embeddedSubChainsOf 取出链 DSL 里嵌入的全部子链（含多级嵌入），key 为嵌入子链 ID。
+func embeddedSubChainsOf(chain *types.RuleChain) map[string][]byte {
+	out := make(map[string][]byte)
+	if chain == nil || chain.RuleChain.AdditionalInfo == nil {
+		return out
+	}
+	if _, ok := chain.RuleChain.AdditionalInfo[engine.EmbeddedSubChainsKey]; !ok {
+		return out
+	}
+	raw, err := json.Marshal(map[string]interface{}{"ruleChain": map[string]interface{}{
+		"additionalInfo": map[string]interface{}{engine.EmbeddedSubChainsKey: chain.RuleChain.AdditionalInfo[engine.EmbeddedSubChainsKey]},
+	}})
+	if err != nil {
+		return out
+	}
+	if m, ok := engine.ExtractEmbeddedSubChains(raw); ok {
+		out = m
+	}
+	return out
 }
 
 // checkSubChainSingleExit 子链一次执行只能走到一个出口：不允许某个节点用同一种关系连到多个下游（并行扇出）。
@@ -1368,26 +1415,6 @@ func checkSubChainSingleExit(subID string, chain *types.RuleChain) error {
 		seen[k] = true
 	}
 	return nil
-}
-
-// flowSubChainIDs 从 flow 节点的 configuration.ruleChainId（"project:subChainID"）提取子链 ID，按出现顺序去重。
-func flowSubChainIDs(nodes []*types.RuleNode) []string {
-	var ids []string
-	seen := make(map[string]bool)
-	for _, node := range nodes {
-		if node == nil || node.Type != "flow" {
-			continue
-		}
-		ref, _ := node.Configuration["ruleChainId"].(string)
-		if idx := strings.LastIndex(ref, ":"); idx >= 0 {
-			ref = ref[idx+1:]
-		}
-		if ref != "" && !seen[ref] {
-			seen[ref] = true
-			ids = append(ids, ref)
-		}
-	}
-	return ids
 }
 
 // 根链返回值（root_responses）的静态占位符解析已于 2026-10 废弃：
