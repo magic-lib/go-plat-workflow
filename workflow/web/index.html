@@ -289,7 +289,7 @@
   <!-- Sub Chains Tab -->
   <div id="tab-sub-chains" class="tab-content">
     <div class="toolbar">
-      <input class="search-box" placeholder="搜索子链..." oninput="filterTable('sub-table', this.value)">
+      <input class="search-box" placeholder="搜索子链..." oninput="onChainListSearch('sub')">
       <div style="display:flex;gap:8px">
         <button class="btn btn-outline edit-only" onclick="newSubChainViaOrch()">&#128736; 编排新建</button>
         <button class="btn btn-primary edit-only" onclick="openSubChainModal()">+ 新增 Sub Chain</button>
@@ -300,13 +300,24 @@
         <thead><tr><th>Chain ID</th><th>名称</th><th>描述</th><th>状态</th><th>DSL 大小</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="log-pager" id="sub-pager" style="display:none">
+        <button class="btn btn-sm btn-outline" id="sub-prev" onclick="changeChainListPage('sub', -1)">上一页</button>
+        <span class="log-page-info" id="sub-page-info"></span>
+        <button class="btn btn-sm btn-outline" id="sub-next" onclick="changeChainListPage('sub', 1)">下一页</button>
+        <select id="sub-page-size" class="pager-size-select" onchange="onChainListPageSizeChange('sub')">
+          <option value="10">10 条/页</option>
+          <option value="20" selected>20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
+      </div>
     </div>
   </div>
 
   <!-- Root Chains Tab -->
   <div id="tab-root-chains" class="tab-content">
     <div class="toolbar">
-      <input class="search-box" placeholder="搜索根链..." oninput="filterTable('root-table', this.value)">
+      <input class="search-box" placeholder="搜索根链..." oninput="onChainListSearch('root')">
       <button class="btn btn-primary edit-only" onclick="openCreateRootChainModal()">新增 Root Chain</button>
     </div>
     <div class="table-wrap">
@@ -314,6 +325,17 @@
         <thead><tr><th>Chain ID</th><th>Chain Key</th><th>名称</th><th>状态</th><th>线上版本</th><th>必需参数</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="log-pager" id="root-pager" style="display:none">
+        <button class="btn btn-sm btn-outline" id="root-prev" onclick="changeChainListPage('root', -1)">上一页</button>
+        <span class="log-page-info" id="root-page-info"></span>
+        <button class="btn btn-sm btn-outline" id="root-next" onclick="changeChainListPage('root', 1)">下一页</button>
+        <select id="root-page-size" class="pager-size-select" onchange="onChainListPageSizeChange('root')">
+          <option value="10">10 条/页</option>
+          <option value="20" selected>20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
+      </div>
     </div>
   </div>
 
