@@ -68,12 +68,15 @@ table { width: 100%; border-collapse: collapse; }
 #tab-activities td.arg-count,
 #tab-activities td.pubref-count,
 #tab-activities td.noderef-count { width: 1%; padding-left: 8px; padding-right: 8px; text-align: center; white-space: nowrap; }
-/* Activities 列表：ID / 创建时间 / 操作 三列内容长度固定，用固定像素宽，多余宽度留给名称、标签、命名空间等列
-   ID 为 A%06d（7 个等宽字符）；创建时间为 YYYY-MM-DD；操作为 5 个图标按钮（每个约 34px，间距 6px） */
+/* Activities 列表：ID / 标签 / 创建时间 / 操作 四列内容宽度固定，用固定像素宽，多余宽度留给名称、命名空间 / 活动名称两列
+   ID 为 A%06d（7 个等宽字符）；标签最宽 4 个汉字（见 .act-tag-badge，约 73px）；创建时间为 YYYY-MM-DD；
+   操作为 5 个图标按钮（每个约 34px，间距 6px） */
 #tab-activities .act-col-id,
+#tab-activities .act-col-tag,
 #tab-activities .act-col-time,
 #tab-activities .act-col-ops { padding-left: 12px; padding-right: 12px; white-space: nowrap; }
 #tab-activities .act-col-id { width: 84px; min-width: 84px; }
+#tab-activities .act-col-tag { width: 100px; min-width: 100px; }
 #tab-activities .act-col-time { width: 104px; min-width: 104px; }
 #tab-activities .act-col-ops { width: 220px; min-width: 220px; }
 /* Nodes 列表：分配列宽，避免内容折成两行（描述/分类/状态/版本列已隐藏） */

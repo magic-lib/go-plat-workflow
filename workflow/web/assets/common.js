@@ -2677,7 +2677,7 @@ function renderActivityTable(list) {
     return `<tr>
       <td class="act-col-id"><span class="code-cell">${escHtml(a.activity_id)}</span></td>
       <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span>${a.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
-      <td>${tagsHtml}</td>
+      <td class="act-col-tag">${tagsHtml}</td>
       <td class="act-ns-name"><div class="code-cell act-ns" title="命名空间：${escAttr(a.act_namespace)}">${escHtml(a.act_namespace)}</div><div class="code-cell" title="活动名称：${escAttr(a.act_name)}">${escHtml(a.act_name)}</div></td>
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
       <td class="pubref-count" data-chains="${publishedRefsJsonAttr(a)}" data-empty="${(a.published_root_chains && a.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(a)}</td>
