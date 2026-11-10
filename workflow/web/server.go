@@ -198,6 +198,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("GET /api/sub-chains", ws.handleListSubChains)
 	ws.mux.HandleFunc("POST /api/sub-chains", ws.handleCreateSubChain)
 	ws.mux.HandleFunc("GET /api/sub-chains/{chain_id}", ws.handleGetSubChain)
+	ws.mux.HandleFunc("GET /api/sub-chains/{chain_id}/call-signature", ws.handleGetSubChainCallSignature)
 	ws.mux.HandleFunc("PUT /api/sub-chains/{chain_id}", ws.handleUpdateSubChain)
 	ws.mux.HandleFunc("DELETE /api/sub-chains/{chain_id}", ws.handleDeleteSubChain)
 	// SubChains 编排构建（创建时 chain_id 自动生成）
@@ -915,6 +916,27 @@ func (ws *WebServer) handleGetSubChain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, def)
 }
 
+// handleGetSubChainCallSignature 获取子链的调用签名（入参列表 + 返回值定义），
+// 编排页把子链实例当作普通节点时据此生成参数配置与可引用的返回值字段。
+func (ws *WebServer) handleGetSubChainCallSignature(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	chainID := r.PathValue("chain_id")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	sig, err := ws.svc.GetSubChainCallSignature(r.Context(), project, chainID)
+	if err != nil {
+		if errors.Is(err, workflow.ErrSubChainNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sig)
+}
+
 func (ws *WebServer) handleUpdateSubChain(w http.ResponseWriter, r *http.Request) {
 	project := projectParam(r)
 	chainID := r.PathValue("chain_id")
@@ -1190,6 +1212,7 @@ type buildSubChainRequest struct {
 	NodeNameOverrides     map[string]string                 `json:"node_name_overrides"`
 	NodeCollapseOverrides map[string]bool                   `json:"node_collapse_overrides"`
 	ConfirmPublished      bool                              `json:"confirm_published"`
+	RootResponses         []workflow.RootResponseItem       `json:"root_responses"`
 }
 
 func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSubChainRequest {
@@ -1207,6 +1230,7 @@ func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSub
 		NodeNameOverrides:     r.NodeNameOverrides,
 		NodeCollapseOverrides: r.NodeCollapseOverrides,
 		ConfirmPublished:      r.ConfirmPublished,
+		RootResponses:         r.RootResponses,
 	}
 }
 
@@ -1594,8 +1618,8 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "env_name is required")
 		return
 	}
-	redisCfg, err := ws.svc.GetRedisConnect(r.Context(), req.Project, req.EnvName)
-	if err != nil {
+	// 先校验执行环境的 Redis 配置可用（执行时按环境再次解析）
+	if _, err := ws.svc.GetRedisConnect(r.Context(), req.Project, req.EnvName); err != nil {
 		writeError(w, http.StatusBadRequest, "resolve redis config failed: "+err.Error())
 		return
 	}
@@ -1610,20 +1634,25 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		req.ChainID = def.ChainID
 	}
 
-	// 生产模式：执行当前发布版本（忽略编排配置，使用发布快照）
+	// 生产模式：执行当前发布版本（忽略编排配置，使用发布快照）。
+	// 与线上按 chain_key 调用（InvokeRootChain）走同一条路径：入参包成流程上下文（{{arguments.x}} 可取值），
+	// 入参校验/过滤、嵌入子链加载与线上一致；引擎池按发布版本隔离，执行后不卸载，不影响线上实例。
 	if req.UseRelease {
-		//chainID 必须为release中chainId随机生成的那个，不然如果测试时，就会把正式的利用 ws.svc.UnloadChain 卸载掉。
-
-		payloadStr, _ := json.Marshal(payloadMap)
-		result, err := ws.svc.ExecutePublishedRootChain(r.Context(), req.Project, req.ChainID, string(payloadStr), req.EnvName, redisCfg)
+		def, err := ws.svc.GetRootChain(r.Context(), req.Project, req.ChainID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "root chain not found: "+err.Error())
+			return
+		}
+		req.TraceId = id.GetUUID(req.TraceId)
+		result, err := ws.svc.InvokeRootChain(r.Context(), req.Project, def.ChainKey, req.EnvName, req.TraceId, payloadMap, false)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		_ = ws.svc.UnloadChain(r.Context(), req.Project, req.ChainID)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"project":     req.Project,
 			"chain_id":    req.ChainID,
+			"trace_id":    req.TraceId,
 			"result":      result,
 			"use_release": true,
 			"env_name":    req.EnvName,

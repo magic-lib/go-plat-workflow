@@ -8,6 +8,7 @@ import (
 	"github.com/rulego/rulego/api/types"
 
 	"github.com/magic-lib/go-plat-workflow/workflow"
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 )
 
@@ -84,5 +85,56 @@ func TestCollectSubChainsUsesEmbedded(t *testing.T) {
 	}
 	if len(subs) != 1 || subs[0].RuleChain.ID != eid || len(nodes) != 1 || nodes[0].Id != "s1" {
 		t.Fatalf("subs=%v nodes=%v", subs, nodes)
+	}
+}
+
+// 入参作用域：经旧 flow 节点引用的子链与本链共用入参（计入 argNodes），经调用子链节点引用的不计入，
+// 其下级子链即使经 flow 节点引用也不计入；同一子链既被 flow 又被调用子链节点引用时按共用入参计入一次。
+func TestCollectSubChainsArgNodesScope(t *testing.T) {
+	root := &types.RuleChain{}
+	inner, err := engine.EmbedSubChain(root, "F3", `{"ruleChain":{"id":"F3"},"metadata":{"nodes":[{"id":"s3","type":"jsTransform"}]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopedDSL := `{"ruleChain":{"id":"F2"},"metadata":{"nodes":[{"id":"s2","type":"jsTransform"},` +
+		`{"id":"F3__x","type":"flow","configuration":{"ruleChainId":"p:F3","targetId":"p:` + inner + `"}}]}}`
+	scoped, err := engine.EmbedSubChain(root, "F2", scopedDSL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := engine.EmbedSubChain(root, "F1", `{"ruleChain":{"id":"F1"},"metadata":{"nodes":[{"id":"s1","type":"jsTransform"}]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root.Metadata.Nodes = []*types.RuleNode{
+		{Id: "F2__a", Type: common.SubChainCallNodeTypeName, Configuration: types.Configuration{"ruleChainId": "p:F2", "targetId": "p:" + scoped}},
+		{Id: "F1__a", Type: "flow", Configuration: types.Configuration{"ruleChainId": "p:F1", "targetId": "p:" + shared}},
+		{Id: "F1__b", Type: common.SubChainCallNodeTypeName, Configuration: types.Configuration{"ruleChainId": "p:F1", "targetId": "p:" + shared}},
+	}
+	subs, nodes, argNodes, err := (&WorkflowService{}).collectSubChainsWithArgNodes(context.Background(), "p", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subs) != 3 || len(nodes) != 4 {
+		t.Fatalf("subs=%d nodes=%d", len(subs), len(nodes))
+	}
+	if len(argNodes) != 1 || argNodes[0].Id != "s1" {
+		t.Fatalf("argNodes=%v", argNodes)
+	}
+}
+
+// 子链返回值定义取自子链 DSL 的 additionalInfo.root_responses，空 key 去掉。
+func TestSubChainResponses(t *testing.T) {
+	chain := &types.RuleChain{}
+	if got := subChainResponses(chain); len(got) != 0 {
+		t.Fatalf("got=%v", got)
+	}
+	chain.RuleChain.AdditionalInfo = map[string]interface{}{"root_responses": []any{
+		map[string]any{"key": "out", "label": "结果", "type": "int64"},
+		map[string]any{"key": " "},
+	}}
+	got := subChainResponses(chain)
+	if len(got) != 1 || got[0].Key != "out" || got[0].Type != "int64" {
+		t.Fatalf("got=%v", got)
 	}
 }

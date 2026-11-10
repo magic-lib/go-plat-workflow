@@ -338,6 +338,18 @@ type RootChainCallSignature struct {
 	Responses []RootResponseItem `json:"responses"`
 }
 
+// SubChainCallSignature 子链的调用签名：编排里把子链实例当作普通节点时，参数取 Arguments，返回值取 Responses。
+type SubChainCallSignature struct {
+	// ChainID 子链 ID
+	ChainID string `json:"chain_id"`
+	// Name 子链名称
+	Name string `json:"name"`
+	// Arguments 子链需要的入参名（子链及与它共用入参的下级子链里所有 {{arguments.xxx}}）
+	Arguments []string `json:"arguments"`
+	// Responses 子链返回值定义（子链 DSL 的 additionalInfo.root_responses）
+	Responses []RootResponseItem `json:"responses"`
+}
+
 // ParamInputDef 参数输入节点的一个参数定义（编排时动态配置，字段与根节点返回值定义一致）。
 type ParamInputDef struct {
 	// Key 字段名
@@ -742,6 +754,9 @@ type BuildSubChainRequest struct {
 	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides,omitempty"`
 	// ConfirmPublished 已确认修改被已发布根链引用的子链（保存后线上立即生效）
 	ConfirmPublished bool `json:"confirm_published,omitempty"`
+	// RootResponses 子链返回值定义（与根链同结构）：存在子链 DSL 的 additionalInfo.root_responses，
+	// 子链里返回值节点按此写入返回值，引用该子链的节点把它作为本节点返回值，供下游引用。
+	RootResponses []RootResponseItem `json:"root_responses,omitempty"`
 }
 
 // ============================================================

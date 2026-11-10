@@ -157,10 +157,10 @@
           </div>
         </div>
 
-        <!-- 根节点返回值定义（仅 Root Chain） -->
-        <div class="orch-section root-only" id="orch-rr-section" style="margin-top:12px">
+        <!-- 返回值定义：Root Chain 为根节点返回值，Sub Chain 为子链返回值（引用该子链的节点把它作为本节点返回值） -->
+        <div class="orch-section" id="orch-rr-section" style="margin-top:12px">
           <h3 style="display:flex;justify-content:space-between;align-items:center">
-            根节点返回值定义
+            <span id="orch-rr-title">根节点返回值定义</span>
             <span style="display:flex;align-items:center;gap:6px">
               <span class="count" id="orch-rr-count" style="font-weight:400;color:var(--text-muted);font-size:.78rem">0 个字段</span>
               <button class="btn btn-sm btn-outline" onclick="addOrchRootResponseRow()" type="button">+ 添加字段</button>
