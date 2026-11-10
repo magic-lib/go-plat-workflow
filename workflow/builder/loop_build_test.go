@@ -75,7 +75,7 @@ func TestCollectInputArguments_SkipLoopVars(t *testing.T) {
 
 func TestBuildRuleChain_EmbedLoopBodySubChain(t *testing.T) {
 	b := &DSLBuilder{}
-	loopCfg := `{"mode":"count","count":"2","body_type":"subchain","body_id":"F000002"}`
+	loopCfg := `{"mode":"foreach","body_type":"subchain","body_id":"F000002"}`
 	overrides := map[string]map[string]interface{}{
 		"N000030__abc": {common.LoopConfigKey: map[string]any{"src": "fixed", "value": loopCfg}},
 	}

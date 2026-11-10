@@ -16,7 +16,7 @@ func loopNode(id, bodyType, bodyID string) *types.RuleNode {
 		Id:   id,
 		Type: common.LoopNodeTypeName,
 		Configuration: types.Configuration{
-			common.LoopConfigField: map[string]any{"mode": "count", "count": "2", "body_type": bodyType, "body_id": bodyID},
+			common.LoopConfigField: map[string]any{"mode": "foreach", "body_type": bodyType, "body_id": bodyID},
 		},
 	}
 }
@@ -98,5 +98,21 @@ func TestCollectSubChains_EmbeddedLoopBody(t *testing.T) {
 	// 循环体与外层链共用入参：子链里的 {{arguments.mobile}} 算作本链入参
 	if len(argNodes) != 1 || argNodes[0].Id != "b1" {
 		t.Fatalf("argNodes=%v", argNodes)
+	}
+}
+
+func TestCheckLoopNodes(t *testing.T) {
+	n := loopNode("N1__a", common.LoopBodySubChain, "S1")
+	if err := checkLoopNodes([]*types.RuleNode{n}); err == nil || !strings.Contains(err.Error(), "loop_items") || !strings.Contains(err.Error(), "N1__a") {
+		t.Fatalf("expected missing loop_items error, got %v", err)
+	}
+	n.Configuration["arguments"] = []any{map[string]any{"key": "loop_items", "value": "{{steps.N0__x.responses.list}}"}}
+	if err := checkLoopNodes([]*types.RuleNode{n, {Id: "N2", Type: common.ActivityNodeTypeName}}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	w := loopNode("N1__b", common.LoopBodySubChain, "S1")
+	w.Configuration[common.LoopConfigField] = map[string]any{"mode": "while", "body_type": "subchain", "body_id": "S1"}
+	if err := checkLoopNodes([]*types.RuleNode{w}); err == nil || !strings.Contains(err.Error(), "继续条件") {
+		t.Fatalf("expected missing condition error, got %v", err)
 	}
 }

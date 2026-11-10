@@ -27,7 +27,6 @@ import (
 // 循环模式
 const (
 	LoopModeForeach = "foreach" // 遍历数组：每个元素执行一次循环体
-	LoopModeCount   = "count"   // 固定次数
 	LoopModeWhile   = "while"   // 条件循环：每轮执行前判断继续条件
 )
 
@@ -47,12 +46,11 @@ const (
 
 // LoopConfig 循环节点的循环配置（DSL configuration.loop）。
 type LoopConfig struct {
-	// Mode 循环模式：foreach / count / while，默认 foreach
+	// Mode 循环模式：foreach / while，默认 foreach
 	Mode string `json:"mode"`
-	// Range 遍历模式的数据来源，如 {{steps.N1__ab.responses.list}}，也可以写 JSON 数组
+	// Range 遍历模式的数据来源，如 {{steps.N1__ab.responses.list}}，也可以写 JSON 数组。
+	// 现在在节点参数配置里通过 loop_items 参数配置（优先），这里只为兼容旧配置保留
 	Range string `json:"range,omitempty"`
-	// Count 固定次数模式的次数，可填数字或 {{...}} 引用
-	Count string `json:"count,omitempty"`
 	// Condition 条件循环的继续条件表达式，每轮执行前判断，为 true 才执行
 	Condition string `json:"condition,omitempty"`
 	// BreakCondition 跳出条件表达式（可选），每轮执行后判断，为 true 即结束循环
@@ -66,7 +64,7 @@ type LoopConfig struct {
 	BodyTarget string `json:"body_target,omitempty"`
 	// MaxIterations 最大循环次数，默认 100，上限 1000
 	MaxIterations int `json:"max_iterations,omitempty"`
-	// Concurrency 并发数，默认 1（串行）；只有遍历和固定次数模式、且没有跳出条件时可以大于 1
+	// Concurrency 并发数，默认 1（串行）；只有遍历模式、且没有跳出条件时可以大于 1
 	Concurrency int `json:"concurrency,omitempty"`
 	// IntervalMs 串行时每轮之间的间隔（毫秒）
 	IntervalMs int `json:"interval_ms,omitempty"`
@@ -143,11 +141,7 @@ func (c *LoopConfig) normalize() error {
 	switch c.Mode {
 	case LoopModeForeach:
 		if strings.TrimSpace(c.Range) == "" {
-			return fmt.Errorf("循环节点：遍历模式需要配置数据来源")
-		}
-	case LoopModeCount:
-		if strings.TrimSpace(c.Count) == "" {
-			return fmt.Errorf("循环节点：固定次数模式需要配置次数")
+			return fmt.Errorf("循环节点：遍历模式需要在节点参数配置里配置 %s（循环数据）", common.LoopItemsKey)
 		}
 	case LoopModeWhile:
 		if strings.TrimSpace(c.Condition) == "" {
@@ -186,7 +180,7 @@ func (c *LoopConfig) normalize() error {
 // LoopNode 循环节点（custom/Loop）。
 //
 // 按配置的模式重复执行循环体，每轮把循环变量写入 arguments._loop：
-//   - index：轮次序号（从 0 开始）；item：当前元素（固定次数 / 条件循环为序号）；key：遍历对象时的键；
+//   - index：轮次序号（从 0 开始）；item：当前元素（条件循环为序号）；key：遍历对象时的键；
 //   - last：上一轮的结果（条件循环判断继续条件、跳出条件时常用）。
 //
 // 循环体为子链时，复制一份当前执行上下文交给子链执行，取子链的返回值（有返回值节点时）或结束节点的返回值作为本轮结果；
@@ -217,10 +211,19 @@ func (x *LoopNode) Init(_ types.Config, configuration types.Configuration) error
 	if len(cfg) == 0 {
 		cfg = configuration
 	}
-	x.Config = ParseLoopConfig(cfg)
-	if err := x.Config.normalize(); err != nil {
+	if err := x.initFromConfig(cfg); err != nil {
 		return err
 	}
+	if ruleNode.Name != "" {
+		x.nodeName = ruleNode.Name
+	}
+	return nil
+}
+
+// initFromConfig 解析循环配置与参数：参数里的 loop_items 作为循环数据（优先于循环配置里的旧字段 range），
+// 其余参数是循环体为根链时传给目标根链的入参。
+func (x *LoopNode) initFromConfig(cfg types.Configuration) error {
+	x.Config = ParseLoopConfig(cfg)
 	x.Arguments = nil
 	if raw, ok := cfg["arguments"]; ok && raw != nil {
 		// 与 dsl_builder 一致：[]*param.BindConfig 用标准 json 解析
@@ -228,14 +231,30 @@ func (x *LoopNode) Init(_ types.Config, configuration types.Configuration) error
 		if err != nil {
 			return fmt.Errorf("循环节点：解析入参失败: %w", err)
 		}
-		if err := json.Unmarshal(b, &x.Arguments); err != nil {
+		var args []*param.BindConfig
+		if err := json.Unmarshal(b, &args); err != nil {
 			return fmt.Errorf("循环节点：解析入参失败: %w", err)
 		}
+		for _, a := range args {
+			if a == nil {
+				continue
+			}
+			switch a.Key {
+			case common.LoopItemsKey:
+				if v := strings.TrimSpace(conv.String(a.Value)); v != "" {
+					x.Config.Range = v
+				}
+			default:
+				x.Arguments = append(x.Arguments, a)
+			}
+		}
 	}
-	if ruleNode.Name != "" {
-		x.nodeName = ruleNode.Name
-	}
-	return nil
+	return x.Config.normalize()
+}
+
+// ValidateLoopNodeConfig 按执行时的规则校验循环节点配置（发布前校验用）。
+func ValidateLoopNodeConfig(cfg types.Configuration) error {
+	return (&LoopNode{}).initFromConfig(cfg)
 }
 
 // OnMsg 解析循环数据 → 逐轮执行循环体 → 写入汇总结果。
@@ -371,7 +390,7 @@ func (x *LoopNode) runWhile(goCtx context.Context, ctx types.RuleContext, msg ty
 	}
 }
 
-// runParallel 并发执行（遍历 / 固定次数且无跳出条件）；结果按轮次顺序排列。
+// runParallel 并发执行（遍历模式且无跳出条件）；结果按轮次顺序排列。
 // 失败策略为 stop 时，第一轮失败后不再启动新的轮次，已启动的轮次跑完后返回第一个错误。
 func (x *LoopNode) runParallel(goCtx context.Context, ctx types.RuleContext, msg types.RuleMsg, allParam *paramx.FlowContext, meta *rulegox.ActivityMetaData, items []loopItem, result *LoopResult) (*LoopResult, error) {
 	runCtx, cancel := context.WithCancel(goCtx)
@@ -588,23 +607,8 @@ func loopIterationContext(allParam *paramx.FlowContext, vars map[string]any) *pa
 	return iterCtx
 }
 
-// resolveItems 解析遍历数据 / 固定次数，得到每一轮的循环变量。
+// resolveItems 解析遍历数据，得到每一轮的循环变量。
 func (x *LoopNode) resolveItems(dataMap map[string]any) ([]loopItem, error) {
-	if x.Config.Mode == LoopModeCount {
-		v, err := resolveLoopValue(x.Config.Count, dataMap)
-		if err != nil {
-			return nil, fmt.Errorf("解析循环次数失败: %w", err)
-		}
-		n, err := strconv.ParseFloat(strings.TrimSpace(conv.String(v)), 64)
-		if err != nil || n < 0 || n != float64(int(n)) {
-			return nil, fmt.Errorf("循环次数必须是非负整数，实际为 %s", conv.String(v))
-		}
-		items := make([]loopItem, int(n))
-		for i := range items {
-			items[i] = loopItem{item: i}
-		}
-		return items, nil
-	}
 	v, err := resolveLoopValue(x.Config.Range, dataMap)
 	if err != nil {
 		return nil, fmt.Errorf("解析循环数据失败: %w", err)
