@@ -5442,6 +5442,125 @@ function clearActParamRows() {
 }
 
 // ============================================================
+// Sub Chains / Root Chains 列表前端分页（两个列表共用）
+// ============================================================
+// rows 为最近一次接口返回的全量列表；搜索在前端按字段匹配，筛选/翻页时保留原始下标（编辑等按钮按下标取数据）。
+// project 记录 rows 所属项目，切换项目后回到第 1 页。
+const _chainListPagers = {
+  sub:  { page: 1, size: 20, rows: [], project: '', sizeRestored: false, colspan: 6, tbody: '#sub-table tbody', search: '#tab-sub-chains .search-box', storageKey: 'wf_sub_page_size' },
+  root: { page: 1, size: 20, rows: [], project: '', sizeRestored: false, colspan: 7, tbody: '#root-table tbody', search: '#tab-root-chains .search-box', storageKey: 'wf_root_page_size' },
+};
+
+// 根链线上版本映射（chain_id → version），loadRootChains 时刷新，供行渲染与搜索使用
+let _rootCurVerMap = {};
+
+// 接口数据到达后更新列表缓存并渲染当前页（删除/编辑后刷新仍停留在当前页；当前页删空时自动退回上一页）
+function setChainListRows(key, rows) {
+  const st = _chainListPagers[key];
+  if (!st.sizeRestored) {
+    st.sizeRestored = true;
+    const sel = document.getElementById(key + '-page-size');
+    let saved = '';
+    try { saved = localStorage.getItem(st.storageKey) || ''; } catch (_) {}
+    if (sel && saved && Array.prototype.some.call(sel.options, o => o.value === saved)) sel.value = saved;
+    st.size = parseInt(sel ? sel.value : '', 10) || 20;
+  }
+  const p = getProject();
+  if (st.project !== p) { st.project = p; st.page = 1; }
+  st.rows = rows || [];
+  renderChainList(key);
+}
+
+// 按搜索框关键字过滤，返回 [{ c, i }]（i 为在 rows 中的原始下标）
+function filterChainListRows(key) {
+  const st = _chainListPagers[key];
+  const el = document.querySelector(st.search);
+  const q = (el ? el.value : '').trim().toLowerCase();
+  const result = [];
+  st.rows.forEach((c, i) => {
+    if (q && !chainListSearchText(key, c).toLowerCase().includes(q)) return;
+    result.push({ c: c, i: i });
+  });
+  return result;
+}
+
+// 参与搜索的字段（对应表格中展示的文字列）
+function chainListSearchText(key, c) {
+  const fields = [c.chain_id, c.name, c.description, c.status == 1 ? '启用' : '禁用'];
+  if (key === 'root') {
+    const curVer = _rootCurVerMap[c.chain_id];
+    fields.push(c.chain_key, curVer ? 'v' + curVer : '未发布');
+    fields.push.apply(fields, c.must_input_params || []);
+  }
+  return fields.filter(Boolean).join(' ');
+}
+
+// 渲染列表当前页与分页条
+function renderChainList(key) {
+  const st = _chainListPagers[key];
+  const tbody = document.querySelector(st.tbody);
+  if (!tbody) return;
+  const all = filterChainListRows(key);
+  if (all.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="' + st.colspan + '"><div class="empty-state"><div class="icon">🔍</div><p>无匹配数据</p></div></td></tr>';
+    renderChainListPager(key, 0);
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(all.length / st.size));
+  if (st.page > totalPages) st.page = totalPages;
+  if (st.page < 1) st.page = 1;
+  const start = (st.page - 1) * st.size;
+  const rowHtml = key === 'sub' ? subChainRowHtml : rootChainRowHtml;
+  tbody.innerHTML = all.slice(start, start + st.size).map(({ c, i }) => rowHtml(c, i)).join('');
+  renderChainListPager(key, all.length);
+}
+
+// 渲染分页条：有数据即展示总数与页码；无数据时隐藏
+function renderChainListPager(key, total) {
+  const st = _chainListPagers[key];
+  const pager = document.getElementById(key + '-pager');
+  if (!pager) return;
+  if (total <= 0) {
+    pager.style.display = 'none';
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(total / st.size));
+  pager.style.display = 'flex';
+  document.getElementById(key + '-page-info').textContent =
+    '第 ' + st.page + ' / ' + totalPages + ' 页（共 ' + total + ' 条）';
+  document.getElementById(key + '-prev').disabled = st.page <= 1;
+  document.getElementById(key + '-next').disabled = st.page >= totalPages;
+}
+
+// 搜索关键字变化：结果集改变，回到第一页
+function onChainListSearch(key) {
+  _chainListPagers[key].page = 1;
+  renderChainList(key);
+}
+
+// 切换页码（基于当前搜索结果）
+function changeChainListPage(key, delta) {
+  const st = _chainListPagers[key];
+  const totalPages = Math.max(1, Math.ceil(filterChainListRows(key).length / st.size));
+  const newPage = st.page + delta;
+  if (newPage < 1 || newPage > totalPages) return;
+  st.page = newPage;
+  renderChainList(key);
+}
+
+// 每页条数变化：持久化选择并回到第一页
+function onChainListPageSizeChange(key) {
+  const st = _chainListPagers[key];
+  const sel = document.getElementById(key + '-page-size');
+  const size = parseInt(sel ? sel.value : '', 10);
+  if (!(size > 0)) return;
+  st.size = size;
+  try { localStorage.setItem(st.storageKey, String(size)); } catch (_) {}
+  st.page = 1;
+  renderChainList(key);
+}
+
+// ============================================================
 // Sub Chains
 // ============================================================
 async function loadSubChains() {
@@ -5449,14 +5568,21 @@ async function loadSubChains() {
     const chains = await api('/api/sub-chains');
     const tbody = document.querySelector('#sub-table tbody');
     if (!chains.length) {
+      _chainListPagers.sub.rows = [];
       tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="icon">🔗</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无子链数据</p></div></td></tr>';
+      renderChainListPager('sub', 0);
       return;
     }
     window._subChainsForEdit = chains; // 缓存供编辑按钮索引使用
-    tbody.innerHTML = chains.map((c, i) => {
-      let dslSize = '-';
-      try { dslSize = (c.dsl_json || '').length + ' chars'; } catch(e){}
-      return `
+    setChainListRows('sub', chains);
+  } catch (e) { showToast('加载子链失败: ' + e.message, 'error'); }
+}
+
+// 子链列表单行（i 为 _subChainsForEdit 中的原始下标）
+function subChainRowHtml(c, i) {
+  let dslSize = '-';
+  try { dslSize = (c.dsl_json || '').length + ' chars'; } catch(e){}
+  return `
       <tr>
         <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
         <td>${esc(c.name)}</td>
@@ -5470,8 +5596,6 @@ async function loadSubChains() {
           <button class="btn btn-sm btn-danger edit-only" onclick="deleteSubChain('${esc(c.chain_id)}')">删除</button>
         </td>
       </tr>`;
-    }).join('');
-  } catch (e) { showToast('加载子链失败: ' + e.message, 'error'); }
 }
 
 function openSubChainModal(chain) {
@@ -5557,58 +5681,64 @@ async function loadRootChains() {
     ]);
     const curVerMap = {};
     (currents || []).forEach(r => { curVerMap[r.chain_id] = r.version; });
+    _rootCurVerMap = curVerMap;
     const tbody = document.querySelector('#root-table tbody');
     if (!chains.length) {
+      _chainListPagers.root.rows = [];
       tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="icon">🌳</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无根链数据，通过 Execute 页面执行工作流后会自动生成</p></div></td></tr>';
+      renderChainListPager('root', 0);
       return;
     }
     window._rootChainsForEdit = chains; // 缓存供按钮索引使用
-    tbody.innerHTML = chains.map((c, i) => {
-      const curVer = curVerMap[c.chain_id];
-      // 必需入参：与 Activity 列表展示参数方式一致，用芯片展示每个 {{arguments.xxx}} 的参数名
-      // 最多显示 2 个，多余数量用 "+N" 触发泡泡窗（复用 showHbPop/moveHbPop/hideHbPop 浮层）列出全部
-      const params = c.must_input_params || [];
-      let paramsHtml;
-      if (!params.length) {
-        paramsHtml = '<span style="color:var(--text-muted);font-size:.78rem">无</span>';
-      } else {
-        const shown = params.slice(0, 2);
-        const chip = k => '<span style="font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
-        // 列表里的参数名可能是多级私有参数（如 N000002__fim5n.N000001__eka03.phone），过长时截断显示，悬停看全名，
-        // 避免撑宽「必需参数」列把名称、描述挤成竖排；泡泡窗里仍用完整芯片列出全部参数
-        const shortChip = k => '<span title="' + esc(k) + '" style="display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
-        const shownHtml = shown.map(shortChip).join('');
-        const moreHtml = params.length > 2
-          ? '<span class="param-more" style="font-family:monospace;font-size:.74rem;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;white-space:nowrap;cursor:pointer" ' +
-            'onmouseenter="showHbPop(event,this)" onmousemove="moveHbPop(event)" onmouseleave="hideHbPop()">+' + (params.length - 2) + '</span>'
-          : '';
-        const popItems = params.map(k => '<div class="hb-pop-item">' + chip(k) + '</div>').join('');
-        const popHtml = '<div class="hb-pop-title">必需入参（共 ' + params.length + ' 个）</div>' + popItems;
-        paramsHtml = '<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:4px 8px;display:flex;flex-wrap:wrap;align-items:center;gap:4px;width:max-content;max-width:240px">' +
-          shownHtml + moreHtml +
-          (moreHtml ? '<span style="display:none" data-pop="' + encodeURIComponent(popHtml) + '"></span>' : '') +
-          '</div>';
-      }
-      return `
-      <tr>
-        <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
-        <td class="code-cell" title="${esc(c.chain_key||'')}">${esc(c.chain_key||'')}</td>
-        <td style="min-width:7em" title="${esc(c.description||'')}">${esc(c.name)}</td>
-        <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
-        <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
-        <td>${paramsHtml}</td>
-        <td><div class="actions">
-          <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
-          <button class="btn btn-sm btn-primary edit-only" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
-          <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
-          <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
-          <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
-          <button class="btn btn-sm btn-outline edit-only" onclick="copyRootChain('${esc(c.chain_id)}')">复制</button>
-          ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>`}
-        </div></td>
-      </tr>`;
-    }).join('');
+    setChainListRows('root', chains);
   } catch (e) { showToast('加载根链失败: ' + e.message, 'error'); }
+}
+
+// 根链列表单行（i 为 _rootChainsForEdit 中的原始下标）
+function rootChainRowHtml(c, i) {
+  const curVer = _rootCurVerMap[c.chain_id];
+  // 必需入参：与 Activity 列表展示参数方式一致，用芯片展示每个 {{arguments.xxx}} 的参数名
+  // 最多显示 2 个，多余数量用 "+N" 触发泡泡窗（复用 showHbPop/moveHbPop/hideHbPop 浮层）列出全部
+  const params = c.must_input_params || [];
+  let paramsHtml;
+  if (!params.length) {
+    paramsHtml = '<span style="color:var(--text-muted);font-size:.78rem">无</span>';
+  } else {
+    const shown = params.slice(0, 2);
+    const chip = k => '<span style="font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
+    // 列表里的参数名可能是多级私有参数（如 N000002__fim5n.N000001__eka03.phone），过长时截断显示，悬停看全名，
+    // 避免撑宽「必需参数」列把名称、描述挤成竖排；泡泡窗里仍用完整芯片列出全部参数
+    const shortChip = k => '<span title="' + esc(k) + '" style="display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;font-family:monospace;font-size:.74rem;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;white-space:nowrap">' + esc(k) + '</span>';
+    const shownHtml = shown.map(shortChip).join('');
+    const moreHtml = params.length > 2
+      ? '<span class="param-more" style="font-family:monospace;font-size:.74rem;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;white-space:nowrap;cursor:pointer" ' +
+        'onmouseenter="showHbPop(event,this)" onmousemove="moveHbPop(event)" onmouseleave="hideHbPop()">+' + (params.length - 2) + '</span>'
+      : '';
+    const popItems = params.map(k => '<div class="hb-pop-item">' + chip(k) + '</div>').join('');
+    const popHtml = '<div class="hb-pop-title">必需入参（共 ' + params.length + ' 个）</div>' + popItems;
+    paramsHtml = '<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:4px 8px;display:flex;flex-wrap:wrap;align-items:center;gap:4px;width:max-content;max-width:240px">' +
+      shownHtml + moreHtml +
+      (moreHtml ? '<span style="display:none" data-pop="' + encodeURIComponent(popHtml) + '"></span>' : '') +
+      '</div>';
+  }
+  return `
+  <tr>
+    <td class="code-cell" title="${esc(c.chain_id)}">${esc(c.chain_id)}</td>
+    <td class="code-cell" title="${esc(c.chain_key||'')}">${esc(c.chain_key||'')}</td>
+    <td style="min-width:7em" title="${esc(c.description||'')}">${esc(c.name)}</td>
+    <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
+    <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
+    <td>${paramsHtml}</td>
+    <td><div class="actions">
+      <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
+      <button class="btn btn-sm btn-primary edit-only" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
+      <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
+      <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
+      <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
+      <button class="btn btn-sm btn-outline edit-only" onclick="copyRootChain('${esc(c.chain_id)}')">复制</button>
+      ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>`}
+    </div></td>
+  </tr>`;
 }
 
 // 复制根链：新建一条内容与该链当前草稿一致的根链（名称加「-副本」，不复制发布记录）
