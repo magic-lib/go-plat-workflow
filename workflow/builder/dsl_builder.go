@@ -575,6 +575,26 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			privateKeys = keptKeys
 		}
 
+		// 循环节点：循环配置（模式、数据来源、循环体等，JSON 对象）以保留 key 存在参数覆盖里，移到 configuration.loop，
+		// 不作为入参；其余覆盖参数是循环体为根链时传给目标根链的入参映射。
+		if node.Type == common.LoopNodeTypeName {
+			if raw, ok := frontendMap[common.LoopConfigKey]; ok {
+				if loopCfg := parseLoopConfigOverride(raw); loopCfg != nil {
+					config[common.LoopConfigField] = loopCfg
+				}
+			}
+			delete(frontendMap, common.LoopConfigKey)
+			delete(frontendSrc, common.LoopConfigKey)
+			delete(frontendType, common.LoopConfigKey)
+			keptKeys := privateKeys[:0]
+			for _, k := range privateKeys {
+				if k != common.LoopConfigKey {
+					keptKeys = append(keptKeys, k)
+				}
+			}
+			privateKeys = keptKeys
+		}
+
 		// 编排参数来源对应的 DSL policy（不改节点参数定义本身，仅在此处改写 DSL）：
 		//  - ref_node（调用传入）：调用方本身就是来源，保留节点定义默认 policy（调用方优先）
 		//  - ref_act（引用前序）：已配置来源 → 强制后台 PolicyBackendOnly，调用方同名不可覆盖
@@ -841,6 +861,27 @@ func parseParamInputDefs(raw any) []*workflow.ParamInputDef {
 		}
 		seen[d.Key] = true
 		out = append(out, d)
+	}
+	return out
+}
+
+// parseLoopConfigOverride 解析编排时保存的循环配置：可以是 JSON 字符串或对象，解析失败返回 nil。
+func parseLoopConfigOverride(raw any) map[string]any {
+	var b []byte
+	switch v := raw.(type) {
+	case string:
+		b = []byte(strings.TrimSpace(v))
+	case map[string]any:
+		return v
+	default:
+		b, _ = json.Marshal(v)
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	out := make(map[string]any)
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil
 	}
 	return out
 }

@@ -1101,6 +1101,7 @@ const NODE_KIND_META = {
   return:    { label: '返回值',   cls: 'badge-return' },
   call:      { label: '调用根链', cls: 'badge-call' },
   input:     { label: '参数输入', cls: 'badge-input' },
+  loop:      { label: '循环',     cls: 'badge-loop' },
 };
 function nodeKindMeta(kind) {
   const k = NODE_KIND_META[kind] ? kind : 'action';
@@ -1112,6 +1113,7 @@ const NODE_TYPE_FIXED_KIND = {
   'custom/ReturnValue': 'return',
   'custom/RootChainCall': 'call',
   'custom/ParamInput': 'input',
+  'custom/Loop': 'loop',
 };
 
 // 按节点类型同步「节点大类」：内置类型锁定为对应大类；普通类型若当前是内置大类则回到「策略执行」
@@ -6374,8 +6376,8 @@ function renderOrchNodeListPage() {
     return;
   }
   container.innerHTML = pageItems.map(n => {
-    const kindClass = n.kind === 'condition' ? 'badge-warning' : (n.kind === 'return' ? 'badge-return' : (n.kind === 'call' ? 'badge-call' : (n.kind === 'input' ? 'badge-input' : 'badge-info')));
-    const kindLabel = n.kind === 'condition' ? '查询' : (n.kind === 'return' ? '返回值' : (n.kind === 'call' ? '调用根链' : (n.kind === 'input' ? '参数输入' : '执行')));
+    const kindClass = n.kind === 'condition' ? 'badge-warning' : (n.kind === 'return' ? 'badge-return' : (n.kind === 'call' ? 'badge-call' : (n.kind === 'input' ? 'badge-input' : (n.kind === 'loop' ? 'badge-loop' : 'badge-info'))));
+    const kindLabel = n.kind === 'condition' ? '查询' : (n.kind === 'return' ? '返回值' : (n.kind === 'call' ? '调用根链' : (n.kind === 'input' ? '参数输入' : (n.kind === 'loop' ? '循环' : '执行'))));
     let outputsJson = '[]';
     try { outputsJson = JSON.stringify(n.outputs || []); } catch(e) {}
     const outCount = (function(){
@@ -6428,6 +6430,24 @@ function addOrchNodeInstance(nodeId) {
   // 调用根链节点：先选择目标根链，选定后再创建实例（见 confirmOrchCallChainPicker）
   if (nodeType === ORCH_CALL_NODE_TYPE && !orchCallDefTarget(nodeId)) {
     openOrchCallChainPicker({ nodeId: nodeId });
+    return;
+  }
+  // 循环节点：先创建实例（默认配置），再弹框配置循环模式与循环体
+  if (nodeType === ORCH_LOOP_NODE_TYPE) {
+    const loopInstId = genOrchInstanceId(nodeId);
+    window._orchNodeInstances.push({
+      instanceId: loopInstId,
+      nodeId: nodeId,
+      name: n ? (n.name || n.node_id) : nodeId,
+      type: nodeType,
+      kind: n ? (n.kind || 'loop') : 'loop',
+      outputs: [],
+    });
+    _orchParamPreset[loopInstId] = {};
+    setOrchLoopConfig(loopInstId, getOrchLoopConfig(loopInstId));
+    renderOrchNodeSelected();
+    onOrchSelectionChange();
+    openOrchLoopEditor(loopInstId);
     return;
   }
   // 参数输入节点：先创建实例（参数列表为空），再弹框定义参数
@@ -6595,7 +6615,7 @@ function renderOrchNodeSelected() {
           : `<button class="btn btn-sm btn-danger" type="button" onclick="removeOrchNodeInstance('${esc(i.instanceId)}')">删除</button>`;
         return `<tr title="${esc(i.instanceId)}">
           <td>${idx + 1}</td>
-          <td>${nodeRouteBadge(def)}${esc(i.name)}${isOrchCallInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ 调用根链：${esc(getOrchCallTargetLabel(i.instanceId) || '未选择')} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchCallChainPicker({ instanceId: '${esc(i.instanceId)}' })">更换根链</button></div>` : (i.type === ORCH_CALL_NODE_TYPE ? `<div style="font-size:.75rem;color:var(--text-muted)">→ 调用根链：${esc(orchCallTargetText(i))}</div>` : '')}${isOrchInputInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ ${esc(orchInputDefsSummary(i.instanceId))} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchInputParamEditor('${esc(i.instanceId)}')">编辑参数</button></div>` : ''}</td>
+          <td>${nodeRouteBadge(def)}${esc(i.name)}${isOrchCallInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ 调用根链：${esc(getOrchCallTargetLabel(i.instanceId) || '未选择')} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchCallChainPicker({ instanceId: '${esc(i.instanceId)}' })">更换根链</button></div>` : (i.type === ORCH_CALL_NODE_TYPE ? `<div style="font-size:.75rem;color:var(--text-muted)">→ 调用根链：${esc(orchCallTargetText(i))}</div>` : '')}${isOrchInputInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ ${esc(orchInputDefsSummary(i.instanceId))} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchInputParamEditor('${esc(i.instanceId)}')">编辑参数</button></div>` : ''}${isOrchLoopInst(i) ? `<div style="font-size:.75rem;color:var(--text-muted)">→ ${esc(orchLoopSummary(i.instanceId))} <button class="btn btn-sm btn-outline edit-only" type="button" onclick="openOrchLoopEditor('${esc(i.instanceId)}')">编辑循环</button></div>` : ''}</td>
           <td class="code-cell">${esc(i.nodeId)}</td>
           <td class="code-cell">${esc(i.instanceId)}</td>
           <td style="text-align:right">${delCell}</td>
@@ -7123,7 +7143,8 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     const idLine = `<small>NodeId: ${esc(baseId)}</small>`;
     const instLine = inst && inst.instanceId !== baseId ? `<small>Id: ${esc(inst.instanceId)}</small>` : '';
     const callLine = (inst && inst.type === ORCH_CALL_NODE_TYPE) ? `<small>→ 调用根链: ${esc(orchCallTargetText(inst))}</small>`
-      : (isOrchInputInst(inst) ? `<small>→ ${esc(orchInputDefsSummary(inst.instanceId))}</small>` : '');
+      : (isOrchInputInst(inst) ? `<small>→ ${esc(orchInputDefsSummary(inst.instanceId))}</small>`
+        : (isOrchLoopInst(inst) ? `<small>→ ${esc(orchLoopSummary(inst.instanceId))}</small>` : ''));
     // 该实例生效的 switch_condition（覆盖值优先，其次节点默认；仅 Activity / CondSwitch 有意义）直接显示在节点内：
     // 用醒目配色标识，最多两行、超出省略（样式见 .orch-sw-cond），取代原来的悬停泡泡层（会引起布局抖动）
     let swLine = '';
@@ -7188,6 +7209,7 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     return:    { fill: '#fef9c3', stroke: '#ca8a04', color: '#713f12' }, // 返回值节点=浅黄（区别于其它节点）
     call:      { fill: '#e0f2fe', stroke: '#0891b2', color: '#164e63' }, // 调用根链节点=浅青
     input:     { fill: '#f3e8ff', stroke: '#9333ea', color: '#581c87' }, // 参数输入节点=浅紫
+    loop:      { fill: '#ffedd5', stroke: '#ea580c', color: '#7c2d12' }, // 循环节点=浅橙
   };
   const kindFallback = { fill: '#f3f4f6', stroke: '#9ca3af', color: '#374151' }; // 未知 kind 默认灰
   const routeFill = { fill: '#dbeafe', stroke: '#2563eb', color: '#1e3a8a' }; // 路由=淡蓝
@@ -7381,6 +7403,7 @@ function getOrchInstanceParams(inst) {
   if (!inst) return [];
   if (isOrchCallInst(inst)) return getOrchCallParams(inst);
   if (isOrchInputInst(inst)) return getOrchInputParams(inst.instanceId);
+  if (isOrchLoopInst(inst)) return getOrchLoopParams(inst);
   if (inst.type === 'custom/ReturnValue') {
     return (_orchRootResponses || [])
       .filter(rr => (rr.key || '').trim())
@@ -7826,6 +7849,11 @@ function getOrchRefNodeCandidates(excludeId) {
       cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: ps, outputs: ps.map(p => ({ key: p.key, label: p.label, type: p.type })) });
       return;
     }
+    if (isOrchLoopInst(inst)) {
+      // 循环节点：返回值为汇总结果（items / count 等）
+      cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: getOrchLoopParams(inst), outputs: ORCH_LOOP_OUTPUTS.slice() });
+      return;
+    }
     cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: parseNodeParams(def), outputs: parseNodeOutputs(def) });
   });
   // 已选子链（按 chain_id 排除自身，且必须在祖先集合内）
@@ -8191,7 +8219,7 @@ function collectOrchParamOverrides() {
           let bareKey = lastDot >= 0 ? path.slice(lastDot + 1) : path;
           // 调用根链节点：参数名是目标根链的入参名，本身可能带 "."（目标根链的私有参数），只去掉本节点 id 前缀
           const callInst = (window._orchNodeInstances || []).find(i => i.instanceId === nodeId);
-          if (callInst && callInst.type === ORCH_CALL_NODE_TYPE) {
+          if (callInst && (callInst.type === ORCH_CALL_NODE_TYPE || callInst.type === ORCH_LOOP_NODE_TYPE)) {
             bareKey = path;
             while (bareKey.startsWith(nodeId + '.')) bareKey = bareKey.slice(nodeId.length + 1);
           }
@@ -10860,4 +10888,293 @@ async function loadNodeChainCallSignature(chainId) {
   if (hint) hint.textContent = '已按 ' + (sig.name || chainId) + ' v' + sig.version + ' 加载 ' + (sig.arguments || []).length +
     ' 个参数、' + (sig.responses || []).length + ' 个返回值；目标根链重新发布后可点「重新加载参数」同步。';
   showToast('已加载根链 ' + chainId + ' 的参数与返回值定义', 'success');
+}
+
+// ============================================================
+// 循环节点（custom/Loop）
+// ============================================================
+// 每个实例的循环配置（模式、数据来源、循环体等）以 JSON 字符串存在 _orchParamPreset[instanceId][ORCH_LOOP_CONFIG_KEY]，
+// 随 node_param_overrides 保存，后端组装 DSL 时移到 configuration.loop。
+// 循环体为根链时，其余参数是传给目标根链的入参映射（参数取目标根链当前发布版本的入参），
+// 可引用循环变量 {{arguments._loop.item}} / {{arguments._loop.index}} / {{arguments._loop.last}}。
+const ORCH_LOOP_NODE_TYPE = 'custom/Loop';
+const ORCH_LOOP_CONFIG_KEY = '__loop_config';
+const ORCH_LOOP_MODES = { foreach: '遍历数组', count: '固定次数', while: '条件循环' };
+const ORCH_LOOP_OUTPUTS = [
+  { key: 'items', label: '每轮结果（数组）', type: 'slice' },
+  { key: 'count', label: '执行轮数', type: 'int64' },
+  { key: 'success', label: '成功轮数', type: 'int64' },
+  { key: 'failed', label: '失败轮数', type: 'int64' },
+  { key: 'errors', label: '失败明细', type: 'slice' },
+  { key: 'break_index', label: '跳出轮次（-1 表示未跳出）', type: 'int64' },
+];
+
+function isOrchLoopInst(inst) {
+  return !!(inst && inst.type === ORCH_LOOP_NODE_TYPE);
+}
+
+// 取实例的循环配置（带默认值）
+function getOrchLoopConfig(instanceId) {
+  const def = { mode: 'foreach', range: '', count: '', condition: '', break_condition: '', body_type: 'subchain', body_id: '',
+    max_iterations: 100, concurrency: 1, interval_ms: 0, fail_policy: 'stop' };
+  const p = _orchParamPreset[instanceId] && _orchParamPreset[instanceId][ORCH_LOOP_CONFIG_KEY];
+  if (!p || !p.value) return def;
+  try {
+    const cfg = typeof p.value === 'string' ? JSON.parse(p.value) : p.value;
+    return Object.assign(def, cfg || {});
+  } catch (e) {
+    return def;
+  }
+}
+
+function setOrchLoopConfig(instanceId, cfg) {
+  if (!_orchParamPreset[instanceId]) _orchParamPreset[instanceId] = {};
+  _orchParamPreset[instanceId][ORCH_LOOP_CONFIG_KEY] = { src: PARAM_SRC_FIXED, value: JSON.stringify(cfg) };
+}
+
+// 循环节点的参数：循环体为根链时为目标根链所需的入参，循环体为子链时没有参数（子链直接共享执行上下文）
+function getOrchLoopParams(inst) {
+  const cfg = getOrchLoopConfig(inst.instanceId);
+  if (cfg.body_type !== 'rootchain' || !cfg.body_id) return [];
+  const sig = getOrchCallSig(cfg.body_id);
+  if (!sig) return [];
+  return (sig.arguments || []).filter(Boolean).map(k => ({ key: k, label: k, type: 'string', required: true }));
+}
+
+// 循环体显示名
+function orchLoopBodyLabel(cfg) {
+  if (!cfg.body_id) return '未选择';
+  if (cfg.body_type === 'rootchain') {
+    const c = _orchCallSigCache[cfg.body_id];
+    return '根链 ' + ((c && c.sig && c.sig.name) ? (c.sig.name + '（' + cfg.body_id + '）') : cfg.body_id);
+  }
+  const s = (_orchSubChains || []).find(x => x.chain_id === cfg.body_id);
+  return '子链 ' + (s ? ((s.name || s.chain_id) + '（' + cfg.body_id + '）') : cfg.body_id);
+}
+
+// 已选列表 / 预览图上展示的循环摘要
+function orchLoopSummary(instanceId) {
+  const cfg = getOrchLoopConfig(instanceId);
+  const parts = [ORCH_LOOP_MODES[cfg.mode] || cfg.mode];
+  if (cfg.mode === 'count' && cfg.count) parts[0] += ' ' + cfg.count + ' 次';
+  if (Number(cfg.concurrency) > 1) parts.push('并发 ' + cfg.concurrency);
+  parts.push('循环体：' + orchLoopBodyLabel(cfg));
+  return '循环：' + parts.join(' · ');
+}
+
+let _orchLoopEditInstId = '';
+
+// 打开循环配置框（添加循环节点时自动打开，也可从已选列表的「编辑循环」打开）
+async function openOrchLoopEditor(instanceId) {
+  _orchLoopEditInstId = instanceId;
+  let overlay = document.getElementById('orch-loop-modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'orch-loop-modal-overlay';
+    const row = 'display:flex;gap:10px;flex-wrap:wrap';
+    const col = 'flex:1 1 200px;min-width:0';
+    overlay.innerHTML = `<div class="modal" style="width:720px;max-width:96vw">
+      <h2>循环配置<button class="modal-close" onclick="closeOrchLoopEditor()" title="关闭">&times;</button></h2>
+      <div style="max-height:70vh;overflow-y:auto">
+      <div style="${row}">
+        <div class="form-group" style="${col}">
+          <label>循环模式</label>
+          <select id="orch-loop-mode" onchange="refreshOrchLoopEditorFields()">
+            <option value="foreach">遍历数组：每个元素执行一次</option>
+            <option value="count">固定次数</option>
+            <option value="while">条件循环：满足条件就继续</option>
+          </select>
+        </div>
+        <div class="form-group" style="${col}">
+          <label>循环体类型</label>
+          <select id="orch-loop-body-type" onchange="renderOrchLoopBodyOptions()">
+            <option value="subchain">子链（共享执行上下文，执行草稿）</option>
+            <option value="rootchain">根链（按入参调用，执行当前发布版本）</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group" id="orch-loop-range-wrap">
+        <label>数据来源</label>
+        <input type="text" id="orch-loop-range" list="orch-loop-ref-list" placeholder="如 {{steps.N000001__abcde.responses.list}}，也可直接写 JSON 数组" style="font-family:monospace">
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">取上游节点返回的数组（或对象，按键遍历），可从下拉提示中选择。</div>
+      </div>
+      <div class="form-group" id="orch-loop-count-wrap">
+        <label>循环次数</label>
+        <input type="text" id="orch-loop-count" list="orch-loop-ref-list" placeholder="如 3，或 {{steps.N000001__abcde.responses.total}}" style="font-family:monospace">
+      </div>
+      <div class="form-group" id="orch-loop-cond-wrap">
+        <label>继续条件（每轮执行前判断，为 true 才执行）</label>
+        <input type="text" id="orch-loop-condition" placeholder='如 [arguments._loop.index] == 0 || [arguments._loop.last.status] != "done"' style="font-family:monospace">
+      </div>
+      <div class="form-group">
+        <label>跳出条件（选填，每轮执行后判断，为 true 即结束循环）</label>
+        <input type="text" id="orch-loop-break" placeholder='如 [arguments._loop.last.ok] == true' style="font-family:monospace">
+      </div>
+      <datalist id="orch-loop-ref-list"></datalist>
+      <div class="form-group">
+        <label>循环体</label>
+        <input type="text" id="orch-loop-body-search" placeholder="按名称 / ID 过滤" oninput="renderOrchLoopBodyOptions()" style="margin-bottom:6px">
+        <select id="orch-loop-body" size="6" style="width:100%"></select>
+        <div id="orch-loop-body-tip" style="font-size:.75rem;color:var(--text-muted);margin-top:4px"></div>
+      </div>
+      <div style="${row}">
+        <div class="form-group" style="flex:1 1 120px"><label>最大循环次数</label><input type="number" id="orch-loop-max" min="1" max="1000"></div>
+        <div class="form-group" style="flex:1 1 120px"><label>并发数</label><input type="number" id="orch-loop-concurrency" min="1" max="20"></div>
+        <div class="form-group" style="flex:1 1 120px"><label>每轮间隔（毫秒）</label><input type="number" id="orch-loop-interval" min="0" max="60000"></div>
+        <div class="form-group" style="flex:1 1 160px">
+          <label>失败策略</label>
+          <select id="orch-loop-fail">
+            <option value="stop">任一轮失败就停止（走 Failure）</option>
+            <option value="continue">跳过失败的轮次继续（走 Success）</option>
+          </select>
+        </div>
+      </div>
+      <div style="font-size:.75rem;color:var(--text-muted);line-height:1.6">
+        循环变量：<code>{{arguments._loop.item}}</code> 当前元素、<code>{{arguments._loop.index}}</code> 轮次（从 0 开始）、
+        <code>{{arguments._loop.key}}</code> 遍历对象时的键、<code>{{arguments._loop.last}}</code> 上一轮结果。
+        循环体为子链时，在子链节点参数里用「固定配置」引用这些变量；为根链时，在本节点的参数配置里把它们映射到目标根链的入参。
+        条件表达式里的字段路径要用方括号括起来，如 <code>[arguments._loop.index] &lt; 3</code>。
+        条件循环、配置了跳出条件时只能串行执行。下游节点可引用本节点的 items / count / success / failed / errors / break_index。
+      </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeOrchLoopEditor()">取消</button>
+        <button class="btn btn-primary" onclick="confirmOrchLoopEditor()">确定</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  }
+  const cfg = getOrchLoopConfig(instanceId);
+  document.getElementById('orch-loop-mode').value = cfg.mode || 'foreach';
+  document.getElementById('orch-loop-body-type').value = cfg.body_type || 'subchain';
+  document.getElementById('orch-loop-range').value = cfg.range || '';
+  document.getElementById('orch-loop-count').value = cfg.count || '';
+  document.getElementById('orch-loop-condition').value = cfg.condition || '';
+  document.getElementById('orch-loop-break').value = cfg.break_condition || '';
+  document.getElementById('orch-loop-max').value = cfg.max_iterations || 100;
+  document.getElementById('orch-loop-concurrency').value = cfg.concurrency || 1;
+  document.getElementById('orch-loop-interval').value = cfg.interval_ms || 0;
+  document.getElementById('orch-loop-fail').value = cfg.fail_policy || 'stop';
+  document.getElementById('orch-loop-body-search').value = '';
+  window._orchLoopBodyCur = cfg.body_id || '';
+  // 数据来源 / 次数的下拉提示：上游节点的返回值与参数
+  const refs = [];
+  (getOrchRefNodeCandidates(instanceId) || []).forEach(c => {
+    (c.outputs || []).forEach(o => o && o.key && refs.push({ v: '{{steps.' + c.id + '.responses.' + o.key + '}}', l: (c.name || c.id) + ' 返回值 ' + (o.label || o.key) }));
+    (c.params || []).forEach(p => p && p.key && refs.push({ v: '{{steps.' + c.id + '.arguments.' + p.key + '}}', l: (c.name || c.id) + ' 参数 ' + (p.label || p.key) }));
+  });
+  document.getElementById('orch-loop-ref-list').innerHTML = refs.map(r => `<option value="${esc(r.v)}">${esc(r.l)}</option>`).join('');
+  refreshOrchLoopEditorFields();
+  overlay.classList.add('show');
+  // 根链列表：只列出已发布、启用的根链，排除当前正在编辑的根链
+  if (!window._orchLoopRootList) {
+    try {
+      const list = await api('/api/root-chains');
+      window._orchLoopRootList = list || [];
+    } catch (e) {
+      window._orchLoopRootList = [];
+      showToast('加载根链列表失败：' + (e.message || e), 'error');
+    }
+  }
+  renderOrchLoopBodyOptions();
+}
+
+// 按循环模式显示对应的输入项
+function refreshOrchLoopEditorFields() {
+  const mode = (document.getElementById('orch-loop-mode') || {}).value || 'foreach';
+  document.getElementById('orch-loop-range-wrap').style.display = mode === 'foreach' ? 'block' : 'none';
+  document.getElementById('orch-loop-count-wrap').style.display = mode === 'count' ? 'block' : 'none';
+  document.getElementById('orch-loop-cond-wrap').style.display = mode === 'while' ? 'block' : 'none';
+}
+
+// 渲染循环体候选：子链取已启用的子链，根链取已发布的根链；都排除当前正在编辑的链
+function renderOrchLoopBodyOptions() {
+  const sel = document.getElementById('orch-loop-body');
+  if (!sel) return;
+  if (sel.value) window._orchLoopBodyCur = sel.value;
+  const bodyType = document.getElementById('orch-loop-body-type').value;
+  const q = (document.getElementById('orch-loop-body-search').value || '').trim().toLowerCase();
+  const selfId = ((document.getElementById('orch-chain-id') || {}).value || '').trim();
+  let list;
+  if (bodyType === 'rootchain') {
+    list = (window._orchLoopRootList || []).filter(c => c && c.has_releases && c.status !== 0 && c.chain_id !== selfId);
+    document.getElementById('orch-loop-body-tip').textContent = '只列出已发布的根链；每轮调用目标根链的当前发布版本，取其返回值作为本轮结果。';
+  } else {
+    list = (_orchSubChains || []).filter(s => s && s.chain_id !== selfId);
+    document.getElementById('orch-loop-body-tip').textContent = '每轮把当前执行上下文交给子链执行，取子链的返回值（或结束节点的返回值）作为本轮结果；子链只支持单出口。';
+  }
+  const items = list.filter(c => !q || String(c.name || '').toLowerCase().includes(q) || String(c.chain_id || '').toLowerCase().includes(q));
+  const cur = window._orchLoopBodyCur || '';
+  if (!items.length) {
+    sel.innerHTML = `<option value="">— 没有可选的${bodyType === 'rootchain' ? '已发布根链' : '子链'} —</option>`;
+    return;
+  }
+  sel.innerHTML = items.map(c =>
+    `<option value="${esc(c.chain_id)}"${c.chain_id === cur ? ' selected' : ''}>${esc(c.name || c.chain_id)}（${esc(c.chain_id)}）</option>`).join('');
+}
+
+function closeOrchLoopEditor() {
+  const overlay = document.getElementById('orch-loop-modal-overlay');
+  if (overlay) overlay.classList.remove('show');
+  _orchLoopEditInstId = '';
+}
+
+// 读取并校验循环配置（与后端 LoopConfig.normalize 一致）；不通过时提示并返回 null
+function collectOrchLoopEditor() {
+  const v = id => (document.getElementById(id).value || '').trim();
+  const cfg = {
+    mode: v('orch-loop-mode') || 'foreach',
+    range: v('orch-loop-range'),
+    count: v('orch-loop-count'),
+    condition: v('orch-loop-condition'),
+    break_condition: v('orch-loop-break'),
+    body_type: v('orch-loop-body-type') || 'subchain',
+    body_id: v('orch-loop-body'),
+    max_iterations: parseInt(v('orch-loop-max'), 10) || 100,
+    concurrency: parseInt(v('orch-loop-concurrency'), 10) || 1,
+    interval_ms: parseInt(v('orch-loop-interval'), 10) || 0,
+    fail_policy: v('orch-loop-fail') || 'stop',
+  };
+  // 只保留当前模式用到的字段，避免切换模式后残留旧配置
+  if (cfg.mode !== 'foreach') cfg.range = '';
+  if (cfg.mode !== 'count') cfg.count = '';
+  if (cfg.mode !== 'while') cfg.condition = '';
+  const err = msg => { showToast(msg, 'error'); return null; };
+  if (cfg.mode === 'foreach' && !cfg.range) return err('请填写数据来源');
+  if (cfg.mode === 'count' && !cfg.count) return err('请填写循环次数');
+  if (cfg.mode === 'while' && !cfg.condition) return err('请填写继续条件');
+  if (!cfg.body_id) return err('请选择循环体');
+  if (cfg.max_iterations < 1 || cfg.max_iterations > 1000) return err('最大循环次数需在 1~1000 之间');
+  if (cfg.concurrency < 1 || cfg.concurrency > 20) return err('并发数需在 1~20 之间');
+  if (cfg.concurrency > 1 && cfg.mode === 'while') return err('条件循环只能串行执行（并发数为 1）');
+  if (cfg.concurrency > 1 && cfg.break_condition) return err('配置了跳出条件时只能串行执行（并发数为 1）');
+  if (cfg.interval_ms < 0 || cfg.interval_ms > 60000) return err('每轮间隔需在 0~60000 毫秒之间');
+  return cfg;
+}
+
+// 「循环配置」弹框确定：循环体为根链时按目标根链入参重置参数（保留同名参数已配置的来源），为子链时清掉参数
+async function confirmOrchLoopEditor() {
+  const instanceId = _orchLoopEditInstId;
+  if (!instanceId) { closeOrchLoopEditor(); return; }
+  const cfg = collectOrchLoopEditor();
+  if (!cfg) return;
+  let sig = null;
+  if (cfg.body_type === 'rootchain') {
+    sig = await fetchOrchCallSig(cfg.body_id);
+    if (!sig) return;
+  }
+  storeParamPreset(); // 先把参数配置区当前的编辑结果写回暂存
+  const oldPreset = _orchParamPreset[instanceId] || {};
+  const preset = {};
+  if (sig) {
+    (sig.arguments || []).filter(Boolean).forEach(k => {
+      preset[k] = oldPreset[k] || { src: PARAM_SRC_FIXED, value: '', type: 'string' };
+    });
+  }
+  _orchParamPreset[instanceId] = preset;
+  setOrchLoopConfig(instanceId, cfg);
+  closeOrchLoopEditor();
+  renderOrchNodeSelected();
+  onOrchSelectionChange();
 }
