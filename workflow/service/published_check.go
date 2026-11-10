@@ -11,6 +11,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/magic-lib/go-plat-workflow/workflow/engine"
+	"github.com/magic-lib/go-plat-workflow/workflow/rulegox/components/commnode"
 )
 
 // ============================================================
@@ -385,6 +386,10 @@ func parseReleasedDSL(dslJSON string) (nodes map[string]struct{}, activities map
 			if sid := flowSubChainID(n.Configuration); sid != "" {
 				subChainIDs = append(subChainIDs, sid)
 			}
+		case common.LoopNodeTypeName:
+			if sid := loopSubChainID(n.Configuration); sid != "" {
+				subChainIDs = append(subChainIDs, sid)
+			}
 		}
 	}
 	return nodes, activities, subChainIDs, true
@@ -414,6 +419,21 @@ func flowSubChainID(raw json.RawMessage) string {
 		return cfg.RuleChainID
 	}
 	return id
+}
+
+// loopSubChainID 循环体为子链时，从循环节点配置中取出子链 ID。
+func loopSubChainID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	cfg := make(types.Configuration)
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return ""
+	}
+	if bodyType, bodyID := commnode.LoopBodyRef(cfg); bodyType == common.LoopBodySubChain {
+		return bodyID
+	}
+	return ""
 }
 
 // collectActivityRefs 从 custom/Activity 节点配置中收集 activity 引用（namespace+name）。

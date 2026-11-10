@@ -497,6 +497,31 @@ func (s *WorkflowService) ensureBuiltinParamInputNode(ctx context.Context, proje
 	return s.nodeRepo.Create(ctx, def)
 }
 
+// ensureBuiltinLoopNode 幂等确保项目下存在内置「循环节点」（custom/Loop）定义，
+// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由 NextNodeID 生成。
+func (s *WorkflowService) ensureBuiltinLoopNode(ctx context.Context, project string) error {
+	exists, err := s.nodeRepo.ExistsByType(ctx, project, common.LoopNodeTypeName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	nodeID, err := s.nodeRepo.NextNodeID(ctx)
+	if err != nil {
+		return err
+	}
+	def := &workflow.NodeDef{
+		Project: project,
+		NodeID:  nodeID,
+		Name:    "循环节点",
+		Type:    common.LoopNodeTypeName,
+		Kind:    "loop",
+		Status:  models.NodeStatusEnabled,
+	}
+	return s.nodeRepo.Create(ctx, def)
+}
+
 // BatchRegisterNodes 批量注册节点（upsert：project+node_id 冲突则更新，否则插入）。
 func (s *WorkflowService) BatchRegisterNodes(ctx context.Context, defs []*workflow.NodeDef) error {
 	return s.nodeRepo.BatchUpsert(ctx, defs)
@@ -528,6 +553,9 @@ func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag
 	}
 	if err := s.ensureBuiltinParamInputNode(ctx, project); err != nil {
 		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin param input node failed")
+	}
+	if err := s.ensureBuiltinLoopNode(ctx, project); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin loop node failed")
 	}
 	all, err := s.nodeRepo.List(ctx, project, namespace, onlyEnabled)
 	if err != nil {
@@ -2052,6 +2080,11 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 	// 2. 校验必传参数（frontend / frontend+ 策略）
 	if err := validateRequiredParams(nodeDef, req.InputParams); err != nil {
 		return nil, err
+	}
+
+	// 循环节点的循环体、数据来源都在编排时配置，单独测试没有意义
+	if nodeDef.Type == common.LoopNodeTypeName {
+		return nil, fmt.Errorf("循环节点不支持单独测试，请在根链编排中执行测试")
 	}
 
 	// 调用根链节点：不走 MQ worker，直接把测试参数传给目标根链当前发布版本执行，并记录节点日志

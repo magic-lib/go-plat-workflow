@@ -64,6 +64,10 @@ func collectInputArguments(nodes []*types.RuleNode, onlyRequired bool) []string 
 			return
 		}
 		for _, k := range ExtractArgumentKeys(s) {
+			// 循环变量 {{arguments._loop.xxx}} 由循环节点每轮写入，不是调用方入参
+			if k == common.LoopVarKey || strings.HasPrefix(k, common.LoopVarKey+".") {
+				continue
+			}
 			if !seen[k] {
 				seen[k] = true
 				keys = append(keys, k)

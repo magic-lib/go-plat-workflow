@@ -95,6 +95,7 @@ input[readonly] { background: #f3f4f6; color: #6b7280; cursor: not-allowed; }
 .badge-call { background: #e0f2fe; color: #155e75; }
 .badge-stable { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
 .badge-input { background: #f3e8ff; color: #6b21a8; }
+.badge-loop { background: #ffedd5; color: #9a3412; }
 /* 已发布到根链（生产快照引用）的 node / activity 锁定标记 */
 .published-lock {
   display: inline-block;

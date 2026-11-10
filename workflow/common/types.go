@@ -22,6 +22,20 @@ const (
 	ParamInputDefsKey = "__input_params"
 	// ParamInputConfigKey 参数输入节点 DSL configuration 中参数定义的字段名。
 	ParamInputConfigKey = "input_params"
+	// LoopNodeTypeName 循环节点类型标识：按遍历数组 / 固定次数 / 条件三种模式重复执行循环体，
+	// 循环体可以是一条子链（共享执行上下文）或一条已发布的根链（按入参映射调用）。
+	LoopNodeTypeName = "custom/Loop"
+	// LoopConfigKey 编排时循环配置（JSON 对象）在 node_param_overrides 中的保留 key，
+	// 组装 DSL 时移到节点 configuration 的 LoopConfigField，不作为入参。
+	LoopConfigKey = "__loop_config"
+	// LoopConfigField 循环节点 DSL configuration 中循环配置的字段名。
+	LoopConfigField = "loop"
+	// LoopVarKey 每轮执行时写入 arguments 的循环变量名，循环体内用 {{arguments._loop.item}} 等引用；
+	// 它不是调用方入参，提取必传入参时跳过。
+	LoopVarKey = "_loop"
+	// LoopBodySubChain / LoopBodyRootChain 循环体类型：子链 / 已发布的根链。
+	LoopBodySubChain  = "subchain"
+	LoopBodyRootChain = "rootchain"
 	// SubChainCallNodeTypeName 调用子链节点类型标识：根链（或子链）里添加的子链实例按普通节点处理，
 	// 入参按本实例的参数配置解析后作为子链内的 arguments，子链返回值（子链里返回值节点写入的值）
 	// 写入本节点的 steps.<实例ID>.responses，供下游节点引用。旧数据里的 flow 节点仍按 rulego 原生子链节点执行。

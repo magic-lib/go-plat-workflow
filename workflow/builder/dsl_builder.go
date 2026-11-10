@@ -61,8 +61,8 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		return nil, fmt.Errorf("%w: query nodes: %v", workflow.ErrDSLBuildFailed, err)
 	}
 
-	// 2. 查询子链（仅当前项目，避免加载其他项目的子链）
-	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, dedupBaseIDs(req.SubChainIDs))
+	// 2. 查询子链（仅当前项目，避免加载其他项目的子链）；循环节点的循环体子链也一并查询，用于嵌入
+	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, withLoopBodySubChainIDs(dedupBaseIDs(req.SubChainIDs), req.NodeParamOverrides))
 	if err != nil {
 		return nil, fmt.Errorf("%w: query sub chains: %v", workflow.ErrDSLBuildFailed, err)
 	}
@@ -208,8 +208,8 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		return nil, fmt.Errorf("%w: query nodes: %v", workflow.ErrDSLBuildFailed, err)
 	}
 
-	// 查询嵌套子链（仅当前项目）
-	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, dedupBaseIDs(req.SubChainIDs))
+	// 查询嵌套子链（仅当前项目）；循环节点的循环体子链也一并查询，用于嵌入
+	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, withLoopBodySubChainIDs(dedupBaseIDs(req.SubChainIDs), req.NodeParamOverrides))
 	if err != nil {
 		return nil, fmt.Errorf("%w: query sub chains: %v", workflow.ErrDSLBuildFailed, err)
 	}
@@ -581,6 +581,26 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			privateKeys = keptKeys
 		}
 
+		// 循环节点：循环配置（模式、数据来源、循环体等，JSON 对象）以保留 key 存在参数覆盖里，移到 configuration.loop，
+		// 不作为入参；其余覆盖参数是循环体为根链时传给目标根链的入参映射。
+		if node.Type == common.LoopNodeTypeName {
+			if raw, ok := frontendMap[common.LoopConfigKey]; ok {
+				if loopCfg := parseLoopConfigOverride(raw); loopCfg != nil {
+					config[common.LoopConfigField] = loopCfg
+				}
+			}
+			delete(frontendMap, common.LoopConfigKey)
+			delete(frontendSrc, common.LoopConfigKey)
+			delete(frontendType, common.LoopConfigKey)
+			keptKeys := privateKeys[:0]
+			for _, k := range privateKeys {
+				if k != common.LoopConfigKey {
+					keptKeys = append(keptKeys, k)
+				}
+			}
+			privateKeys = keptKeys
+		}
+
 		// 编排参数来源对应的 DSL policy（不改节点参数定义本身，仅在此处改写 DSL）：
 		//  - ref_node（调用传入）：调用方本身就是来源，保留节点定义默认 policy（调用方优先）
 		//  - ref_act（引用前序）：已配置来源 → 强制后台 PolicyBackendOnly，调用方同名不可覆盖
@@ -769,6 +789,21 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 			log.Ctx(context.Background()).Warn().Str("sub_chain_id", sc.ChainID).Err(err).Msg("embed sub chain failed, fallback to live sub chain")
 		}
 	}
+	// 循环节点的循环体子链同样嵌入，loop.body_target 指向嵌入的子链 ID；未能嵌入时清掉，执行时按子链 ID 实时加载
+	for _, n := range mainNodes {
+		if n.Type != common.LoopNodeTypeName {
+			continue
+		}
+		loop, ok := n.Configuration[common.LoopConfigField].(map[string]any)
+		if !ok || conv.String(loop["body_type"]) != common.LoopBodySubChain {
+			continue
+		}
+		if eid, ok := embeddedIDs[strings.TrimSpace(conv.String(loop["body_id"]))]; ok {
+			loop["body_target"] = eid
+		} else {
+			delete(loop, "body_target")
+		}
+	}
 	for _, inst := range parseInstanceRefs(req.SubChainIDs) {
 		sc, ok := subByID[inst.baseId]
 		if !ok {
@@ -880,6 +915,26 @@ func parseParamInputDefs(raw any) []*workflow.ParamInputDef {
 	return out
 }
 
+// parseLoopConfigOverride 解析编排时保存的循环配置：可以是 JSON 字符串或对象（返回副本），解析失败返回 nil。
+func parseLoopConfigOverride(raw any) map[string]any {
+	var b []byte
+	switch v := raw.(type) {
+	case string:
+		b = []byte(strings.TrimSpace(v))
+	default:
+		// 对象也走一次序列化，复制出新 map，后续写入 body_target 不会改到请求里的参数覆盖
+		b, _ = json.Marshal(v)
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	out := make(map[string]any)
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
 // subChainCallArguments 把子链实例的参数配置（node_param_overrides[实例ID]，与普通节点同结构）转成
 // 调用子链节点的 arguments：每个入参的取值表达式（固定值 / {{steps.x...}} / {{arguments.x}}）。
 // 没有配置任何入参时返回空数组。
@@ -915,4 +970,38 @@ func keepSubChainOverrides(out, pruned map[string]map[string]interface{}, subCha
 			out[id] = entry
 		}
 	}
+}
+
+// withLoopBodySubChainIDs 在子链 ID 列表后追加循环节点（循环体为子链）引用的子链 ID，去重。
+// 循环配置以保留 key 存在 node_param_overrides 里（{src, value} 或直接是配置），只有循环节点会有。
+func withLoopBodySubChainIDs(ids []string, overrides map[string]map[string]interface{}) []string {
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+	instIDs := make([]string, 0, len(overrides))
+	for instID := range overrides {
+		instIDs = append(instIDs, instID)
+	}
+	sort.Strings(instIDs)
+	for _, instID := range instIDs {
+		raw, ok := overrides[instID][common.LoopConfigKey]
+		if !ok {
+			continue
+		}
+		if m, ok := raw.(map[string]any); ok {
+			if v, ok := m["value"]; ok {
+				raw = v
+			}
+		}
+		cfg := parseLoopConfigOverride(raw)
+		if conv.String(cfg["body_type"]) != common.LoopBodySubChain {
+			continue
+		}
+		if id := strings.TrimSpace(conv.String(cfg["body_id"])); id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

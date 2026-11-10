@@ -122,10 +122,18 @@ func IsSubChainNode(n *types.RuleNode) bool {
 }
 
 // FlowTargets 返回节点列表里子链节点引用的子链（按出现顺序，按 TargetID 去重）。
+// 循环体为子链的循环节点（custom/Loop）也算：它每轮把执行上下文交给子链，与外层链共用入参（Scoped=false）。
 func FlowTargets(nodes []*types.RuleNode) []FlowTarget {
 	var out []FlowTarget
 	seen := make(map[string]bool)
 	for _, n := range nodes {
+		if ft, ok := LoopSubChainTarget(n); ok {
+			if !seen[ft.TargetID] {
+				seen[ft.TargetID] = true
+				out = append(out, ft)
+			}
+			continue
+		}
 		if !IsSubChainNode(n) {
 			continue
 		}
@@ -145,6 +153,41 @@ func FlowTargets(nodes []*types.RuleNode) []FlowTarget {
 		out = append(out, ft)
 	}
 	return out
+}
+
+// LoopSubChainTarget 循环体为子链的循环节点引用的子链：SubChainID 为 loop.body_id，
+// TargetID 为 loop.body_target（保存时嵌入的子链 ID），没有嵌入时与 SubChainID 相同。
+func LoopSubChainTarget(n *types.RuleNode) (FlowTarget, bool) {
+	if n == nil || n.Type != common.LoopNodeTypeName {
+		return FlowTarget{}, false
+	}
+	var cfg struct {
+		BodyType   string `json:"body_type"`
+		BodyID     string `json:"body_id"`
+		BodyTarget string `json:"body_target"`
+	}
+	switch raw := n.Configuration[common.LoopConfigField].(type) {
+	case nil:
+		return FlowTarget{}, false
+	case string:
+		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			return FlowTarget{}, false
+		}
+	default:
+		b, err := json.Marshal(raw)
+		if err != nil || json.Unmarshal(b, &cfg) != nil {
+			return FlowTarget{}, false
+		}
+	}
+	subID := strings.TrimSpace(cfg.BodyID)
+	if strings.TrimSpace(cfg.BodyType) != common.LoopBodySubChain || subID == "" {
+		return FlowTarget{}, false
+	}
+	target := stripProject(strings.TrimSpace(cfg.BodyTarget))
+	if target == "" {
+		target = subID
+	}
+	return FlowTarget{SubChainID: subID, TargetID: target}, true
 }
 
 func stripProject(ref string) string {
