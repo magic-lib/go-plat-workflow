@@ -798,10 +798,10 @@ function renderNodeTable() {
         <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
         <td>
           <div class="actions">
-            <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">编辑</button>
-            <button class="btn btn-sm btn-primary" onclick="openTestNodeModal('${esc(n.node_id)}')">测试</button>
-            <button class="btn btn-sm btn-outline" onclick="openNodeLogModal('${esc(n.node_id)}')">日志</button>
-            <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">删除</button>
+            <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑', n.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editNodeByIndex(${i})">${actionIconSvg('edit')}</button>
+            <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="openTestNodeModal('${esc(n.node_id)}')">${actionIconSvg('test')}</button>
+            <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('日志')} onclick="openNodeLogModal('${esc(n.node_id)}')">${actionIconSvg('log')}</button>
+            <button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除', n.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteNode('${esc(n.node_id)}')">${actionIconSvg('delete')}</button>
           </div>
         </td>
       </tr>`).join('');
@@ -2663,11 +2663,11 @@ function renderActivityTable(list) {
       <td class="noderef-count" data-nodes="${refNodesJsonAttr(a)}" data-empty="${activityRefNodes(a).length ? '' : '1'}">${refNodesCountHtml(a)}</td>
       <td>${escHtml(a.created_at ? a.created_at.substring(0,10) : '-')}</td>
       <td><div class="actions">
-        <button class="btn btn-sm btn-outline edit-only" ${publishedLockAttrs(a.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editActivity('${escHtml(a.activity_id)}')">编辑</button>
-        <button class="btn btn-sm btn-primary" onclick="openTestActivityModal('${escHtml(a.activity_id)}')">测试</button>
-        <button class="btn btn-sm btn-outline" onclick="showActivityListenerCode('${escHtml(a.activity_id)}')">监听代码</button>
-        <button class="btn btn-sm btn-outline" onclick="openActivityLogsModal('${escHtml(a.activity_id)}', '${escHtml(a.act_name)}')">日志</button>
-        <button class="btn btn-sm btn-danger edit-only" ${publishedLockAttrs(a.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteActivityById('${escHtml(a.activity_id)}')">删除</button>
+        <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑', a.published_in_root_chain, '已发布到根链，禁止编辑')} onclick="editActivity('${escHtml(a.activity_id)}')">${actionIconSvg('edit')}</button>
+        <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="openTestActivityModal('${escHtml(a.activity_id)}')">${actionIconSvg('test')}</button>
+        <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('监听代码')} onclick="showActivityListenerCode('${escHtml(a.activity_id)}')">${actionIconSvg('code')}</button>
+        <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('日志')} onclick="openActivityLogsModal('${escHtml(a.activity_id)}', '${escHtml(a.act_name)}')">${actionIconSvg('log')}</button>
+        <button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除', a.published_in_root_chain, '已发布到根链，禁止删除')} onclick="deleteActivityById('${escHtml(a.activity_id)}')">${actionIconSvg('delete')}</button>
       </div></td>
     </tr>`;
   }).join('');
@@ -9805,6 +9805,24 @@ function publishedLockAttrs(published, title) {
   if (isAdmin()) return 'title="' + esc(title || '已发布到根链，管理员可直接编辑/删除（操作前会二次确认）') + '"';
   return 'disabled title="' + esc(title || '已发布到根链，禁止编辑/删除') + '"';
 }
+// 列表「操作」列图标按钮用的内联 SVG 图标（线条风格，颜色跟随按钮文字色）
+const ACTION_ICON_PATHS = {
+  edit:   '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  test:   '<polygon points="6 3 20 12 6 21 6 3"/>',
+  code:   '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  log:    '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+  delete: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+};
+function actionIconSvg(name) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ACTION_ICON_PATHS[name] || '') + '</svg>';
+}
+// 图标按钮的 title / aria-label：悬停显示按钮文字；已发布锁定时沿用 publishedLockAttrs（含 disabled），提示前加上按钮文字
+function actionIconAttrs(label, published, lockTitle) {
+  const aria = 'aria-label="' + esc(label) + '"';
+  if (published) return aria + ' ' + publishedLockAttrs(true, label + '：' + lockTitle);
+  return aria + ' title="' + esc(label) + '"';
+}
+
 // 统一的已发布保护提示（后端也会拦截，此处用于前端即时反馈）
 function showPublishedLockedToast(kind) {
   showToast((kind || '该记录') + '已发布到根链，禁止编辑/删除。请先发布新版本或改用新建副本。', 'error');
