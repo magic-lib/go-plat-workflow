@@ -205,6 +205,35 @@
     </div>
   </div>
 
+  <!-- 复制 Node 弹窗 -->
+  <div class="modal-overlay" id="copy-node-overlay">
+    <div class="modal" id="copy-node-modal" style="width:880px;max-width:96vw">
+      <h2>从其它项目复制 Node<button class="modal-close" onclick="closeCopyNodeModal()" title="关闭">&times;</button></h2>
+      <div class="form-row" style="align-items:flex-end">
+        <div class="form-group" style="flex:1">
+          <label>来源项目</label>
+          <select id="copy-node-project" onchange="loadCopyNodeCandidates()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:.82rem">
+            <option value="">-- 选择来源项目 --</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1">
+          <label>搜索</label>
+          <input id="copy-node-search" class="search-box" placeholder="按名称/命名空间/类型/Node ID 过滤..." oninput="renderCopyNodeCandidates()">
+        </div>
+      </div>
+      <p style="font-size:.8rem;color:var(--text-muted);margin:6px 0 10px">
+        展示来源项目中「命名空间+名称」在当前项目里尚不存在的 Node（内置返回值节点除外），勾选后将其配置复制到<b>当前项目</b>（项目属性改为当前项目，生成新的 Node ID，不复用原 ID）。Node 按「命名空间+活动名称」引用 Activity，引用的 Activity 在当前项目不存在时会标出，需先复制对应 Activity。
+      </p>
+      <div style="max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px">
+        <div id="copy-node-list"><div class="empty-state" style="padding:20px">请先选择来源项目</div></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeCopyNodeModal()">取消</button>
+        <button class="btn btn-primary" onclick="copyNodesToProject()" id="copy-node-confirm" disabled>复制选中项</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 复制 Activity 弹窗 -->
   <div class="modal-overlay" id="copy-act-overlay">
     <div class="modal" id="copy-act-modal" style="width:880px;max-width:96vw">
@@ -280,6 +309,7 @@
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn btn-primary edit-only" onclick="openNodeModal()">+ 新增 Node</button>
+        <button class="btn btn-outline edit-only" onclick="openCopyNodeModal()">复制 Node</button>
         <button class="btn btn-outline" onclick="openTraceLogsModal()">&#128269; 日志查看</button>
       </div>
     </div>
