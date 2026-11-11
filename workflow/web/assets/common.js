@@ -7533,9 +7533,10 @@ function removeOrchSubChain(instanceId) {
     if (!window.confirm('确定要移除该子链吗？\n\n子链：' + name + '\n实例ID：' + instanceId + '\n\n与它相关的 ' + related + ' 条连线会一起删除。')) return false;
   }
   window._orchSelectedSubIds = window._orchSelectedSubIds.filter(id => id !== instanceId);
-  // 同步清理该子链实例的参数配置与名称覆盖，避免保存时写入已移除实例的冗余数据
+  // 同步清理该子链实例的参数配置、名称覆盖与路由条件，避免保存时写入已移除实例的冗余数据
   delete _orchParamPreset[instanceId];
   delete _orchNameOverrides[instanceId];
+  delete _orchSwitchOverrides[instanceId];
   rerenderOrchSubList();
   removeOrchConnRowsByInstance(instanceId);
   onOrchSelectionChange();
@@ -7746,7 +7747,13 @@ function refreshOrchConnWarns() {
       // 反向校验：Success / Failure（留空=Success）是默认分支，若起点仍配了 switch_condition，
       // 输出会按条件走自定义分支，该 Success/Failure 分支很可能不会命中 → 流程走错
       const kind = orchConnFromKind(fromId);
-      if (kind === 'node') {
+      const subSw = kind === 'sub' ? String((_orchSwitchOverrides || {})[fromId] || '').trim() : '';
+      if (subSw && String(type).trim() !== 'Failure') {
+        level = 'conflict';
+        msg = '关系「' + (String(type).trim() || 'Success') + '」是默认分支，但起点子链实例 ' + fromId + ' 配置了 switch_condition，' +
+              '输出会按条件走自定义分支，该分支很可能不会命中。可点击此处清空该子链实例的路由条件。';
+        conflicts.push({ row: row, fromId: fromId, type: String(type).trim() || 'Success', from: 'override' });
+      } else if (kind === 'node') {
         const info = orchInstanceSwitchInfo(fromId);
         if (info.known && info.text) {
           level = 'conflict';
@@ -7776,8 +7783,12 @@ function refreshOrchConnWarns() {
                 '运行时不会命中该分支。点击此处配置。';
         }
       } else if (kind === 'sub') {
-        level = 'warn';
-        msg = '关系「' + String(type).trim() + '」需要路由条件，但起点是 Sub Chain，无法配置 switch_condition。';
+        // 子链实例未配路由条件时沿用子链结束关系（子链可能本身就以该关系结束），只提示不拦截
+        if (!String((_orchSwitchOverrides || {})[fromId] || '').trim()) {
+          level = 'warn';
+          msg = '关系「' + String(type).trim() + '」需要路由条件：起点子链实例 ' + fromId + ' 未配置 switch_condition，' +
+                '将沿用子链结束时的关系。请确认子链会以该关系结束，或点击此处给该子链实例配置路由条件。';
+        }
       } else if (kind === 'unsupported') {
         level = 'warn';
         msg = '关系「' + String(type).trim() + '」需要路由条件，但起点节点类型不支持 switch_condition（仅 custom/Activity 与 custom/CondSwitch 支持）。';
@@ -7827,10 +7838,6 @@ function onOrchConnWarnClick(btn) {
   const fromSel = row.querySelector('[data-role="orch-from"]');
   const id = fromSel ? fromSel.value : '';
   if (!id) { showToast('请先选择起点节点', 'error'); return; }
-  if (getSelectedOrchSubIds().includes(id)) {
-    showToast('子链不能配置 switch_condition，从子链出发的连接请使用 Success / Failure', 'error');
-    return;
-  }
   orchOpenNodeSwitchEditor(id);
 }
 
@@ -7962,7 +7969,10 @@ function buildMermaidFromState(nodes, subChains, nodeIds, subIds, conns) {
     const s = subChains.find(x => x.chain_id === baseId);
     const label = s && s.name ? s.name : id;
     const subLabel = s && s.name ? id : '';
-    lines.push(`    ${safe}(["<b>🔗 ${esc(label)}</b>${subLabel ? '<br/><small>'+esc(subLabel)+'</small>' : ''}"])`);
+    // 子链实例配置了路由条件时与路由节点一样在节点内显示条件（样式见 .orch-sw-cond）
+    const subExpr = String((_orchSwitchOverrides || {})[id] || '').replace(/\s+/g, ' ').trim();
+    const subSwLine = subExpr ? `<span class='orch-sw-cond'>⑂ ${escMermaidText(subExpr)}</span>` : '';
+    lines.push(`    ${safe}(["<b>🔗 ${esc(label)}</b>${subLabel ? '<br/><small>'+esc(subLabel)+'</small>' : ''}${subSwLine}"])`);
   });
   allIds.forEach(id => {
     if (!nodeSet.has(id) && !subSet.has(id)) {
@@ -8101,7 +8111,11 @@ function orchBuildDslPreview() {
   const subNodes = subIds.map(id => {
     const ov = subOverrides[id] || {};
     const args = Object.keys(ov).sort().map(k => (ov[k].type ? { key: k, value: ov[k].value, type: ov[k].type } : { key: k, value: ov[k].value }));
-    return { id: id, type: ORCH_SUB_NODE_TYPE, name: orchSubDisplayName(id), configuration: { ruleChainId: getProject()+':'+orchSubBaseId(id), arguments: args } };
+    const configuration = { ruleChainId: getProject()+':'+orchSubBaseId(id), arguments: args };
+    // 本实例的路由条件（与后端一致：node_config.switch_condition）
+    const sw = String((_orchSwitchOverrides || {})[id] || '').trim();
+    if (sw) configuration.node_config = { switch_condition: sw };
+    return { id: id, type: ORCH_SUB_NODE_TYPE, name: orchSubDisplayName(id), configuration: configuration };
   });
 
   return JSON.stringify({
@@ -9251,6 +9265,9 @@ async function orchOpenNodeSwitchEditor(instanceId) {
   _orchSwitchEditId = instanceId;
   const modal = document.getElementById('orch-switch-modal');
   if (!modal) { showToast('编辑器未找到', 'error'); return; }
+  const openSubBtn = document.getElementById('orch-switch-open-sub');
+  if (openSubBtn) openSubBtn.style.display = 'none';
+  if (getSelectedOrchSubIds().includes(instanceId)) { orchOpenSubSwitchEditor(instanceId, modal); return; }
 
   // 尝试从已选实例/节点定义取默认值（缺失也不影响保存）
   const inst = (window._orchNodeInstances || []).find(x => x.instanceId === instanceId);
@@ -9324,12 +9341,39 @@ async function orchOpenNodeSwitchEditor(instanceId) {
   }
 }
 
+// 打开子链实例的编辑器：名称覆盖 + 路由条件（按本实例入参 [arguments.x] 与子链返回值 [responses.x] 求值），
+// 未配置路由条件时沿用子链结束时的关系往下走。变量列表取子链调用签名（入参 / 返回值定义）。
+function orchOpenSubSwitchEditor(instanceId, modal) {
+  const s = orchSubDefOf(instanceId);
+  const hasOverride = Object.prototype.hasOwnProperty.call(_orchSwitchOverrides, instanceId);
+  document.getElementById('orch-switch-node-name').textContent = '🔗 ' + orchSubDisplayName(instanceId) + '（' + instanceId + '）';
+  document.getElementById('orch-switch-override-flag').textContent = hasOverride
+    ? '子链实例：按路由条件分流（仅本链生效）'
+    : '子链实例：未配置路由条件，沿用子链结束时的关系（通常为 Success）';
+  const condWrap = document.getElementById('orch-switch-cond-wrap');
+  if (condWrap) condWrap.style.display = 'block';
+  const inputWrap = document.getElementById('orch-switch-input-wrap');
+  if (inputWrap) inputWrap.style.display = 'none';
+  const ta = document.getElementById('orch-switch-text');
+  ta.value = hasOverride ? String(_orchSwitchOverrides[instanceId] || '') : '';
+  ta.placeholder = '例如：[responses.out] > 5（True/False），或 If([responses.out] > 5, \'Big\', \'Small\')（自定义关系）';
+  _orchSwitchDefaultName = (s && s.name) ? s.name : orchSubBaseId(instanceId);
+  const nameInput = document.getElementById('orch-switch-name');
+  if (nameInput) nameInput.value = orchSubDisplayName(instanceId);
+  const openSubBtn = document.getElementById('orch-switch-open-sub');
+  if (openSubBtn) openSubBtn.style.display = '';
+  renderOrchSwitchVarBoxes(document.getElementById('orch-switch-input-vars'), document.getElementById('orch-switch-output-vars'),
+    { params: getOrchSubParams(instanceId), outputs: getOrchSubOutputs(instanceId) });
+  modal.style.display = 'flex';
+}
+
 // 保存当前编辑的节点：名称覆盖 + switch_condition 覆盖（均仅本链实例生效，不修改节点定义）
 function saveOrchSwitchOverride() {
   const id = _orchSwitchEditId;
   if (!id) { showToast('未指定编辑节点', 'error'); return; }
   const inst = (window._orchNodeInstances || []).find(x => x.instanceId === id);
-  const isSwitchable = inst && (inst.type === 'custom/Activity' || inst.type === 'custom/CondSwitch');
+  const isSub = getSelectedOrchSubIds().includes(id);
+  const isSwitchable = isSub || (inst && (inst.type === 'custom/Activity' || inst.type === 'custom/CondSwitch'));
   // 参数输入节点 / 条件判断节点：先校验参数列表，不通过时不关闭弹框
   const hasInputDefs = isOrchInputInst(inst) || isOrchCondInst(inst);
   const inputDefs = hasInputDefs ? collectOrchInputParamRows(ORCH_INPUT_SWITCH_BOX_ID) : null;
@@ -9832,13 +9876,13 @@ function enhanceOrchPreviewNodes(container) {
       e.preventDefault();
       if (_orchLinkJustDragged) return;
       if (e.target && e.target.closest && e.target.closest('.orch-node-link')) return;
-      // 子链节点：叉 = 移除该子链实例；点击节点 = 新标签页打开该子链的编排页（不离开当前未保存的编排）
+      // 子链节点：叉 = 移除该子链实例；点击节点 = 打开编辑器（改名称、路由条件；编辑器里可新标签页打开该子链的编排页）
       if (subIds.includes(instId)) {
         if (e.target && e.target.closest && e.target.closest('.orch-node-del')) {
           if (removeOrchSubChain(instId) && typeof renderOrchPreview === 'function') renderOrchPreview();
           return;
         }
-        orchOpenSubChainInNewTab(instId);
+        orchOpenNodeSwitchEditor(instId);
         return;
       }
       if (e.target && e.target.closest && e.target.closest('.orch-node-del')) {

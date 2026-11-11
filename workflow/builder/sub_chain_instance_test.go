@@ -83,7 +83,8 @@ func TestBuildRuleChain_SubChainCallArguments(t *testing.T) {
 				"name": map[string]any{"src": "entry", "value": "{{arguments.name}}"},
 			},
 		},
-		NodeNameOverrides: map[string]string{"F000001__aaaaa": "查询用户"},
+		NodeNameOverrides:   map[string]string{"F000001__aaaaa": "查询用户"},
+		NodeSwitchOverrides: map[string]string{"F000001__aaaaa": " [responses.out] > 5 ", "F000001__bbbbb": "  "},
 	}
 	chain := b.buildRuleChain(req, nil, []*workflow.SubChainDef{{ChainID: "F000001", Name: "子链1"}})
 	byID := map[string]int{}
@@ -99,6 +100,13 @@ func TestBuildRuleChain_SubChainCallArguments(t *testing.T) {
 	}
 	if got := conv.String(chain.Metadata.Nodes[byID["F000001__bbbbb"]].Configuration["arguments"]); got != `[]` {
 		t.Fatalf("instance without overrides arguments=%s", got)
+	}
+	// 路由条件写入 node_config.switch_condition；空白条件不写
+	if got := conv.String(a.Configuration["node_config"]); got != `{"switch_condition":"[responses.out] > 5"}` {
+		t.Fatalf("node_config=%s", got)
+	}
+	if _, ok := chain.Metadata.Nodes[byID["F000001__bbbbb"]].Configuration["node_config"]; ok {
+		t.Fatal("blank switch condition should not be written")
 	}
 }
 

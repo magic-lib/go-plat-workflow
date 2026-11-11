@@ -640,7 +640,7 @@
       <div id="orch-switch-input-rows" data-count="orch-switch-input-count" style="max-height:40vh;overflow-y:auto"></div>
     </div>
     <div id="orch-switch-cond-wrap">
-      <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">路由条件（switch_condition，仅 Activity / CondSwitch 适用）</label>
+      <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">路由条件（switch_condition，Activity / CondSwitch / 子链实例适用）</label>
       <textarea id="orch-switch-text" rows="5" style="width:100%;font-family:var(--font-mono);font-size:.82rem;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical" placeholder="例如：In('K1', [responses.tag_list])"></textarea>
       <div style="margin-top:12px;border-top:1px dashed var(--border);padding-top:10px">
         <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">输入参数（点击复制）：</div>
@@ -650,6 +650,7 @@
       </div>
     </div>
     <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px">
+      <button id="orch-switch-open-sub" class="btn btn-sm btn-outline" style="display:none" onclick="orchOpenSubChainInNewTab(_orchSwitchEditId)">打开子链编排</button>
       <button class="btn btn-sm btn-primary" onclick="saveOrchSwitchOverride()">保存</button>
     </div>
   </div>

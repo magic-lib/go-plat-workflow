@@ -25,6 +25,8 @@ type SubChainCallConfiguration struct {
 	TargetId string `json:"targetId"`
 	// Arguments 子链各入参的取值来源（key 为子链里 {{arguments.xxx}} 的参数名）
 	Arguments []*param.BindConfig `json:"arguments"`
+	// NodeConfig 编排时按实例配置的路由条件（与 Activity/CondSwitch 节点同一位置：node_config.switch_condition）
+	NodeConfig *condSwitchCfg `json:"node_config,omitempty"`
 }
 
 // SubChainCallNode 调用子链节点（custom/SubChainCall）。
@@ -34,6 +36,8 @@ type SubChainCallConfiguration struct {
 // 子链里返回值节点写入的 responses 作为本节点的返回值。子链结束后恢复外层链的 arguments / responses，
 // 并把入参与返回值写入本节点的 steps.<实例ID>，供下游节点引用。
 // 子链每个结束分支都按其结束关系转发给下游（与 rulego flow 节点 extend 模式一致）；子链执行出错走 Failure。
+// 配置了 node_config.switch_condition 时，改为对本节点入参与子链返回值求值该表达式，按结果路由
+// （规则同查询节点：bool→True/False，字符串→自定义关系，数字→其字符串形式），如 [responses.out] > 5。
 type SubChainCallNode struct {
 	Configuration *SubChainCallConfiguration
 	ruleObj       *templates.RuleExprEngine
@@ -82,6 +86,14 @@ func (x *SubChainCallNode) Init(_ types.Config, configuration types.Configuratio
 		x.nodeName = ruleNode.Name
 	}
 	return nil
+}
+
+// switchCondition 返回本实例配置的路由条件（未配置为空）。
+func (x *SubChainCallNode) switchCondition() string {
+	if x.Configuration == nil || x.Configuration.NodeConfig == nil {
+		return ""
+	}
+	return strings.TrimSpace(x.Configuration.NodeConfig.SwitchCondition)
 }
 
 // OnMsg 解析入参 → 以入参作为 arguments 执行子链 → 恢复外层上下文并写入本节点的入参与返回值。
@@ -146,13 +158,23 @@ func (x *SubChainCallNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			if subResp == nil {
 				subResp = map[string]any{}
 			}
+			// 配置了路由条件：按本节点入参与子链返回值求值，替代子链结束关系
+			if cond := x.switchCondition(); cond != "" {
+				routed, _, rerr := routeByCondition(x.ruleObj, cond, map[string]any{"arguments": inputs, "responses": subResp})
+				if rerr != nil {
+					nodeStep.Responses = subResp
+					x.fail(ctx, endMsg, out, currNodeId, actMetaData, nodeSpanId, startTime, nodeStep, fmt.Errorf("路由条件 %s 求值失败: %w", cond, rerr))
+					return
+				}
+				relationType = routed
+			}
 			nodeStep.Responses = subResp
 			nodeStep.Status = paramx.StepStatusSuccess
 			nodeStep.EndTimeMs = time.Now().UnixMilli()
 			out.SetStep(currNodeId, nodeStep)
 			endMsg.SetData(conv.String(out))
 
-			// 日志记录实际往下发的关系：子链以最后一个节点的输出关系结束（如 True/False/自定义），本节点原样转发
+			// 日志记录实际往下发的关系：配置了路由条件时为条件结果，否则为子链结束关系（如 True/False/自定义）
 			nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, time.Since(startTime).Milliseconds(), string(currNodeId), x.nodeName, "success", "info", relationType, out,
 				inputs, subResp, nil)
 			if cliErr == nil && x.nodeLogCli == nil {
