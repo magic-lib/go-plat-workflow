@@ -117,3 +117,29 @@ func TestBuildRuleChain_EmbedLoopBodySubChain(t *testing.T) {
 		t.Fatalf("loop=%v", loop)
 	}
 }
+
+func TestBuildRuleNodes_LoopKeepsExtraArgsWithParamDefs(t *testing.T) {
+	b := &DSLBuilder{}
+	defs := map[string]*workflow.NodeDef{
+		"N000031": {NodeID: "N000031", Name: "循环节点", Type: common.LoopNodeTypeName,
+			Params: json.RawMessage(`[{"key":"loop_items","label":"循环数据","type":"slice","required":true,"policy":"frontend+","value":""}]`)},
+	}
+	overrides := map[string]map[string]interface{}{
+		"N000031__abc": {
+			common.LoopConfigKey: map[string]any{"src": "fixed", "value": `{"mode":"foreach","body_type":"rootchain","body_id":"R000002"}`},
+			"loop_items":         map[string]any{"src": "ref_act", "value": "{{steps.N1__a.responses.list}}", "type": "slice"},
+			"uid":                map[string]any{"src": "value", "value": "{{arguments._loop.item.uid}}"},
+		},
+	}
+	nodes := b.buildRuleNodes([]instanceRef{{baseId: "N000031", instanceId: "N000031__abc"}}, defs, overrides, nil, nil)
+	raw, _ := json.Marshal(nodes[0].Configuration["arguments"])
+	var args []map[string]any
+	_ = json.Unmarshal(raw, &args)
+	got := map[string]any{}
+	for _, a := range args {
+		got[a["key"].(string)] = a["value"]
+	}
+	if len(args) != 2 || got["loop_items"] != "{{steps.N1__a.responses.list}}" || got["uid"] != "{{arguments._loop.item.uid}}" {
+		t.Fatalf("arguments=%s", raw)
+	}
+}

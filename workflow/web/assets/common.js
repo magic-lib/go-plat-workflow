@@ -1234,6 +1234,7 @@ function syncNodeKindByType(type) {
 function onNodeTypeChange() {
   const type = document.getElementById('node-type').value;
   syncNodeKindByType(type);
+  ensureLoopItemsParamRow(type);
   toggleNodeChainCallSection(type);
   const isActivity = type === 'custom/Activity';
   document.getElementById('node-activity-section').style.display = isActivity ? '' : 'none';
@@ -4873,6 +4874,16 @@ function addParamRow(key, label, type, required, defaultValue, description, poli
     <button class="btn-remove-param" onclick="removeParamRow('param-row-${paramSeq}')" title="删除此参数">&times;</button>
   `;
   container.appendChild(row);
+}
+
+// 循环节点：参数定义里自动补一条循环数据 loop_items（slice），编排时在「节点参数配置」里为它配置来源（引用节点 / 调用传入 / 固定配置）。
+// 已有同名参数时不重复添加。
+function ensureLoopItemsParamRow(type) {
+  if (type !== 'custom/Loop') return;
+  const exists = Array.from(document.querySelectorAll('#node-params-container .param-row .param-key'))
+    .some(el => (el.value || '').trim() === 'loop_items');
+  if (exists) return;
+  addParamRow('loop_items', '循环数据', 'slice', true, '', '要遍历的数组（或对象，按键遍历），每个元素执行一次循环体；条件循环模式下不需要配置', 'frontend+');
 }
 
 function removeParamRow(rowId) {
@@ -11822,7 +11833,13 @@ function setOrchLoopConfig(instanceId, cfg) {
 // （循环体为子链时子链直接共享执行上下文，没有入参）
 function getOrchLoopParams(inst) {
   const cfg = getOrchLoopConfig(inst.instanceId);
-  const params = cfg.mode === 'foreach' ? [Object.assign({}, ORCH_LOOP_ITEMS_PARAM)] : [];
+  const params = [];
+  if (cfg.mode === 'foreach') {
+    // 优先用节点定义里的 loop_items（编辑 Node 页选循环节点类型时自动添加）；旧的节点定义没有时用内置定义
+    const def = (_orchNodes || []).find(n => n.node_id === inst.nodeId);
+    const defParam = parseNodeParams(def).find(p => p.key === ORCH_LOOP_ITEMS_KEY);
+    params.push(Object.assign({}, ORCH_LOOP_ITEMS_PARAM, defParam || {}));
+  }
   if (cfg.body_type !== 'rootchain' || !cfg.body_id) return params;
   const sig = getOrchCallSig(cfg.body_id);
   if (!sig) return params;

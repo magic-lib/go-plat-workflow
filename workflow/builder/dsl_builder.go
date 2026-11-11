@@ -654,6 +654,15 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 					args = append(args, bc)
 				}
 			}
+			// 循环节点：参数定义里只有 loop_items，循环体为根链时传给目标根链的入参映射不在定义里，同样保留
+			if node.Type == common.LoopNodeTypeName {
+				for k, v := range frontendMap {
+					if k == "" || usedKeys[k] {
+						continue
+					}
+					args = append(args, &param.BindConfig{Key: k, Value: v, Type: frontendType[k], Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
+				}
+			}
 			// 按 key 自动排序，保证 DSL 稳定可读、与节点参数定义实时一致
 			sortBindConfigsByKey(args)
 			config[activity.Arguments] = args
