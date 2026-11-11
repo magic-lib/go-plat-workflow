@@ -625,7 +625,7 @@
 <div class="modal-overlay" id="orch-switch-modal" style="display:none">
   <div class="modal" style="width:720px;max-width:96vw">
     <h2>编辑节点<button class="modal-close" onclick="document.getElementById('orch-switch-modal').style.display='none';_orchSwitchEditId='';" title="关闭">&times;</button></h2>
-    <p style="margin:0 0 8px;color:var(--text-muted);font-size:.82rem">该设置<b>仅对当前链生效</b>，只修改本 DSL 中该节点实例的<b>名称</b>与 <code>node_config.switch_condition</code>，不会修改节点定义本身，也不影响其它节点。</p>
+    <p style="margin:0 0 8px;color:var(--text-muted);font-size:.82rem">该设置<b>仅对当前链生效</b>，只修改本 DSL 中该节点实例的<b>名称</b>、<b>参数</b>与 <code>node_config.switch_condition</code>，不会修改节点定义本身，也不影响其它节点。条件判断节点可在下方定义参数，保存后到「节点参数配置」里为每个参数选来源，路由条件里用 <code>[arguments.参数名]</code> 判断。</p>
     <div style="margin:-4px 0 10px;color:var(--primary);font-size:.92rem;font-weight:600" id="orch-switch-node-name"></div>
     <div style="margin:0 0 8px;font-size:.78rem;color:#92400e" id="orch-switch-override-flag"></div>
     <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">节点名称（仅本链实例生效，不影响节点定义）</label>

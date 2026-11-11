@@ -396,7 +396,11 @@ func pruneOverrides[V any](m map[string]V, valid map[string]bool) map[string]V {
 func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, nodes []*workflow.NodeDef) map[string]map[string]interface{} {
 	// baseId -> 参数默认值（key -> 节点 DB 默认值），用于补充缺失参数
 	paramDefaults := make(map[string]map[string]*confPackage.NodeConfigOverrideArgument, len(nodes))
+	condSwitchNodes := make(map[string]bool) // 条件判断节点：编排时可在本链定义参数，这些参数不在节点定义里，需保留
 	for _, nd := range nodes {
+		if nd.Type == common.CondSwitchNodeTypeName {
+			condSwitchNodes[nd.NodeID] = true
+		}
 		defs := make(map[string]*confPackage.NodeConfigOverrideArgument)
 		if len(nd.Params) > 0 {
 			var args []*confPackage.NodeConfigArgument
@@ -438,6 +442,20 @@ func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, no
 		for k, v := range entry {
 			if _, exists := defaults[k]; exists {
 				newEntry[k] = v
+			}
+		}
+		// 条件判断节点：保留本链参数定义及其来源配置
+		if condSwitchNodes[baseId] {
+			if raw, ok := entry[common.ParamInputDefsKey]; ok {
+				newEntry[common.ParamInputDefsKey] = raw
+				if m, ok := raw.(map[string]any); ok {
+					raw = m["value"]
+				}
+				for _, d := range parseParamInputDefs(raw) {
+					if v, has := entry[d.Key]; has {
+						newEntry[d.Key] = v
+					}
+				}
 			}
 		}
 		// 补充节点定义中有但覆盖中缺失的参数（以节点默认值为准）
@@ -551,10 +569,11 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			privateKeys = keptKeys
 		}
 
-		// 参数输入节点：参数定义（参数名/类型/说明）以保留 key 存在参数覆盖里，移到 configuration.input_params，
-		// 不作为参数解析；参数说明同时写入 additionalInfo.node_param_labels 供执行页展示。
+		// 参数输入节点 / 条件判断节点：编排时在本链定义的参数（参数名/类型/说明/默认值）以保留 key 存在参数覆盖里，
+		// 移到 configuration.input_params，不作为参数解析；参数说明同时写入 additionalInfo.node_param_labels 供执行页展示。
+		// 条件判断节点的本链参数与节点定义参数合并，各参数的来源仍按普通参数写入 arguments。
 		var inputParamLabels map[string]string
-		if node.Type == common.ParamInputNodeTypeName {
+		if node.Type == common.ParamInputNodeTypeName || node.Type == common.CondSwitchNodeTypeName {
 			if raw, ok := frontendMap[common.ParamInputDefsKey]; ok {
 				defs := parseParamInputDefs(raw)
 				config[common.ParamInputConfigKey] = defs
@@ -628,6 +647,15 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 					args = append(args, bc)
 				}
 			}
+			// 条件判断节点：本链定义的参数不在节点定义里，同样写入 arguments
+			if node.Type == common.CondSwitchNodeTypeName {
+				for k, v := range frontendMap {
+					if k == "" || usedKeys[k] {
+						continue
+					}
+					args = append(args, &param.BindConfig{Key: k, Value: v, Type: frontendType[k], Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
+				}
+			}
 			// 按 key 自动排序，保证 DSL 稳定可读、与节点参数定义实时一致
 			sortBindConfigsByKey(args)
 			config[activity.Arguments] = args
@@ -681,6 +709,18 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		}
 
 		if len(inputParamLabels) > 0 {
+			// 条件判断节点：本链参数的说明与节点定义参数的说明合并，同名以本链为准
+			if node.Type == common.CondSwitchNodeTypeName {
+				if s, ok := addInfo["node_param_labels"].(string); ok && s != "" {
+					merged := make(map[string]string)
+					if err := json.Unmarshal([]byte(s), &merged); err == nil {
+						for k, v := range inputParamLabels {
+							merged[k] = v
+						}
+						inputParamLabels = merged
+					}
+				}
+			}
 			labelJSON, _ := json.Marshal(inputParamLabels)
 			addInfo["node_param_labels"] = string(labelJSON)
 		}
