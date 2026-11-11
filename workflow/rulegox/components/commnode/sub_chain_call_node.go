@@ -152,7 +152,8 @@ func (x *SubChainCallNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			out.SetStep(currNodeId, nodeStep)
 			endMsg.SetData(conv.String(out))
 
-			nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, time.Since(startTime).Milliseconds(), string(currNodeId), x.nodeName, "success", "info", types.Success, out,
+			// 日志记录实际往下发的关系：子链以最后一个节点的输出关系结束（如 True/False/自定义），本节点原样转发
+			nodeCli, cliErr := pushNodeLog(x.nodeLogCli, actMetaData, nodeSpanId, time.Since(startTime).Milliseconds(), string(currNodeId), x.nodeName, "success", "info", relationType, out,
 				inputs, subResp, nil)
 			if cliErr == nil && x.nodeLogCli == nil {
 				x.nodeLogCli = nodeCli

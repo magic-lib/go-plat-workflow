@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/magic-lib/go-plat-utils/conv"
+	"github.com/magic-lib/go-plat-utils/logs"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 )
@@ -230,5 +232,99 @@ func TestSubChainArguments(t *testing.T) {
 	nested, _ := args["N000036__70lic"].(map[string]any)
 	if nested == nil || nested["mobile"] != "138" {
 		t.Fatalf("nested keys missing: %v", args)
+	}
+}
+
+// 子链以查询节点结束（无下游连线），子链按其判定结果结束（条件恒为真，以 True 结束）
+const subChainCallCondSubDSL = `{
+  "ruleChain": {"id": "F000002#abc", "name": "cond sub", "root": false},
+  "metadata": {
+    "nodes": [
+      {"id": "N000030__sw", "type": "custom/CondSwitch", "name": "子链判断",
+       "configuration": {"node_config": {"switch_condition": "1 > 0"},
+         "arguments": [{"key": "uid", "value": "{{arguments.uid}}", "type": "int64"}]}}
+    ],
+    "connections": []
+  }
+}`
+
+// 根链：子链节点按子链结束关系分流，True 走返回值节点
+const subChainCallCondRootDSL = `{
+  "ruleChain": {"id": "R000002", "name": "cond root", "root": true},
+  "metadata": {
+    "nodes": [
+      {"id": "F000002__c", "type": "custom/SubChainCall", "name": "子链C",
+       "configuration": {"targetId": "p1:F000002#abc",
+         "arguments": [{"key": "uid", "value": "{{arguments.uid}}"}]}},
+      {"id": "custom/ReturnValue__t", "type": "custom/ReturnValue", "name": "True 分支",
+       "configuration": {"arguments": [{"key": "branch", "value": "true"}]}}
+    ],
+    "connections": [{"fromId": "F000002__c", "toId": "custom/ReturnValue__t", "type": "True"}]
+  }
+}`
+
+func TestSubChainCallNode_ForwardsSubChainRelation(t *testing.T) {
+	// 查询节点执行时会写调试日志，单测里服务未初始化日志器，这里补一个打印日志器
+	if engine.MysqlLogger == nil {
+		engine.MysqlLogger = logs.NewPrintLogger(logs.INFO)
+		defer func() { engine.MysqlLogger = nil }()
+	}
+	saver := &captureNodeLogSaver{}
+	prevSaver := defaultNodeLogSaver
+	SetNodeLogSaver(saver)
+	defer SetNodeLogSaver(prevSaver)
+
+	if _, err := rulego.New("p1:F000002#abc", []byte(subChainCallCondSubDSL)); err != nil {
+		t.Fatalf("new sub engine: %v", err)
+	}
+	defer rulego.Del("p1:F000002#abc")
+	ruleEngine, err := rulego.New("sub_chain_call_cond_root", []byte(subChainCallCondRootDSL))
+	if err != nil {
+		t.Fatalf("new root engine: %v", err)
+	}
+	defer rulego.Del("sub_chain_call_cond_root")
+
+	flowCtx := paramx.NewFlowContext("R000002", "inst", map[string]any{"uid": "7"}, func(key string, val any) (any, bool) { return val, false })
+	md := types.NewMetadata()
+	md.PutValue("project", "p1")
+	md.PutValue("env", "test")
+	md.PutValue("root_chain_id", "R000002")
+	msg := types.NewMsg(0, "TEST", types.JSON, md, conv.String(flowCtx))
+
+	var data string
+	done := make(chan struct{})
+	ruleEngine.OnMsg(msg, types.WithOnEnd(func(ctx types.RuleContext, m types.RuleMsg, err error, relationType string) {
+		data = m.GetData()
+		close(done)
+	}))
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout")
+	}
+	out := new(paramx.FlowContext)
+	_ = conv.Unmarshal(data, out)
+	// 子链以 True 结束，根链沿 True 连线走到返回值节点
+	if got := conv.String(out.Responses); got != `{"branch":"true"}` {
+		t.Fatalf("root did not follow True branch, responses=%s data=%s", got, data)
+	}
+	// 子链调用节点的日志记录实际转发的关系 True，而不是固定的 Success
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		relation := ""
+		saver.mu.Lock()
+		for _, l := range saver.logs {
+			if l.NodeID == "F000002__c" {
+				relation = l.RelationType
+			}
+		}
+		saver.mu.Unlock()
+		if relation == types.True {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sub chain call node log relation=%q, want True", relation)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
