@@ -1,6 +1,8 @@
 package commnode
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,7 +51,36 @@ const subChainCallRootDSL = `{
   }
 }`
 
+// captureNodeLogSaver 收集 pushNodeLog 落库的节点日志，供测试校验所在链与调用路径。
+type captureNodeLogSaver struct {
+	mu   sync.Mutex
+	logs []*NodeLogDef
+}
+
+func (c *captureNodeLogSaver) CreateNodeLog(_ context.Context, def *NodeLogDef) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.logs = append(c.logs, def)
+	return nil
+}
+
+// byNodeAndPath 返回 node_id+call_path -> chain_id 的映射。
+func (c *captureNodeLogSaver) byNodeAndPath() map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := make(map[string]string, len(c.logs))
+	for _, l := range c.logs {
+		m[l.NodeID+"|"+l.CallPath] = l.ChainID
+	}
+	return m
+}
+
 func TestSubChainCallNode_ScopedArgumentsAndResponses(t *testing.T) {
+	saver := &captureNodeLogSaver{}
+	prevSaver := defaultNodeLogSaver
+	SetNodeLogSaver(saver)
+	defer SetNodeLogSaver(prevSaver)
+
 	if _, err := rulego.New("p1:F000001#abc", []byte(subChainCallSubDSL)); err != nil {
 		t.Fatalf("new sub engine: %v", err)
 	}
@@ -64,6 +95,7 @@ func TestSubChainCallNode_ScopedArgumentsAndResponses(t *testing.T) {
 	md := types.NewMetadata()
 	md.PutValue("project", "p1")
 	md.PutValue("env", "test")
+	md.PutValue("root_chain_id", "R000001")
 	msg := types.NewMsg(0, "TEST", types.JSON, md, conv.String(flowCtx))
 
 	var (
@@ -106,6 +138,77 @@ func TestSubChainCallNode_ScopedArgumentsAndResponses(t *testing.T) {
 	}
 	if got := conv.String(out.Responses); got != `{"a":"7","b":"99","uid":"7"}` {
 		t.Fatalf("root responses=%s", got)
+	}
+
+	// 子链内节点的步骤按「调用路径/节点ID」各自保存，两次调用互不覆盖，也不与根链节点混在一起
+	if s := out.GetStep("F000001__a/N000020__in"); s == nil || conv.String(s.Responses) != `{"uid":7}` {
+		t.Fatalf("instance a inner step wrong: %s", data)
+	}
+	if s := out.GetStep("F000001__b/N000020__in"); s == nil || conv.String(s.Responses) != `{"uid":99}` {
+		t.Fatalf("instance b inner step wrong: %s", data)
+	}
+	if out.GetStep("N000020__in") != nil {
+		t.Fatalf("inner step leaked to root steps: %s", data)
+	}
+
+	// 节点日志：子链内节点带所在子链与调用路径，根链节点（含子链调用节点本身）在根链、调用路径为空
+	want := map[string]string{
+		"N000020__in|F000001__a":            "F000001",
+		"custom/ReturnValue__rv|F000001__a": "F000001",
+		"N000020__in|F000001__b":            "F000001",
+		"F000001__a|":                       "R000001",
+		"F000001__b|":                       "R000001",
+		"custom/ReturnValue__root|":         "R000001",
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		got := saver.byNodeAndPath()
+		missing := ""
+		for k, chain := range want {
+			if got[k] != chain {
+				missing = k + "=" + got[k]
+				break
+			}
+		}
+		if missing == "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node log chain/call_path wrong, first mismatch %s, all=%v", missing, got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestSubChainCallPathAndTarget(t *testing.T) {
+	if got := SubChainCallPath("", "F000001__a"); got != "F000001__a" {
+		t.Fatalf("root path=%s", got)
+	}
+	if got := SubChainCallPath("F000001__a", "F000003__b"); got != "F000001__a/F000003__b" {
+		t.Fatalf("nested path=%s", got)
+	}
+	for in, want := range map[string]string{"p1:F000001#abc": "F000001", "p1:F000001": "F000001", "F000001": "F000001"} {
+		if got := SubChainIDOfTarget(in); got != want {
+			t.Fatalf("SubChainIDOfTarget(%s)=%s", in, got)
+		}
+	}
+}
+
+func TestScopeSubChainSteps(t *testing.T) {
+	out := &paramx.FlowContext{Steps: map[paramx.StepId]*paramx.Step{
+		"N000001__root":            {Status: paramx.StepStatusSuccess},
+		"N000020__in":              {Status: paramx.StepStatusSuccess},
+		"F000001__a/F000003__b":    {Status: paramx.StepStatusSuccess},
+		"F000001__a/F000003__b/N1": {Status: paramx.StepStatusSuccess},
+	}}
+	ScopeSubChainSteps(out, map[paramx.StepId]struct{}{"N000001__root": {}}, "F000001__a")
+	for _, k := range []paramx.StepId{"N000001__root", "F000001__a/N000020__in", "F000001__a/F000003__b", "F000001__a/F000003__b/N1"} {
+		if out.Steps[k] == nil {
+			t.Fatalf("missing step %s: %v", k, out.Steps)
+		}
+	}
+	if len(out.Steps) != 4 {
+		t.Fatalf("unexpected steps: %v", out.Steps)
 	}
 }
 

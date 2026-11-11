@@ -1259,6 +1259,10 @@ type NodeLogDef struct {
 	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），用于追溯当时执行的是哪个发布版本。
 	RootChainReleaseID string `json:"root_chain_release_id"`
 	SpanID             string `json:"span_id"`
+	// ChainID 节点实际所在的链：主链节点为根链 ID，子链（经调用子链节点执行）里的节点为子链 ID（如 F000001）。
+	ChainID string `json:"chain_id"`
+	// CallPath 子链调用路径：调用该子链的子链节点实例 ID，多层嵌套用 "/" 拼接（如 F000001__2p0mg/F000003__abcde）；主链节点为空。
+	CallPath string `json:"call_path"`
 	// RelationType 该 node 执行完成后往下传递的连接类型（relationType），
 	// 对应 rulego 的 TellSuccess/TellFailure/TellNext 等，取值如 Success/Failure/True/False 或自定义字符串。
 	// 用于回查本次 node 走了哪条分支链路。
@@ -1280,6 +1284,8 @@ type NodeLogFilter struct {
 	TraceID string `json:"trace_id,omitempty"`
 	// RootChainID 根链 ID 精确匹配（用于按根链过滤 node 运行日志）
 	RootChainID string `json:"root_chain_id,omitempty"`
+	// ChainID 节点所在链 ID 精确匹配（用于只看某条子链里节点的运行日志）
+	ChainID string `json:"chain_id,omitempty"`
 	// Keyword 关键词模糊匹配 payload/result/error_msg
 	Keyword string `json:"keyword,omitempty"`
 	// Limit 每页条数

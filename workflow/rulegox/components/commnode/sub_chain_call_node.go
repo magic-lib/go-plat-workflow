@@ -103,10 +103,18 @@ func (x *SubChainCallNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 	parentArgs := allParam.Arguments
 	parentResp := allParam.Responses
+	parentStepIds := make(map[paramx.StepId]struct{}, len(allParam.Steps))
+	for k := range allParam.Steps {
+		parentStepIds[k] = struct{}{}
+	}
+	callPath := SubChainCallPath(actMetaData.CallPath, string(currNodeId))
 	allParam.Arguments = SubChainArguments(inputs)
 	allParam.Responses = nil
 	subMsg := msg.Copy()
 	subMsg.SetData(conv.String(allParam))
+	// 子链里的节点写日志时据此标出所在子链与调用路径，区分主链节点及同一子链的不同调用
+	subMsg.GetMetadata().PutValue(metaKeyChainID, SubChainIDOfTarget(x.Configuration.TargetId))
+	subMsg.GetMetadata().PutValue(metaKeyCallPath, callPath)
 
 	ctx.TellFlow(x.Configuration.TargetId, subMsg, types.WithContext(ctx.GetContext()),
 		types.WithOnEnd(func(_ types.RuleContext, endMsg types.RuleMsg, err error, relationType string) {
@@ -115,6 +123,9 @@ func (x *SubChainCallNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 				Status:      paramx.StepStatusPending,
 				StartTimeMs: startTime.UnixMilli(),
 			}
+			// 回到外层链：调用路径与所在链恢复为外层的值，避免后续外层节点被标成子链节点
+			endMsg.GetMetadata().PutValue(metaKeyChainID, actMetaData.ChainID)
+			endMsg.GetMetadata().PutValue(metaKeyCallPath, actMetaData.CallPath)
 			out := new(paramx.FlowContext)
 			if perr := conv.Unmarshal(endMsg.GetData(), out); perr != nil {
 				// 子链输出无法解析时以进入子链前的上下文为准，避免丢失外层链已有的步骤
@@ -122,6 +133,8 @@ func (x *SubChainCallNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 				if err == nil {
 					err = fmt.Errorf("解析子链输出失败: %w", perr)
 				}
+			} else {
+				ScopeSubChainSteps(out, parentStepIds, callPath)
 			}
 			subResp := out.Responses
 			out.Arguments = parentArgs
@@ -159,6 +172,47 @@ func SubChainArguments(inputs map[string]any) map[string]any {
 		args[k] = v
 	}
 	return args
+}
+
+// 执行元数据（msg.Metadata）里子链所在链与调用路径的 key，与 rulegox.ActivityMetaData 的 json 字段一致。
+const (
+	metaKeyChainID  = "chain_id"
+	metaKeyCallPath = "call_path"
+)
+
+// SubChainCallPath 在外层调用路径后追加本调用子链节点的实例 ID，多层嵌套用 "/" 拼接。
+func SubChainCallPath(parentPath, nodeID string) string {
+	if parentPath == "" {
+		return nodeID
+	}
+	return parentPath + "/" + nodeID
+}
+
+// SubChainIDOfTarget 从引擎池里子链的 targetId（project:子链ID#hash）取出子链 ID。
+func SubChainIDOfTarget(targetID string) string {
+	if i := strings.Index(targetID, ":"); i >= 0 {
+		targetID = targetID[i+1:]
+	}
+	if i := strings.Index(targetID, "#"); i >= 0 {
+		targetID = targetID[:i]
+	}
+	return targetID
+}
+
+// ScopeSubChainSteps 把子链执行期间新增的步骤改用「调用路径/节点ID」作 key，避免同一子链多次调用时
+// 子链内节点的步骤互相覆盖，也不与外层链的节点混在一起；已带本调用路径前缀的（嵌套子链已改过的）保持不变。
+func ScopeSubChainSteps(out *paramx.FlowContext, parentStepIds map[paramx.StepId]struct{}, callPath string) {
+	if out == nil || len(out.Steps) == 0 {
+		return
+	}
+	prefix := callPath + "/"
+	for k, v := range out.Steps {
+		if _, ok := parentStepIds[k]; ok || strings.HasPrefix(string(k), prefix) {
+			continue
+		}
+		delete(out.Steps, k)
+		out.Steps[paramx.StepId(prefix+string(k))] = v
+	}
 }
 
 // fail 记录失败步骤、上报失败日志与告警，并走 Failure 分支。

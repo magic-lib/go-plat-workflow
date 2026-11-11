@@ -4023,6 +4023,7 @@ function renderNodeLogItem(r) {
     durHtml,
     (r.node_name ? '<span class="log-meta log-node-name">node=' + esc(r.node_name) + '</span>' : ''),
     (r.node_id ? '<span class="log-meta log-node-id">nodeId=' + esc(r.node_id) + '</span>' : ''),
+    nodeLogChainTag(r),
     (r.env ? '<span class="log-meta">env=' + esc(r.env) + '</span>' : ''),
     (r.trace_id ? '<span class="log-meta">trace_id=' + esc(r.trace_id) + '</span>' : ''),
     (r.relation_type ? '<span class="log-meta log-relation">relation=' + esc(r.relation_type) + '</span>' : ''),
@@ -4066,6 +4067,14 @@ function renderNodeLogItem(r) {
 
 // 普通 node 运行日志列表项：在 renderNodeLogItem 基础上附加"查看该 node 下 Activities"下钻按钮。
 // 点击后用本项自身的 trace_id + node_span_id（即 node 日志的 span_id）查询该 node 关联的 activity 日志并内联展开。
+// 子链里节点的日志标签：所在子链 + 调用路径（调用该子链的子链节点实例 ID，嵌套用 / 拼接），主链节点不显示
+function nodeLogChainTag(r) {
+  if (!r || !r.call_path) return '';
+  const title = '所在子链 ' + (r.chain_id || '') + '，调用路径 ' + r.call_path;
+  return '<span class="log-meta log-sub-chain" title="' + esc(title) + '" style="background:#fef3c7;color:#92400e;border-radius:4px;padding:0 6px">子链 ' +
+    esc(r.chain_id || '') + ' · ' + esc(r.call_path) + '</span>';
+}
+
 function renderNodeLogItemWithActs(r) {
   const base = renderNodeLogItem(r);
   const uid = 'nl-' + (r.trace_id || '') + '-' + (r.node_id || '') + '-' + (r.event_id || '') + '-' + (r.timestamp || '');
@@ -4219,11 +4228,13 @@ async function loadAllLogs() {
   const env = document.getElementById('all-log-env') ? document.getElementById('all-log-env').value.trim() : '';
   const trace = document.getElementById('all-log-trace-id') ? document.getElementById('all-log-trace-id').value.trim() : '';
   const rootChainId = document.getElementById('all-log-root-chain-id') ? document.getElementById('all-log-root-chain-id').value.trim() : '';
+  const chainId = document.getElementById('all-log-chain-id') ? document.getElementById('all-log-chain-id').value.trim() : '';
   const payload = document.getElementById('all-log-payload') ? document.getElementById('all-log-payload').value.trim() : '';
   if (lv) params.set('level', lv);
   if (env) params.set('env', env);
   if (trace) params.set('trace_id', trace);
   if (rootChainId) params.set('root_chain_id', rootChainId);
+  if (chainId && _allLogType !== 'activity') params.set('chain_id', chainId);
   if (payload) params.set('keyword', payload);
   params.set('page', String(_allLogPage));
   params.set('page_size', String(_allLogPageSize));
@@ -4274,11 +4285,13 @@ function clearAllLogFilters() {
   const env = document.getElementById('all-log-env');
   const trace = document.getElementById('all-log-trace-id');
   const rc = document.getElementById('all-log-root-chain-id');
+  const chain = document.getElementById('all-log-chain-id');
   const payload = document.getElementById('all-log-payload');
   if (lv) lv.value = '';
   if (env) env.value = '';
   if (trace) trace.value = '';
   if (rc) rc.value = '';
+  if (chain) chain.value = '';
   if (payload) payload.value = '';
   _allLogPage = 1;
   loadAllLogs();
@@ -4296,6 +4309,24 @@ async function loadAllLogRootChainOptions() {
     const arr = Array.isArray(list) ? list : (list && list.list) || [];
     sel.innerHTML = '<option value="">全部 Root Chain</option>' + arr.map(c =>
       '<option value="' + esc(c.chain_id) + '">' + esc(c.name || c.chain_id) + ' · ' + esc(c.chain_id) + '</option>'
+    ).join('');
+    if (cur) sel.value = cur;
+  } catch (e) { /* 选项可选，失败不影响日志查询 */ }
+  loadAllLogChainOptions();
+}
+
+// 加载日志页「所属链」下拉选项：项目下的子链（选中后只看该子链里节点的 Node 日志）
+async function loadAllLogChainOptions() {
+  const sel = document.getElementById('all-log-chain-id');
+  if (!sel) return;
+  const cur = sel.value;
+  try {
+    const p = getProject();
+    if (!p) return;
+    const list = await api('/api/sub-chains?project=' + encodeURIComponent(p));
+    const arr = Array.isArray(list) ? list : (list && list.list) || [];
+    sel.innerHTML = '<option value="">全部所属链</option>' + arr.map(c =>
+      '<option value="' + esc(c.chain_id) + '">子链 ' + esc(c.name || c.chain_id) + ' · ' + esc(c.chain_id) + '</option>'
     ).join('');
     if (cur) sel.value = cur;
   } catch (e) { /* 选项可选，失败不影响日志查询 */ }
