@@ -803,6 +803,10 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 		if nm, ok := req.NodeNameOverrides[inst.instanceId]; ok && strings.TrimSpace(nm) != "" {
 			flowNode.Name = strings.TrimSpace(nm)
 		}
+		// 本实例的路由条件（与 Activity/CondSwitch 节点同一位置）：按子链入参与返回值求值后分流
+		if sw, ok := req.NodeSwitchOverrides[inst.instanceId]; ok && strings.TrimSpace(sw) != "" {
+			flowNode.Configuration["node_config"] = map[string]any{"switch_condition": strings.TrimSpace(sw)}
+		}
 		ruleNodes = append(ruleNodes, flowNode)
 	}
 

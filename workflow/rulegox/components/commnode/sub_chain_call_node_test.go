@@ -2,6 +2,7 @@ package commnode
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -326,5 +327,84 @@ func TestSubChainCallNode_ForwardsSubChainRelation(t *testing.T) {
 			t.Fatalf("sub chain call node log relation=%q, want True", relation)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// 根链：子链实例配置路由条件，按子链返回值 out 分流（子链返回 out=uid）
+func subChainCallRouteRootDSL(cond string) string {
+	return `{
+  "ruleChain": {"id": "R000003", "name": "route root", "root": true},
+  "metadata": {
+    "nodes": [
+      {"id": "F000001__r", "type": "custom/SubChainCall", "name": "子链R",
+       "configuration": {"targetId": "p1:F000001#abc", "node_config": {"switch_condition": "` + cond + `"},
+         "arguments": [{"key": "uid", "value": "{{arguments.uid}}"}]}},
+      {"id": "custom/ReturnValue__t", "type": "custom/ReturnValue", "name": "True",
+       "configuration": {"arguments": [{"key": "branch", "value": "true"}]}},
+      {"id": "custom/ReturnValue__f", "type": "custom/ReturnValue", "name": "False",
+       "configuration": {"arguments": [{"key": "branch", "value": "false"}]}},
+      {"id": "custom/ReturnValue__big", "type": "custom/ReturnValue", "name": "Big",
+       "configuration": {"arguments": [{"key": "branch", "value": "big"}]}},
+      {"id": "custom/ReturnValue__s", "type": "custom/ReturnValue", "name": "Success",
+       "configuration": {"arguments": [{"key": "branch", "value": "success"}]}},
+      {"id": "custom/ReturnValue__fail", "type": "custom/ReturnValue", "name": "Failure",
+       "configuration": {"arguments": [{"key": "branch", "value": "failure"}]}}
+    ],
+    "connections": [
+      {"fromId": "F000001__r", "toId": "custom/ReturnValue__t", "type": "True"},
+      {"fromId": "F000001__r", "toId": "custom/ReturnValue__f", "type": "False"},
+      {"fromId": "F000001__r", "toId": "custom/ReturnValue__big", "type": "Big"},
+      {"fromId": "F000001__r", "toId": "custom/ReturnValue__s", "type": "Success"},
+      {"fromId": "F000001__r", "toId": "custom/ReturnValue__fail", "type": "Failure"}
+    ]
+  }
+}`
+}
+
+func TestSubChainCallNode_SwitchCondition(t *testing.T) {
+	if _, err := rulego.New("p1:F000001#abc", []byte(subChainCallSubDSL)); err != nil {
+		t.Fatalf("new sub engine: %v", err)
+	}
+	defer rulego.Del("p1:F000001#abc")
+	cases := []struct {
+		name, cond, uid, want string
+	}{
+		{"bool true", "[responses.out] > 5", "7", "true"},
+		{"bool false", "[responses.out] > 5", "3", "false"},
+		{"custom relation", "If([responses.out] > 5, 'Big', 'Small')", "9", "big"},
+		{"by arguments", "[arguments.uid] == '3'", "3", "true"},
+		{"no condition keeps sub chain relation", "", "7", "success"},
+		{"eval error goes failure", "[responses.out] >", "7", "failure"},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			engineID := fmt.Sprintf("sub_chain_call_route_%d", i)
+			ruleEngine, err := rulego.New(engineID, []byte(subChainCallRouteRootDSL(c.cond)))
+			if err != nil {
+				t.Fatalf("new root engine: %v", err)
+			}
+			defer rulego.Del(engineID)
+			flowCtx := paramx.NewFlowContext("R000003", "inst", map[string]any{"uid": c.uid}, func(key string, val any) (any, bool) { return val, false })
+			md := types.NewMetadata()
+			md.PutValue("project", "p1")
+			md.PutValue("env", "test")
+			md.PutValue("root_chain_id", "R000003")
+			var data string
+			done := make(chan struct{})
+			ruleEngine.OnMsg(types.NewMsg(0, "TEST", types.JSON, md, conv.String(flowCtx)), types.WithOnEnd(func(ctx types.RuleContext, m types.RuleMsg, err error, relationType string) {
+				data = m.GetData()
+				close(done)
+			}))
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("timeout")
+			}
+			out := new(paramx.FlowContext)
+			_ = conv.Unmarshal(data, out)
+			if got := conv.String(out.Responses); got != `{"branch":"`+c.want+`"}` {
+				t.Fatalf("branch responses=%s data=%s", got, data)
+			}
+		})
 	}
 }
