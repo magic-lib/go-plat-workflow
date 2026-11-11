@@ -981,36 +981,49 @@ func (ws *WebServer) handleDeleteSubChain(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
 }
 
+// handleExecuteSubChain 测试执行子链：与根链测试执行一致，入参按「调用传入」参数包成流程上下文，
+// 必须选择执行环境（运行数据打入对应 Redis），返回结构与根链测试执行相同。
+// 子链按自身 ID 作为本次执行的链 ID，引擎池用独立 key，不影响根链里引用的同名子链实例。
 func (ws *WebServer) handleExecuteSubChain(w http.ResponseWriter, r *http.Request) {
-	project := projectParam(r)
-	chainID := r.PathValue("chain_id")
-	if project == "" {
-		writeError(w, http.StatusBadRequest, "project query parameter is required")
-		return
-	}
-	var req struct {
-		Payload string `json:"payload"`
-	}
+	var req executeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
-	if req.Payload == "" {
-		req.Payload = "{}"
-	}
-	result, err := ws.svc.LoadAndExecuteSubChain(r.Context(), project, chainID, req.Payload)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
 		return
 	}
-	_ = ws.svc.UnloadChain(r.Context(), project, chainID)
-	log.Info().Str("project", project).Str("chain_id", chainID).Msg("sub chain executed via web")
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"project":     project,
-		"chain_id":    chainID,
-		"result":      result,
-		"use_release": false,
-	})
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	req.Project = project
+	req.ChainID = r.PathValue("chain_id")
+	payloadMap, err := parsePayload(req.Payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "parse payload failed: "+err.Error())
+		return
+	}
+	if req.EnvName == "" {
+		writeError(w, http.StatusBadRequest, "env_name is required")
+		return
+	}
+	if _, err := ws.svc.GetRedisConnect(r.Context(), req.Project, req.EnvName); err != nil {
+		writeError(w, http.StatusBadRequest, "resolve redis config failed: "+err.Error())
+		return
+	}
+	def, err := ws.svc.GetSubChain(r.Context(), req.Project, req.ChainID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "sub chain not found: "+err.Error())
+		return
+	}
+	var ruleChain types.RuleChain
+	if err := json.Unmarshal([]byte(def.DSLJSON), &ruleChain); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse sub chain dsl failed: "+err.Error())
+		return
+	}
+	ws.executeDraftChain(w, r, &req, &ruleChain, payloadMap, "subchain-test:"+req.Project+":"+req.ChainID)
 }
 
 // ============================================================
@@ -1675,11 +1688,19 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	ws.executeDraftChain(w, r, &req, &ruleChain, payloadMap, "")
+}
+
+// executeDraftChain 草稿执行链 DSL（根链测试与子链测试共用），按环境把运行数据打入对应 Redis，
+// 记录执行日志并返回统一结构（http_status / trace_id / result / env_name / error）。
+// poolKey 非空时用作引擎池 key，与同 ID 的其它实例隔离。
+func (ws *WebServer) executeDraftChain(w http.ResponseWriter, r *http.Request, req *executeRequest, ruleChain *types.RuleChain, payloadMap map[string]any, poolKey string) {
 	req.TraceId = id.GetUUID(req.TraceId)
 	startTime := time.Now().UnixMilli()
-	result, err := ws.svc.ExecuteRootChainByID(r.Context(), &ruleChain, payloadMap, req.Project, req.EnvName, req.TraceId, &rulegox.ActivityFlowConfig{
+	result, err := ws.svc.ExecuteRootChainByID(r.Context(), ruleChain, payloadMap, req.Project, req.EnvName, req.TraceId, &rulegox.ActivityFlowConfig{
 		UseCache: false,
 		IsAsync:  false,
+		PoolKey:  poolKey,
 	})
 	cost := time.Now().UnixMilli() - startTime
 

@@ -5873,25 +5873,14 @@ async function saveSubChain() {
 
 function editSubChainByIndex(i) { openSubChainModal(window._subChainsForEdit[i]); }
 
+// 子链测试：与根链 Execute 同一个执行弹窗（自动列出调用传入参数、选执行环境、展示执行结果），
+// 执行走 /api/sub-chains/{id}/execute，返回结构与根链测试执行一致。
 async function executeSubChain(chainId) {
-  const payload = prompt('输入子链执行参数 (JSON)：', '{"input": "hello world"}');
-  if (payload === null) return;
-  // 打开 Execute 模态框展示结果
-  openExecuteModal();
-  const resultBox = document.getElementById('exec-result');
-  resultBox.textContent = '子链 ' + chainId + ' 执行中...';
+  let full;
   try {
-    const data = await api('/api/sub-chains/' + encodeURIComponent(chainId) + '/execute', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ payload: payload }),
-    });
-    resultBox.textContent = JSON.stringify(data, null, 2);
-    showToast('子链执行成功', 'success');
-  } catch (e) {
-    resultBox.textContent = 'ERROR: ' + e.message;
-    showToast('子链执行失败: ' + e.message, 'error');
-  }
+    full = await api('/api/sub-chains/' + encodeURIComponent(chainId));
+  } catch (e) { showToast('加载子链失败: ' + (e.message || e), 'error'); return; }
+  loadToExecute(full, true);
 }
 
 async function deleteSubChain(id) {
@@ -6549,6 +6538,10 @@ function renderExecEntryParams(params) {
 function renderExecApiDoc() {
   const box = document.getElementById('exec-api-doc');
   if (!box) return;
+  if (window._execSubChainId) {
+    box.textContent = '子链不能单独对外调用，只能在根链里作为节点使用。\n\n这里的执行用于测试子链本身：按上方「输入参数」作为子链的 arguments 执行草稿 DSL。';
+    return;
+  }
   const chainIdEl = document.getElementById('exec-chain-id');
   const chainId = chainIdEl ? chainIdEl.value.trim() : '';
   const params = window._execEntryParams || [];
@@ -6578,9 +6571,13 @@ function renderExecApiDoc() {
 
 
 
-function loadToExecute(c) {
+function loadToExecute(c, isSubChain) {
   // Execute 已改为独立模态框，由 Root Chains / SubChains 列表的 Execute 按钮打开
   openExecuteModal();
+  // 子链测试时记下子链 ID，执行改走子链执行接口
+  window._execSubChainId = isSubChain ? (c.chain_id || '') : '';
+  const resultBox = document.getElementById('exec-result');
+  if (resultBox) resultBox.textContent = '点击执行按钮开始...';
 
   document.getElementById('exec-chain-id').value = c.chain_id || '';
   document.getElementById('exec-chain-name').value = c.name || '';
@@ -6609,7 +6606,7 @@ function loadToExecute(c) {
   refreshConnSuggestions();
   window._currentTestCase = null;
   refreshTestCases();
-  showToast('已加载根链: ' + esc(c.chain_id), 'success');
+  showToast((isSubChain ? '已加载子链: ' : '已加载根链: ') + esc(c.chain_id), 'success');
 }
 
 function openExecuteModal() {
@@ -6708,8 +6705,10 @@ async function executeWorkflowByMQ() {
     env_name: envName,
     use_release: safeChecked('exec-use-release'),
   };
+  const subChainId = window._execSubChainId || '';
+  const url = subChainId ? '/api/sub-chains/' + encodeURIComponent(subChainId) + '/execute' : '/api/workflow/execute';
   try {
-    const data = await api('/api/workflow/execute', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const data = await api(url, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     resultBox.textContent = JSON.stringify(data, null, 2);
     showToast('执行成功', 'success');
   } catch (e) {
