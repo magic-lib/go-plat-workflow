@@ -7063,6 +7063,8 @@ function syncOrchConnRowTooltip(row) {
 
 function addOrchConnRow(fromId, toId, connType) {
   orchConnSeq++;
+  // 新增连接（未传 connType）默认关系为 Success；加载已有连接时按原值回显（包括空字符串），不改动已保存的数据
+  if (connType === undefined || connType === null) connType = 'Success';
   const container = document.getElementById('orch-conn-container');
   const emptyEl = document.getElementById('orch-conn-empty');
   if (emptyEl) emptyEl.style.display = 'none';
@@ -7076,7 +7078,7 @@ function addOrchConnRow(fromId, toId, connType) {
     <select data-role="orch-from">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
     <span class="conn-arrow">→</span>
     <select data-role="orch-to">${allOpts || '<option value="">-- 请选择 --</option>'}</select>
-    <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'')}" title="连接类型：留空表示新增未指定（Success / Failure / True / False / Stream 或自定义）">
+    <input type="text" data-role="orch-type" class="conn-type-sel" list="conn-type-datalist" placeholder="Success" value="${esc(connType||'')}" title="连接类型：新增默认 Success（可改为 Failure / True / False / Stream 或自定义）">
     <button type="button" class="orch-cond-warn" data-role="orch-cond-warn" style="display:none" onclick="onOrchConnWarnClick(this)" title=""></button>
     <button class="btn-remove" onclick="removeOrchConnRow('orch-conn-row-${orchConnSeq}')" title="删除">&times;</button>
   `;
@@ -9356,11 +9358,12 @@ function startOrchLinkDrag(e, fromId, fromG) {
 
 // 图上拖拽连线落点后新增连接（忽略自连）。相同 from → to 允许多条（不同连接类型）：
 // Connections 中逐条记录，Live Preview 合并为一条线、类型用逗号分隔展示。
-// 已存在同 from → to 时，新行类型留空并聚焦类型输入框，提示填写不同的连接类型。
+// 首条连接类型默认 Success；已存在同 from → to 时，新行类型留空并聚焦类型输入框，提示填写不同的连接类型。
 function addOrchConnFromPreview(fromId, toId) {
   if (!fromId || !toId || fromId === toId) return;
   const existCount = collectOrchConnections().filter(c => c.from_id === fromId && c.to_id === toId).length;
-  addOrchConnRow(fromId, toId);
+  // 首条连接默认 Success；已存在同 from → to 时留空，避免与已有连接类型重复，由用户填写不同类型
+  addOrchConnRow(fromId, toId, existCount > 0 ? '' : 'Success');
   const newRow = document.getElementById('orch-conn-row-' + orchConnSeq);
   sortOrchConnRows();
   onOrchChange();
