@@ -518,6 +518,8 @@ func (s *WorkflowService) ensureBuiltinLoopNode(ctx context.Context, project str
 		Type:    common.LoopNodeTypeName,
 		Kind:    "loop",
 		Status:  models.NodeStatusEnabled,
+		// 参数定义自带循环数据 loop_items，编排时为它配置来源
+		Params: json.RawMessage(`[{"key":"` + common.LoopItemsKey + `","label":"循环数据","type":"slice","required":true,"policy":"frontend+","value":"","description":"要遍历的数组（或对象，按键遍历），每个元素执行一次循环体；条件循环模式下不需要配置"}]`),
 	}
 	return s.nodeRepo.Create(ctx, def)
 }
