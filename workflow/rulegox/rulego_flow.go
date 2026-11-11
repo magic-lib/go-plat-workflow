@@ -65,6 +65,10 @@ type ActivityMetaData struct {
 	RedisConfig   *conn.Connect `json:"redis_config,omitempty"`
 	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），写入 wf_node_logs.root_chain_release_id。
 	RootChainReleaseID string `json:"root_chain_release_id,omitempty"`
+	// ChainID 当前节点所在的链 ID：由调用子链节点在进入子链前写入（子链 ID），子链结束后恢复；为空表示在根链里。
+	ChainID string `json:"chain_id,omitempty"`
+	// CallPath 子链调用路径：由调用子链节点在进入子链前追加自身实例 ID（嵌套用 "/" 拼接），子链结束后恢复。
+	CallPath string `json:"call_path,omitempty"`
 }
 
 func StartWorkFlow(ctx context.Context, actConfig *ActivityFlowConfig, metaData *ActivityMetaData) error {
