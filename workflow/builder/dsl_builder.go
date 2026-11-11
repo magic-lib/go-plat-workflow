@@ -437,6 +437,21 @@ func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, no
 			// 节点已不存在：丢弃该覆盖项（避免引用过期节点参数）
 			continue
 		}
+		// 条件判断节点：编排里定义过参数时以编排为准，只保留本链参数定义及其来源配置，
+		// 不再按节点定义补回参数（节点定义参数在拉入时已带入，用户在编排里删掉的不应再出现）
+		if raw, ok := entry[common.ParamInputDefsKey]; ok && condSwitchNodes[baseId] {
+			newEntry := map[string]interface{}{common.ParamInputDefsKey: raw}
+			if m, ok := raw.(map[string]any); ok {
+				raw = m["value"]
+			}
+			for _, d := range parseParamInputDefs(raw) {
+				if v, has := entry[d.Key]; has {
+					newEntry[d.Key] = v
+				}
+			}
+			out[instId] = newEntry
+			continue
+		}
 		// 若节点定义中解析不出任何参数 key（如 Params 为空或非标准格式），
 		// 无法判断哪些参数有效，则保持该实例原有覆盖不变，避免误删/污染。
 		if len(defaults) == 0 {
@@ -448,20 +463,6 @@ func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, no
 		for k, v := range entry {
 			if _, exists := defaults[k]; exists {
 				newEntry[k] = v
-			}
-		}
-		// 条件判断节点：保留本链参数定义及其来源配置
-		if condSwitchNodes[baseId] {
-			if raw, ok := entry[common.ParamInputDefsKey]; ok {
-				newEntry[common.ParamInputDefsKey] = raw
-				if m, ok := raw.(map[string]any); ok {
-					raw = m["value"]
-				}
-				for _, d := range parseParamInputDefs(raw) {
-					if v, has := entry[d.Key]; has {
-						newEntry[d.Key] = v
-					}
-				}
 			}
 		}
 		// 补充节点定义中有但覆盖中缺失的参数（以节点默认值为准）
@@ -577,12 +578,31 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 
 		// 参数输入节点 / 条件判断节点：编排时在本链定义的参数（参数名/类型/说明/默认值）以保留 key 存在参数覆盖里，
 		// 移到 configuration.input_params，不作为参数解析；参数说明同时写入 additionalInfo.node_param_labels 供执行页展示。
-		// 条件判断节点的本链参数与节点定义参数合并，各参数的来源仍按普通参数写入 arguments。
+		// 条件判断节点拉入编排时已带入节点定义参数，编排里定义过参数后以编排为准，各参数的来源仍按普通参数写入 arguments。
 		var inputParamLabels map[string]string
 		if node.Type == common.ParamInputNodeTypeName || node.Type == common.CondSwitchNodeTypeName {
 			if raw, ok := frontendMap[common.ParamInputDefsKey]; ok {
 				defs := parseParamInputDefs(raw)
 				config[common.ParamInputConfigKey] = defs
+				// 条件判断节点：编排里定义过参数时以编排为准，节点定义里有、编排里删掉的参数不再写入 arguments
+				if node.Type == common.CondSwitchNodeTypeName {
+					defKeys := make(map[string]bool, len(defs))
+					for _, d := range defs {
+						defKeys[d.Key] = true
+					}
+					keptBinds := make([]*param.BindConfig, 0, len(bindConfigs))
+					for _, bc := range bindConfigs {
+						if bc != nil && defKeys[bc.Key] {
+							keptBinds = append(keptBinds, bc)
+						}
+					}
+					bindConfigs = keptBinds
+					for k := range frontendMap {
+						if k != common.ParamInputDefsKey && !defKeys[k] {
+							delete(frontendMap, k)
+						}
+					}
+				}
 				inputParamLabels = make(map[string]string, len(defs))
 				for _, d := range defs {
 					inputParamLabels[d.Key] = d.Label
@@ -736,18 +756,6 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		}
 
 		if len(inputParamLabels) > 0 {
-			// 条件判断节点：本链参数的说明与节点定义参数的说明合并，同名以本链为准
-			if node.Type == common.CondSwitchNodeTypeName {
-				if s, ok := addInfo["node_param_labels"].(string); ok && s != "" {
-					merged := make(map[string]string)
-					if err := json.Unmarshal([]byte(s), &merged); err == nil {
-						for k, v := range inputParamLabels {
-							merged[k] = v
-						}
-						inputParamLabels = merged
-					}
-				}
-			}
 			labelJSON, _ := json.Marshal(inputParamLabels)
 			addInfo["node_param_labels"] = string(labelJSON)
 		}
