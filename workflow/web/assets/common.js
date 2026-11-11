@@ -5400,10 +5400,10 @@ function subChainRowHtml(c, i) {
         <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
         <td class="code-cell">${dslSize}</td>
         <td class="actions">
-          <button class="btn btn-sm btn-primary" onclick="executeSubChain('${esc(c.chain_id)}')">Execute</button>
-          <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPage('${esc(c.chain_id)}')">编排</button>
-          <button class="btn btn-sm btn-outline edit-only" onclick="editSubChainByIndex(${i})">编辑</button>
-          <button class="btn btn-sm btn-danger edit-only" onclick="deleteSubChain('${esc(c.chain_id)}')">删除</button>
+          <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('Execute')} onclick="executeSubChain('${esc(c.chain_id)}')">${actionIconSvg('test')}</button>
+          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编排')} onclick="orchOpenInPage('${esc(c.chain_id)}')">${actionIconSvg('orch')}</button>
+          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑')} onclick="editSubChainByIndex(${i})">${actionIconSvg('edit')}</button>
+          <button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除')} onclick="deleteSubChain('${esc(c.chain_id)}')">${actionIconSvg('delete')}</button>
         </td>
       </tr>`;
 }
@@ -5539,13 +5539,13 @@ function rootChainRowHtml(c, i) {
     <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
     <td>${paramsHtml}</td>
     <td><div class="actions">
-      <button class="btn btn-sm btn-outline edit-only" onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">编排</button>
-      <button class="btn btn-sm btn-primary edit-only" onclick="publishRootChain('${esc(c.chain_id)}')">发布</button>
-      <button class="btn btn-sm btn-outline" onclick="openReleaseModal('${esc(c.chain_id)}')">记录</button>
-      <button class="btn btn-sm btn-outline" onclick="showFlowchartByIndex(${i})">流程图</button>
-      <button class="btn btn-sm btn-outline" onclick="loadToExecuteByIndex(${i})">Execute</button>
-      <button class="btn btn-sm btn-outline edit-only" onclick="copyRootChain('${esc(c.chain_id)}')">复制</button>
-      ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger edit-only" onclick="deleteRootChain('${esc(c.chain_id)}')">删除</button>`}
+      <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编排')} onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">${actionIconSvg('orch')}</button>
+      <button class="btn btn-sm btn-primary btn-icon edit-only" ${actionIconAttrs('发布')} onclick="publishRootChain('${esc(c.chain_id)}')">${actionIconSvg('publish')}</button>
+      <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('记录')} onclick="openReleaseModal('${esc(c.chain_id)}')">${actionIconSvg('history')}</button>
+      <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('流程图')} onclick="showFlowchartByIndex(${i})">${actionIconSvg('flow')}</button>
+      <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('Execute')} onclick="loadToExecuteByIndex(${i})">${actionIconSvg('test')}</button>
+      <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('复制')} onclick="copyRootChain('${esc(c.chain_id)}')">${actionIconSvg('copy')}</button>
+      ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除')} onclick="deleteRootChain('${esc(c.chain_id)}')">${actionIconSvg('delete')}</button>`}
     </div></td>
   </tr>`;
 }
@@ -9819,13 +9819,18 @@ function publishedLockAttrs(published, title) {
   if (isAdmin()) return 'title="' + esc(title || '已发布到根链，管理员可直接编辑/删除（操作前会二次确认）') + '"';
   return 'disabled title="' + esc(title || '已发布到根链，禁止编辑/删除') + '"';
 }
-// 列表「操作」列图标按钮用的内联 SVG 图标（线条风格，颜色跟随按钮文字色）
+// 列表「操作」列图标按钮用的内联 SVG 图标（线条风格，颜色跟随按钮文字色），Activities / Nodes / Sub Chains / Root Chains 共用
 const ACTION_ICON_PATHS = {
   edit:   '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   test:   '<polygon points="6 3 20 12 6 21 6 3"/>',
   code:   '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
   log:    '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
   delete: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  orch:    '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>',
+  publish: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+  history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  flow:    '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
+  copy:    '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
 };
 function actionIconSvg(name) {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ACTION_ICON_PATHS[name] || '') + '</svg>';
