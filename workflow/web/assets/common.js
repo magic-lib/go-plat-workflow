@@ -6704,6 +6704,8 @@ function addOrchNodeInstance(nodeId) {
   } else {
     seedOrchParamDefaults(instanceId);
   }
+  // 条件判断节点：节点定义里写好的参数直接作为本链参数带入，可在「编辑节点」里修改，以编排为准
+  if (nodeType === ORCH_COND_NODE_TYPE) setOrchInputDefs(instanceId, orchCondDefsFromNode(nodeId));
   renderOrchNodeSelected();
   onOrchSelectionChange();
 }
@@ -10844,12 +10846,23 @@ function isOrchCondInst(inst) {
   return !!(inst && inst.type === ORCH_COND_NODE_TYPE);
 }
 
-// 条件判断节点的参数列表：节点定义参数 + 本链定义的参数（同名以本链为准）
+// 实例是否已有本链参数定义（空数组也算：表示参数已在编排里全部删除）
+function hasOrchInputDefs(instanceId) {
+  return !!(_orchParamPreset[instanceId] && _orchParamPreset[instanceId][ORCH_INPUT_DEFS_KEY]);
+}
+
+// 条件判断节点的参数列表：编排里定义过参数就以编排为准；没定义过（旧链）沿用节点定义参数
 function mergeOrchCondParams(inst, defParams) {
-  const custom = inst ? getOrchInputParams(inst.instanceId) : [];
-  const customKeys = {};
-  custom.forEach(p => { customKeys[p.key] = true; });
-  return (defParams || []).filter(p => p && p.key && !customKeys[p.key]).concat(custom);
+  if (inst && hasOrchInputDefs(inst.instanceId)) return getOrchInputParams(inst.instanceId);
+  return (defParams || []).filter(p => p && p.key);
+}
+
+// 节点定义里的参数转为编排参数定义（字段名 / 名称 / 转换类型 / 默认值），用于拉入节点时预填
+function orchCondDefsFromNode(nodeId) {
+  return parseNodeParams(orchNodeDefById(nodeId)).map(p => ({
+    key: p.key, label: p.label || p.description || '', type: p.type || '',
+    value: p.value == null ? '' : (typeof p.value === 'string' ? p.value : JSON.stringify(p.value)),
+  }));
 }
 
 // 取实例的参数定义
@@ -10902,7 +10915,10 @@ function fillOrchInputParamRows(instanceId, boxId) {
   const box = document.getElementById(boxId);
   if (!box) return;
   box.innerHTML = '';
-  const defs = getOrchInputDefs(instanceId);
+  let defs = getOrchInputDefs(instanceId);
+  // 条件判断节点还没在编排里定义过参数（旧链）：用节点定义里的参数预填，保存后以编排为准
+  const inst = (window._orchNodeInstances || []).find(x => x.instanceId === instanceId);
+  if (isOrchCondInst(inst) && !hasOrchInputDefs(instanceId)) defs = orchCondDefsFromNode(inst.nodeId);
   if (defs.length) defs.forEach(d => addOrchInputParamRow(d, boxId));
   else addOrchInputParamRow(null, boxId);
   refreshOrchInputParamCount(boxId);
@@ -11006,14 +11022,6 @@ function applyOrchInputDefs(instanceId, defs) {
   const newPreset = {};
   const inst = (window._orchNodeInstances || []).find(x => x.instanceId === instanceId);
   const isCond = isOrchCondInst(inst);
-  if (isCond) {
-    // 条件判断节点：节点定义参数的来源配置原样保留，只同步本链定义的参数
-    const oldKeys = {};
-    getOrchInputDefs(instanceId).forEach(d => { oldKeys[d.key] = true; });
-    Object.keys(oldPreset).forEach(k => {
-      if (k !== ORCH_INPUT_DEFS_KEY && !oldKeys[k]) newPreset[k] = oldPreset[k];
-    });
-  }
   defs.forEach(d => {
     const prev = oldPreset[d.orig || d.key] || null;
     let p;
@@ -11022,12 +11030,9 @@ function applyOrchInputDefs(instanceId, defs) {
       // 来源不是固定配置时类型跟随参数定义；调用传入的同名参数随改名一起改
       if (p.src !== PARAM_SRC_FIXED) p.type = d.type;
       if (p.src === PARAM_SRC_ENTRY && !p.private && d.orig && d.orig !== d.key && String(p.value || '').trim() === d.orig) p.value = d.key;
-    } else if (isCond && !newPreset[d.key]) {
+    } else if (isCond) {
       // 条件判断节点的新参数一般取上游的值：默认「引用节点」，在节点参数配置里选具体来源
       p = { src: PARAM_SRC_UPSTREAM, value: '', private: false, type: d.type, key: d.key, required: false, policy: 'frontend' };
-    } else if (isCond) {
-      // 与节点定义参数同名：沿用已配置的来源
-      p = Object.assign({}, newPreset[d.key], { key: d.key, type: d.type });
     } else {
       p = { src: PARAM_SRC_ENTRY, value: d.key, private: false, type: d.type, key: d.key, required: false, policy: 'frontend' };
     }

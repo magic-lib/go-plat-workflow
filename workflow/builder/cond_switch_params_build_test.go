@@ -9,18 +9,19 @@ import (
 	"github.com/rulego/rulego/api/types"
 )
 
-// 条件判断节点：编排时在本链定义的参数与节点定义参数合并写入 arguments，定义写入 input_params，说明合并
+// 条件判断节点：编排里定义过参数时以编排为准，节点定义里有、编排里删掉的参数（old）不再写入 arguments
 func TestBuildRuleNodes_CondSwitchInputDefs(t *testing.T) {
 	b := &DSLBuilder{}
 	defs := map[string]*workflow.NodeDef{
 		"N000020": {NodeID: "N000020", Name: "条件判断", Type: common.CondSwitchNodeTypeName,
-			Params: json.RawMessage(`[{"key":"age","label":"年龄","type":"int64","value":"","policy":"frontend+"}]`)},
+			Params: json.RawMessage(`[{"key":"age","label":"年龄","type":"int64","value":"","policy":"frontend+"},{"key":"old","label":"旧参数","value":"1"}]`)},
 	}
-	inputDefs := `[{"key":"score","label":"分数","type":"int64","value":"60"},{"key":"tag","label":"标签"}]`
+	inputDefs := `[{"key":"age","label":"年龄（编排）","type":"int64"},{"key":"score","label":"分数","type":"int64","value":"60"},{"key":"tag","label":"标签"}]`
 	overrides := map[string]map[string]interface{}{
 		"N000020__x": {
 			common.ParamInputDefsKey: map[string]any{"src": "fixed", "value": inputDefs},
 			"age":                    map[string]any{"src": "entry", "value": "{{arguments.age}}"},
+			"old":                    map[string]any{"src": "fixed", "value": "2"},
 			"score":                  map[string]any{"src": "upstream", "value": "{{steps.N1__a.responses.score}}", "type": "int64"},
 		},
 	}
@@ -30,7 +31,7 @@ func TestBuildRuleNodes_CondSwitchInputDefs(t *testing.T) {
 	}
 	cfg := nodes[0].Configuration
 	got, _ := json.Marshal(cfg[common.ParamInputConfigKey])
-	if string(got) != `[{"key":"score","label":"分数","type":"int64","value":"60"},{"key":"tag","label":"标签"}]` {
+	if string(got) != `[{"key":"age","label":"年龄（编排）","type":"int64"},{"key":"score","label":"分数","type":"int64","value":"60"},{"key":"tag","label":"标签"}]` {
 		t.Fatalf("input_params=%s", got)
 	}
 	raw, _ := json.Marshal(cfg["arguments"])
@@ -47,7 +48,7 @@ func TestBuildRuleNodes_CondSwitchInputDefs(t *testing.T) {
 	}
 	labels := map[string]string{}
 	_ = json.Unmarshal([]byte(nodes[0].AdditionalInfo["node_param_labels"].(string)), &labels)
-	if labels["age"] != "年龄" || labels["score"] != "分数" || labels["tag"] != "标签" {
+	if labels["age"] != "年龄（编排）" || labels["old"] != "" || labels["score"] != "分数" || labels["tag"] != "标签" {
 		t.Fatalf("labels=%v", labels)
 	}
 	nc, _ := cfg["node_config"].(map[string]any)
@@ -56,7 +57,8 @@ func TestBuildRuleNodes_CondSwitchInputDefs(t *testing.T) {
 	}
 }
 
-// 参数覆盖对齐：条件判断节点的本链参数定义及其来源不能被当成「节点定义已删除的参数」裁掉
+// 参数覆盖对齐：条件判断节点的本链参数定义及其来源不能被当成「节点定义已删除的参数」裁掉，
+// 且以编排为准，不再按节点定义补回编排里删掉的参数
 func TestReconcileNodeParamOverrides_CondSwitchKeepsInputDefs(t *testing.T) {
 	nodes := []*workflow.NodeDef{
 		{NodeID: "N000020", Type: common.CondSwitchNodeTypeName, Params: json.RawMessage(`[{"key":"age","value":"1"}]`)},
@@ -85,8 +87,8 @@ func TestReconcileNodeParamOverrides_CondSwitchKeepsInputDefs(t *testing.T) {
 	if _, ok := cond["gone"]; ok {
 		t.Fatalf("cond kept removed key: %v", cond)
 	}
-	if _, ok := cond["age"]; !ok {
-		t.Fatalf("cond missing node def param: %v", cond)
+	if _, ok := cond["age"]; ok {
+		t.Fatalf("cond should not re-add node def param removed in orchestration: %v", cond)
 	}
 	act := out["N000030__y"]
 	if _, ok := act["score"]; ok {
