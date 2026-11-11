@@ -3101,6 +3101,204 @@ async function copyActivitiesToProject() {
   closeCopyActivityModal();
 }
 
+// ============================================================
+// 从其它项目复制 Node
+// ============================================================
+let _copyNodeCandidates = [];       // 过滤后的候选列表（来源项目去重后，含完整配置）
+let _copyNodeSelected = new Set();  // 选中的 node_id 集合
+
+// nodeCopyKey 判断 Node 是否已存在的键：命名空间 + 名称
+function nodeCopyKey(n) {
+  return (n.namespace || '') + '|' + (n.name || '');
+}
+
+// nodeConfigActivities 从 Node 配置中提取引用的 Activity（命名空间 + 活动名称）
+function nodeConfigActivities(n) {
+  let cfg = n.configuration;
+  if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch (_) { cfg = null; } }
+  const nc = cfg && cfg.node_config;
+  const out = [];
+  if (!nc) return out;
+  if (Array.isArray(nc.activities)) {
+    nc.activities.forEach(stage => (Array.isArray(stage) ? stage : [stage]).forEach(it => {
+      if (it && it.act_name) out.push({ act_namespace: it.act_namespace || '', act_name: it.act_name });
+    }));
+  } else if (nc.act_name) {
+    out.push({ act_namespace: nc.act_namespace || '', act_name: nc.act_name });
+  }
+  return out;
+}
+
+// 打开复制 Node 弹窗：加载项目列表（排除当前项目）
+async function openCopyNodeModal() {
+  const p = getProject();
+  if (!p) { showToast('请先选择项目', 'error'); return; }
+  _copyNodeCandidates = [];
+  _copyNodeSelected = new Set();
+  // 用于标出来源 Node 引用、但当前项目尚不存在的 Activity
+  if (!window._activityCache || window._activityCache.length === 0) {
+    try { await loadActivities(); } catch (_) {}
+  }
+  const projectSel = document.getElementById('copy-node-project');
+  const searchEl = document.getElementById('copy-node-search');
+  if (searchEl) searchEl.value = '';
+  try {
+    const projects = await api('/api/projects');
+    const cur = projectSel.value;
+    projectSel.innerHTML = '<option value="">-- 选择来源项目 --</option>';
+    (projects || [])
+      .filter(pr => pr.project !== p)
+      .forEach(pr => {
+        const opt = document.createElement('option');
+        opt.value = pr.project;
+        opt.textContent = pr.project + (pr.description ? ' (' + pr.description + ')' : '');
+        projectSel.appendChild(opt);
+      });
+    if (cur && projectSel.querySelector('option[value="' + cur + '"]')) projectSel.value = cur;
+  } catch (e) { showToast('加载项目列表失败: ' + e.message, 'error'); }
+  document.getElementById('copy-node-overlay').classList.add('show');
+  if (projectSel.value) loadCopyNodeCandidates();
+  else {
+    document.getElementById('copy-node-list').innerHTML = '<div class="empty-state" style="padding:20px">请先选择来源项目</div>';
+    document.getElementById('copy-node-confirm').disabled = true;
+  }
+}
+
+function closeCopyNodeModal() {
+  document.getElementById('copy-node-overlay').classList.remove('show');
+}
+
+// 加载来源项目的 Node（完整配置），并过滤掉当前项目已有的（命名空间+名称）组合
+async function loadCopyNodeCandidates() {
+  const source = document.getElementById('copy-node-project').value;
+  const listEl = document.getElementById('copy-node-list');
+  const confirmBtn = document.getElementById('copy-node-confirm');
+  if (!source) {
+    listEl.innerHTML = '<div class="empty-state" style="padding:20px">请先选择来源项目</div>';
+    confirmBtn.disabled = true;
+    return;
+  }
+  listEl.innerHTML = '<div class="empty-state" style="padding:20px">加载中...</div>';
+  confirmBtn.disabled = true;
+  try {
+    // 当前项目列表可能带了命名空间/标签过滤，这里重新拉取当前项目全部 Node 用于去重
+    const [sourceNodes, curNodes] = await Promise.all([
+      api('/api/nodes?full=true&project=' + encodeURIComponent(source)),
+      api('/api/nodes')
+    ]);
+    const existKeys = {};
+    (curNodes || []).forEach(n => { existKeys[nodeCopyKey(n)] = true; });
+    // 内置返回值节点每个项目自动生成，不参与复制
+    _copyNodeCandidates = (sourceNodes || []).filter(n =>
+      n.type !== 'custom/ReturnValue' && !existKeys[nodeCopyKey(n)]);
+    _copyNodeSelected = new Set();
+    renderCopyNodeCandidates();
+  } catch (e) {
+    listEl.innerHTML = '<div class="empty-state" style="padding:20px;color:#dc2626">加载失败: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+// 渲染候选列表（带搜索过滤），并标出当前项目缺失的 Activity
+function renderCopyNodeCandidates() {
+  const listEl = document.getElementById('copy-node-list');
+  const searchEl = document.getElementById('copy-node-search');
+  const kw = searchEl ? searchEl.value.trim().toLowerCase() : '';
+  const list = (_copyNodeCandidates || []).filter(n => {
+    if (!kw) return true;
+    return [n.name, n.namespace, n.type, n.node_id]
+      .some(v => v && String(v).toLowerCase().includes(kw));
+  });
+  const confirmBtn = document.getElementById('copy-node-confirm');
+  if (list.length === 0) {
+    listEl.innerHTML = '<div class="empty-state" style="padding:20px">' +
+      (_copyNodeCandidates.length === 0 ? '来源项目的 Node 在当前项目中都已存在，无需复制' : '无匹配项') +
+      '</div>';
+    confirmBtn.disabled = true;
+    return;
+  }
+  const actKeys = {};
+  (window._activityCache || []).forEach(a => { actKeys[(a.act_namespace || '') + '|' + (a.act_name || '')] = true; });
+  listEl.innerHTML = list.map(n => {
+    const checked = _copyNodeSelected.has(n.node_id) ? 'checked' : '';
+    const missing = nodeConfigActivities(n)
+      .filter(a => !actKeys[a.act_namespace + '|' + a.act_name])
+      .map(a => a.act_namespace + '/' + a.act_name);
+    let warn = '';
+    if (missing.length > 0) {
+      warn = '<div style="color:#d97706;font-size:.76rem;margin-top:2px">当前项目缺少 Activity：' + escHtml(missing.join('、')) + '</div>';
+    }
+    if (n.type === 'custom/RootChainCall') {
+      warn += '<div style="color:#d97706;font-size:.76rem;margin-top:2px">调用的是来源项目的根链，复制后需重新选择目标根链</div>';
+    }
+    return '<label class="copy-act-item" style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border)">' +
+      '<input type="checkbox" ' + checked + ' onchange="onCopyNodeCandidateToggle(\'' + escAttr(n.node_id) + '\', this.checked)">' +
+      '<span style="flex:1">' +
+        '<strong>' + escHtml(n.name) + '</strong>' +
+        (n.namespace ? '<span style="color:var(--text-muted);font-size:.8rem;margin-left:8px">' + escHtml(n.namespace) + '</span>' : '') +
+        (n.type ? '<span class="badge" style="margin-left:8px">' + escHtml(n.type) + '</span>' : '') +
+        warn +
+      '</span>' +
+      '<span style="color:var(--text-muted);font-size:.78rem">' + escHtml(n.node_id) + '</span>' +
+    '</label>';
+  }).join('');
+  confirmBtn.disabled = _copyNodeSelected.size === 0;
+}
+
+function onCopyNodeCandidateToggle(nodeID, checked) {
+  if (checked) _copyNodeSelected.add(nodeID);
+  else _copyNodeSelected.delete(nodeID);
+  document.getElementById('copy-node-confirm').disabled = _copyNodeSelected.size === 0;
+}
+
+// 将选中的 Node（来自来源项目）配置复制到当前项目
+async function copyNodesToProject() {
+  const p = getProject();
+  const source = document.getElementById('copy-node-project').value;
+  if (!source) { showToast('请先选择来源项目', 'error'); return; }
+  const ids = Array.from(_copyNodeSelected);
+  if (ids.length === 0) { showToast('请选择要复制的 Node', 'error'); return; }
+  const candidatesByID = {};
+  _copyNodeCandidates.forEach(n => { candidatesByID[n.node_id] = n; });
+  const confirmBtn = document.getElementById('copy-node-confirm');
+  confirmBtn.disabled = true;
+  let ok = 0, fail = 0;
+  for (const id of ids) {
+    const src = candidatesByID[id];
+    if (!src) continue;
+    // 克隆配置：project 改为当前项目，node_id 留空由后端生成新的 ID（不复用来源 ID）
+    const body = {
+      name: src.name,
+      namespace: src.namespace || '',
+      type: src.type,
+      kind: src.kind || '',
+      category: src.category || '',
+      tags: src.tags || [],
+      version: src.version || '',
+      status: src.status || 1,
+      description: src.description || '',
+      debug_mode: !!src.debug_mode,
+      configuration: src.configuration || {},
+      additional_info: src.additional_info || {},
+      params: src.params || [],
+      outputs: src.outputs || []
+    };
+    try {
+      await api('/api/nodes?project=' + encodeURIComponent(p), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      ok++;
+    } catch (e) {
+      fail++;
+      showToast('复制 ' + (src.name || id) + ' 失败: ' + e.message, 'error');
+    }
+  }
+  if (ok > 0) showToast('已复制 ' + ok + ' 个 Node 到当前项目 ' + p + (fail > 0 ? ('，' + fail + ' 个失败') : ''), 'success');
+  if (ok > 0) loadNodes();
+  closeCopyNodeModal();
+}
+
 // 保存 activity
 async function saveActivity() {
   const isEdit = document.getElementById('act-is-edit').value === '1';
