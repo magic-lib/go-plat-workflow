@@ -96,7 +96,8 @@ func collectInputArguments(nodes []*types.RuleNode, onlyRequired bool) []string 
 			continue
 		}
 		var skipKeys map[string]bool
-		if onlyRequired && node.Type == common.ParamInputNodeTypeName {
+		// 参数输入节点、条件判断节点：配置了默认值的参数调用方可不传
+		if onlyRequired && (node.Type == common.ParamInputNodeTypeName || node.Type == common.CondSwitchNodeTypeName) {
 			skipKeys = paramInputDefaultKeys(node.Configuration[common.ParamInputConfigKey])
 		}
 		scanArray(node.Configuration["arguments"], skipKeys)

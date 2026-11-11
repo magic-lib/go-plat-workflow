@@ -8174,6 +8174,7 @@ function getOrchInstanceParams(inst) {
   if (isOrchSubInst(inst)) return getOrchSubParams(inst.instanceId);
   if (isOrchInputInst(inst)) return getOrchInputParams(inst.instanceId);
   if (isOrchLoopInst(inst)) return getOrchLoopParams(inst);
+  if (isOrchCondInst(inst)) return mergeOrchCondParams(inst, parseNodeParams(_orchNodes.find(n => n.node_id === inst.nodeId)));
   if (inst.type === 'custom/ReturnValue') {
     return (_orchRootResponses || [])
       .filter(rr => (rr.key || '').trim())
@@ -8627,6 +8628,11 @@ function getOrchRefNodeCandidates(excludeId) {
       cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: getOrchLoopParams(inst), outputs: ORCH_LOOP_OUTPUTS.slice() });
       return;
     }
+    if (isOrchCondInst(inst)) {
+      // 条件判断节点：本链定义的参数同样可被下游引用（arguments）
+      cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: mergeOrchCondParams(inst, parseNodeParams(def)), outputs: parseNodeOutputs(def) });
+      return;
+    }
     cands.push({ id: inst.instanceId, name: inst.name || inst.nodeId, type: inst.type, params: parseNodeParams(def), outputs: parseNodeOutputs(def) });
   });
   // 已选子链实例（按实例 ID 排除自身，且必须在祖先集合内）
@@ -8945,7 +8951,7 @@ function storeParamPreset() {
       pdesc = rr ? (rr.description || '') : '';
       // 非固定配置时类型还原为返回值定义默认类型（typeSel 已在此前 onParamSrcChange 中重置）
       if (src !== PARAM_SRC_FIXED && rr && rr.type) ptype = rr.type;
-    } else if (isOrchInputInst(inst)) {
+    } else if (isOrchInputInst(inst) || isOrchCondInst(inst)) {
       const d = getOrchInputDefs(nodeId).find(x => x.key === key);
       plabel = d ? (d.label || '') : '';
       pdesc = plabel;
@@ -9177,18 +9183,21 @@ function copyOrchVarSnippet(el) {
 }
 
 // 渲染 switch 编辑器里的「输入参数 / 输出返回值」可复制列表（与节点编辑页「可用变量」一致）
-function renderOrchSwitchVarBoxes(inBox, outBox, n) {
+function renderOrchSwitchVarBoxes(inBox, outBox, n, instanceId) {
   const parseVarArr = (v) => {
     if (!v) return [];
     if (Array.isArray(v)) return v;
     try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch(e) { return []; }
   };
   const inItems = [], outItems = [];
+  // 条件判断节点：节点定义参数与本链定义的参数合并展示（同名以本链为准）
+  const inst = instanceId ? (window._orchNodeInstances || []).find(x => x.instanceId === instanceId) : null;
+  const inParams = isOrchCondInst(inst) ? mergeOrchCondParams(inst, n ? parseVarArr(n.params) : []) : (n ? parseVarArr(n.params) : []);
+  inParams.forEach(p => {
+    if (!p || !p.key) return;
+    inItems.push({ ref: '[arguments.' + p.key + ']', meta: [p.label, p.type].filter(Boolean).join(' / ') });
+  });
   if (n) {
-    parseVarArr(n.params).forEach(p => {
-      if (!p || !p.key) return;
-      inItems.push({ ref: '[arguments.' + p.key + ']', meta: [p.label, p.type].filter(Boolean).join(' / ') });
-    });
     parseVarArr(n.outputs).forEach(o => {
       if (!o || !o.key) return;
       outItems.push({ ref: '[responses.' + o.key + ']', meta: [o.label, o.type].filter(Boolean).join(' / ') });
@@ -9232,9 +9241,9 @@ async function orchOpenNodeSwitchEditor(instanceId) {
   const isSwitchable = (nodeType === 'custom/Activity' || nodeType === 'custom/CondSwitch');
   const condWrap = document.getElementById('orch-switch-cond-wrap');
   if (condWrap) condWrap.style.display = isSwitchable ? 'block' : 'none';
-  // 参数输入节点：查出已添加的参数列表，可继续新增、修改、删除
+  // 参数输入节点 / 条件判断节点：查出已添加的参数列表，可继续新增、修改、删除
   const inputWrap = document.getElementById('orch-switch-input-wrap');
-  const isInput = nodeType === ORCH_INPUT_NODE_TYPE;
+  const isInput = nodeType === ORCH_INPUT_NODE_TYPE || nodeType === ORCH_COND_NODE_TYPE;
   if (inputWrap) inputWrap.style.display = isInput ? 'block' : 'none';
   if (isInput) fillOrchInputParamRows(instanceId, ORCH_INPUT_SWITCH_BOX_ID);
 
@@ -9250,7 +9259,7 @@ async function orchOpenNodeSwitchEditor(instanceId) {
   // 先用缓存渲染，再用节点详情接口校准（保证参数/输出列表准确，不受列表接口过滤影响）
   const inBox = document.getElementById('orch-switch-input-vars');
   const outBox = document.getElementById('orch-switch-output-vars');
-  renderOrchSwitchVarBoxes(inBox, outBox, hasDef ? n : null);
+  renderOrchSwitchVarBoxes(inBox, outBox, hasDef ? n : null, instanceId);
   modal.style.display = 'flex';
 
   // 直接拉取节点详情（含 params/outputs/switch_condition），覆盖缓存结果，确保展示该节点真实参数与路由条件
@@ -9258,7 +9267,7 @@ async function orchOpenNodeSwitchEditor(instanceId) {
     try {
       const detail = await api('/api/nodes/' + encodeURIComponent(nodeId));
       if (detail) {
-        renderOrchSwitchVarBoxes(inBox, outBox, detail);
+        renderOrchSwitchVarBoxes(inBox, outBox, detail, instanceId);
         _orchSwitchDefaultName = detail.name || _orchSwitchDefaultName;
         // 若缓存未取到节点名，用详情补充标题
         if (!hasDef) {
@@ -9289,9 +9298,10 @@ function saveOrchSwitchOverride() {
   if (!id) { showToast('未指定编辑节点', 'error'); return; }
   const inst = (window._orchNodeInstances || []).find(x => x.instanceId === id);
   const isSwitchable = inst && (inst.type === 'custom/Activity' || inst.type === 'custom/CondSwitch');
-  // 参数输入节点：先校验参数列表，不通过时不关闭弹框
-  const inputDefs = isOrchInputInst(inst) ? collectOrchInputParamRows(ORCH_INPUT_SWITCH_BOX_ID) : null;
-  if (isOrchInputInst(inst) && !inputDefs) return;
+  // 参数输入节点 / 条件判断节点：先校验参数列表，不通过时不关闭弹框
+  const hasInputDefs = isOrchInputInst(inst) || isOrchCondInst(inst);
+  const inputDefs = hasInputDefs ? collectOrchInputParamRows(ORCH_INPUT_SWITCH_BOX_ID) : null;
+  if (hasInputDefs && !inputDefs) return;
   const ta = document.getElementById('orch-switch-text');
   const val = (ta.value || '').trim();
   // 路由条件仅在 Activity / CondSwitch 节点写入；其它节点忽略，并清除可能残留的覆盖
@@ -9325,7 +9335,7 @@ function saveOrchSwitchOverride() {
     renderOrchNodeSelected();
     onOrchSelectionChange();
   }
-  showToast(isSwitchable ? '已更新该节点名称与路由条件（仅本链生效）'
+  showToast(isSwitchable ? (inputDefs ? '已更新该节点名称、参数与路由条件（仅本链生效）' : '已更新该节点名称与路由条件（仅本链生效）')
     : (inputDefs ? '已更新该节点名称与参数列表（仅本链实例生效）' : '已更新该节点名称（仅本链实例生效）'), 'success');
 }
 
@@ -11478,6 +11488,22 @@ function isOrchInputInst(inst) {
   return !!(inst && inst.type === ORCH_INPUT_NODE_TYPE);
 }
 
+// 条件判断节点（custom/CondSwitch）：与参数输入节点一样可在编排时为本实例定义参数（存同一保留 key），
+// 再在「节点参数配置」里为每个参数选来源，路由条件里用 [arguments.参数名] 判断。
+const ORCH_COND_NODE_TYPE = 'custom/CondSwitch';
+
+function isOrchCondInst(inst) {
+  return !!(inst && inst.type === ORCH_COND_NODE_TYPE);
+}
+
+// 条件判断节点的参数列表：节点定义参数 + 本链定义的参数（同名以本链为准）
+function mergeOrchCondParams(inst, defParams) {
+  const custom = inst ? getOrchInputParams(inst.instanceId) : [];
+  const customKeys = {};
+  custom.forEach(p => { customKeys[p.key] = true; });
+  return (defParams || []).filter(p => p && p.key && !customKeys[p.key]).concat(custom);
+}
+
 // 取实例的参数定义
 function getOrchInputDefs(instanceId) {
   const p = _orchParamPreset[instanceId] && _orchParamPreset[instanceId][ORCH_INPUT_DEFS_KEY];
@@ -11630,6 +11656,16 @@ function applyOrchInputDefs(instanceId, defs) {
   storeParamPreset(); // 先把参数配置区当前的编辑结果写回暂存
   const oldPreset = _orchParamPreset[instanceId] || {};
   const newPreset = {};
+  const inst = (window._orchNodeInstances || []).find(x => x.instanceId === instanceId);
+  const isCond = isOrchCondInst(inst);
+  if (isCond) {
+    // 条件判断节点：节点定义参数的来源配置原样保留，只同步本链定义的参数
+    const oldKeys = {};
+    getOrchInputDefs(instanceId).forEach(d => { oldKeys[d.key] = true; });
+    Object.keys(oldPreset).forEach(k => {
+      if (k !== ORCH_INPUT_DEFS_KEY && !oldKeys[k]) newPreset[k] = oldPreset[k];
+    });
+  }
   defs.forEach(d => {
     const prev = oldPreset[d.orig || d.key] || null;
     let p;
@@ -11638,6 +11674,12 @@ function applyOrchInputDefs(instanceId, defs) {
       // 来源不是固定配置时类型跟随参数定义；调用传入的同名参数随改名一起改
       if (p.src !== PARAM_SRC_FIXED) p.type = d.type;
       if (p.src === PARAM_SRC_ENTRY && !p.private && d.orig && d.orig !== d.key && String(p.value || '').trim() === d.orig) p.value = d.key;
+    } else if (isCond && !newPreset[d.key]) {
+      // 条件判断节点的新参数一般取上游的值：默认「引用节点」，在节点参数配置里选具体来源
+      p = { src: PARAM_SRC_UPSTREAM, value: '', private: false, type: d.type, key: d.key, required: false, policy: 'frontend' };
+    } else if (isCond) {
+      // 与节点定义参数同名：沿用已配置的来源
+      p = Object.assign({}, newPreset[d.key], { key: d.key, type: d.type });
     } else {
       p = { src: PARAM_SRC_ENTRY, value: d.key, private: false, type: d.type, key: d.key, required: false, policy: 'frontend' };
     }
