@@ -790,7 +790,7 @@ function renderNodeTable() {
   tbody.innerHTML = all.slice(start, start + _nodePageSize).map(({ n, i }) => `
       <tr>
         <td class="code-cell" title="${esc(n.node_id)}">${esc(n.node_id)}</td>
-        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
+        <td>${esc(n.name)}<span style="margin-left:4px">${nodeHeartbeatIconHtml(n.node_heartbeats)}</span>${nodeRouteBadge(n, true)}${n.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
         <td><span class="code-cell">${esc(n.type)}</span></td>
         <td data-kind="${esc(nodeKindMeta(n.kind).kind)}"><span class="badge ${nodeKindMeta(n.kind).cls}">${nodeKindMeta(n.kind).label}</span></td>
         <td>${renderTagChipsHtml(n.tags)}</td>
@@ -10491,7 +10491,8 @@ function nodeSwitchConditionText(n) {
   const v = (cfg && cfg.node_config && cfg.node_config.switch_condition) || '';
   return String(v).trim();
 }
-function nodeRouteBadge(n) {
+// iconOnly=true 时只显示 🔀 图标（Nodes 列表用，省宽度），路由说明仍在悬停 title 里
+function nodeRouteBadge(n, iconOnly) {
   if (!n) return '';
   const has = (typeof n.has_switch_condition === 'boolean')
     ? n.has_switch_condition
@@ -10499,7 +10500,7 @@ function nodeRouteBadge(n) {
   if (!has) return '';
   const expr = nodeSwitchConditionText(n);
   const tip = expr ? ('已配置路由条件（switch_condition）：' + expr) : '已配置路由条件（switch_condition），执行后按返回值路由到不同分支';
-  return ' <span class="route-badge" title="' + esc(tip) + '">🔀路由</span>';
+  return ' <span class="route-badge" title="' + esc(tip) + '">' + (iconOnly ? '🔀' : '🔀路由') + '</span>';
 }
 // 编排 Live Preview（Mermaid 节点标签内）的路由标记。
 // 与 nodeRouteBadge 判定逻辑一致，但 Mermaid 标签整体由双引号包裹且 class 对 SVG 内元素不生效，
