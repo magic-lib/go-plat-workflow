@@ -8,7 +8,7 @@ require (
 	github.com/magic-lib/go-plat-mq v1.0.2026081302-0.20261011032904-70c6efdf63db
 	github.com/magic-lib/go-plat-retry v1.20261016.1
 	github.com/magic-lib/go-plat-startupcfg v1.20260210.2-0.20261017135711-8445ab97b410
-	github.com/magic-lib/go-plat-utils v1.20261102.2-0.20261103130451-c35c107e53e0
+	github.com/magic-lib/go-plat-utils v1.20261102.2-0.20261114135413-a81ecb99da2b
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.35.1
