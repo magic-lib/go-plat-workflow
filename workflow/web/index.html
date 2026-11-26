@@ -184,6 +184,11 @@
         <div id="act-return-values-container" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
           <div id="act-return-values-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无返回值设置</div>
         </div>
+        <div class="form-row" style="align-items:center;gap:6px;margin-top:8px">
+          <input type="checkbox" id="act-allow-nil-return" style="width:auto;margin:0">
+          <label for="act-allow-nil-return" style="margin:0;font-size:.82rem;cursor:pointer;font-weight:600">允许返回空</label>
+          <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（活动返回 nil 时不报错：对象返回 new 一个空对象并按返回值类型补零值，单值返回取类型零值；仅建议"查不到属正常业务"的活动开启）</span>
+        </div>
       </div>
       <div class="form-group" style="display: none;">
         <label>返回值模版 (Responses JSON，可选)</label>

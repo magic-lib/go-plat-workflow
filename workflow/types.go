@@ -875,6 +875,9 @@ type ActivityDef struct {
 	// ReturnValues 返回值设置列表（每一项从活动返回值 map 中提取指定 key 重命名输出）。
 	// 若某一项 Key 为空，表示该返回值项返回活动返回的所有内容。
 	ReturnValues json.RawMessage `json:"return_values,omitempty"`
+	// AllowNilReturn 是否允许活动返回 nil。默认 false：定义了返回值却返回 nil 时按错误处理并告警；
+	// 为 true 时不报错，new 一个空对象（或按返回值类型的零值）继续往下走。
+	AllowNilReturn bool `json:"allow_nil_return,omitempty"`
 	// Status 状态：1=启用，0=禁用
 	Status int8 `json:"status"`
 	// Description 描述

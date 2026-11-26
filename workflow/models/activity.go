@@ -24,24 +24,26 @@ func NormalizeJSONRaw(raw json.RawMessage) string {
 
 // ActivityModel activity 模板持久化模型，对应 wf_activities 表。
 type ActivityModel struct {
-	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Project      string    `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_activity_id,priority:1;uniqueIndex:uk_project_ns_name,priority:1;not null;index" json:"project"`
-	ActivityID   string    `gorm:"column:activity_id;type:varchar(128);uniqueIndex:uk_project_activity_id,priority:2;not null" json:"activity_id"`
-	Name         string    `gorm:"type:varchar(255);not null" json:"name"`
-	ActNamespace string    `gorm:"column:act_namespace;type:varchar(255);not null;index;uniqueIndex:uk_project_ns_name,priority:2" json:"act_namespace"`
-	ActName      string    `gorm:"column:act_name;type:varchar(255);not null;uniqueIndex:uk_project_ns_name,priority:3" json:"act_name"`
-	ActivityType string    `gorm:"column:activity_type;type:varchar(128)" json:"activity_type"`
-	Kind         string    `gorm:"column:kind;type:varchar(32);default:redis" json:"kind"`
-	HTTPConfig   string    `gorm:"column:http_config;type:text" json:"http_config"`
-	Arguments    string    `gorm:"type:text" json:"arguments"`
-	ArgTemplate  string    `gorm:"column:arg_template;type:text" json:"arg_template"`
-	Responses    string    `gorm:"type:text" json:"responses"`
-	ReturnValues string    `gorm:"column:return_values;type:text" json:"return_values"`
-	Status       int8      `gorm:"default:1;index" json:"status"`
-	Description  string    `gorm:"type:varchar(512)" json:"description"`
-	Tags         string    `gorm:"type:varchar(512)" json:"tags"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Project      string `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_activity_id,priority:1;uniqueIndex:uk_project_ns_name,priority:1;not null;index" json:"project"`
+	ActivityID   string `gorm:"column:activity_id;type:varchar(128);uniqueIndex:uk_project_activity_id,priority:2;not null" json:"activity_id"`
+	Name         string `gorm:"type:varchar(255);not null" json:"name"`
+	ActNamespace string `gorm:"column:act_namespace;type:varchar(255);not null;index;uniqueIndex:uk_project_ns_name,priority:2" json:"act_namespace"`
+	ActName      string `gorm:"column:act_name;type:varchar(255);not null;uniqueIndex:uk_project_ns_name,priority:3" json:"act_name"`
+	ActivityType string `gorm:"column:activity_type;type:varchar(128)" json:"activity_type"`
+	Kind         string `gorm:"column:kind;type:varchar(32);default:redis" json:"kind"`
+	HTTPConfig   string `gorm:"column:http_config;type:text" json:"http_config"`
+	Arguments    string `gorm:"type:text" json:"arguments"`
+	ArgTemplate  string `gorm:"column:arg_template;type:text" json:"arg_template"`
+	Responses    string `gorm:"type:text" json:"responses"`
+	ReturnValues string `gorm:"column:return_values;type:text" json:"return_values"`
+	// AllowNilReturn 是否允许活动返回 nil（true 时返回 nil 不报错，按空对象/零值处理）
+	AllowNilReturn bool      `gorm:"column:allow_nil_return;not null;default:false" json:"allow_nil_return"`
+	Status         int8      `gorm:"default:1;index" json:"status"`
+	Description    string    `gorm:"type:varchar(512)" json:"description"`
+	Tags           string    `gorm:"type:varchar(512)" json:"tags"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // TableName 返回表名。
@@ -52,22 +54,23 @@ func (ActivityModel) TableName() string {
 // ToDef 将数据库模型转换为 ActivityDef。
 func (m *ActivityModel) ToDef() *workflow.ActivityDef {
 	def := &workflow.ActivityDef{
-		Project:      m.Project,
-		ActivityID:   m.ActivityID,
-		Name:         m.Name,
-		ActNamespace: m.ActNamespace,
-		ActName:      m.ActName,
-		ActivityType: m.ActivityType,
-		Kind:         m.Kind,
-		HTTPConfig:   m.HTTPConfig,
-		Arguments:    json.RawMessage(m.Arguments),
-		ArgTemplate:  m.ArgTemplate,
-		Responses:    json.RawMessage(m.Responses),
-		ReturnValues: json.RawMessage(m.ReturnValues),
-		Status:       m.Status,
-		Description:  m.Description,
-		CreatedAt:    m.CreatedAt,
-		UpdatedAt:    m.UpdatedAt,
+		Project:        m.Project,
+		ActivityID:     m.ActivityID,
+		Name:           m.Name,
+		ActNamespace:   m.ActNamespace,
+		ActName:        m.ActName,
+		ActivityType:   m.ActivityType,
+		Kind:           m.Kind,
+		HTTPConfig:     m.HTTPConfig,
+		Arguments:      json.RawMessage(m.Arguments),
+		ArgTemplate:    m.ArgTemplate,
+		Responses:      json.RawMessage(m.Responses),
+		ReturnValues:   json.RawMessage(m.ReturnValues),
+		AllowNilReturn: m.AllowNilReturn,
+		Status:         m.Status,
+		Description:    m.Description,
+		CreatedAt:      m.CreatedAt,
+		UpdatedAt:      m.UpdatedAt,
 	}
 	def.Tags = parseTags(m.Tags)
 	return def
@@ -91,6 +94,7 @@ func (m *ActivityModel) FromDef(def *workflow.ActivityDef) {
 	m.ArgTemplate = def.ArgTemplate
 	m.Responses = NormalizeJSONRaw(def.Responses)
 	m.ReturnValues = NormalizeJSONRaw(def.ReturnValues)
+	m.AllowNilReturn = def.AllowNilReturn
 	m.Status = def.Status
 	m.Description = def.Description
 	m.Tags = serializeTags(def.Tags)

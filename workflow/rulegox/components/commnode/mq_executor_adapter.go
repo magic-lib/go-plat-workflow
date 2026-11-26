@@ -93,6 +93,8 @@ type ActivityStoreFetcher interface {
 type ActivityTemplateDef struct {
 	// ReturnValues 返回值设置列表（每一项从活动返回值 map 中提取指定 key 重命名输出），JSON 原始串。
 	ReturnValues json.RawMessage `json:"return_values"`
+	// AllowNilReturn 是否允许活动返回 nil（true 时返回 nil 不报错，按空对象/零值处理）。
+	AllowNilReturn bool `json:"allow_nil_return"`
 }
 
 // defaultActivityStore 包级默认的 activity 模板仓储（由 workflow 包在初始化时注入）。
