@@ -2037,6 +2037,9 @@ function renderActivityItemParams(row) {
     const defVal = (p.value !== undefined && p.value !== null && p.value !== '') ? String(p.value)
                  : (p.default_value !== undefined && p.default_value !== null && p.default_value !== '') ? String(p.default_value) : '';
     bind._defVal = defVal;
+    // 首次绑定（尚无保存记录）时，固定配置的默认值类型取 Activity 参数定义里的 type；
+    // 已保存过的绑定保持原样，避免老节点重新保存后类型被悄悄改掉
+    if (!existingBinds[key]) bind._defType = p.type || p.value_type || '';
     return argRenderArgBindRow(row, key, bind, { prevs: prevs, nodeParams: nodeParams, nodeRefOptions: nodeRefOptions });
   }).join('');
 
@@ -2092,6 +2095,10 @@ function onArgSourceChange(sel) {
     const b = liveBinds[key] || {};
     b.source = newSrc;
     if (newSrc === 'value') { b.ref = ''; } // 切回手工配置时清空引用路径
+    // 引用节点：本节点还没有同名参数时，自动按 Activity 参数定义补一个节点参数并选中，用户可再修改或删除
+    if (newSrc === 'ref_node' && ensureNodeParamForArg(actItem, key)) {
+      b.ref = '{{arguments.' + key + '}}';
+    }
     liveBinds[key] = b;
   }
   actItem.setAttribute('data-args', JSON.stringify(liveBinds));
@@ -2122,6 +2129,30 @@ function onArgSourceChange(sel) {
     }
   }
   syncActivityConfig();
+}
+
+// 「引用节点」时若本节点没有同名参数，按当前 Activity 的参数定义（显示名 / 类型 / 必填 / 描述）
+// 自动在节点参数里补一行，并把新选项补进页面上其它「引用节点」下拉。纯前端操作，保存节点时才落库。
+// 返回 true 表示新增了参数；已存在同名参数时不做任何改动并返回 false。
+function ensureNodeParamForArg(actItem, key) {
+  if (!key || !document.getElementById('node-params-container')) return false;
+  if (nodeParamDefs().some(p => p.key === key)) return false;
+  const ns = actItem.getAttribute('data-ns') || '';
+  const name = actItem.getAttribute('data-name') || '';
+  const act = (window._activityCache || []).find(a => a.act_namespace === ns && a.act_name === name);
+  let actParams = [];
+  if (act && act.arguments) {
+    try { actParams = (typeof act.arguments === 'string') ? JSON.parse(act.arguments || '[]') : (act.arguments || []); } catch (e) { actParams = []; }
+  }
+  const def = (Array.isArray(actParams) ? actParams.find(x => (x.key || '') === key) : null) || {};
+  addParamRow(key, def.label || '', argDefaultBindType(def.type || def.value_type), !!def.required, '', def.description || '', 'frontend+');
+  const refVal = '{{arguments.' + key + '}}';
+  const optHtml = '<option value="' + escAttr(refVal) + '">' + escHtml((def.label || key) + ' (' + key + ')') + '</option>';
+  document.querySelectorAll('select.arg-ref-node').forEach(sel => {
+    if (!Array.from(sel.options).some(o => o.value === refVal)) sel.insertAdjacentHTML('beforeend', optHtml);
+  });
+  showToast('本节点没有参数 ' + key + '，已自动添加到节点参数，可在节点参数里修改或删除', 'success');
+  return true;
 }
 
 // 固定配置类型变化：即时同步进当前 activity 的 data-args 权威快照，避免后续整卡重渲染/保存时丢失
@@ -4625,6 +4656,15 @@ let paramSeq = 0;
 // 参数「值类型」统一候选列表（7 种），参数定义（addParamRow）与 Activity 参数值绑定（argRenderArgInput）
 // 共用同一份，保证两处可选择的转换类型完全一致。顺序：string / int64 / float64 / bool / slice / map / formula。
 const ARG_TYPE_OPTIONS = ['string', 'int64', 'float64', 'bool', 'slice', 'map', 'formula'];
+
+// Activity 参数值绑定「固定配置」的默认值类型：取 Activity 参数定义里的 type，
+// 归一到 ARG_TYPE_OPTIONS（兼容 int/float/boolean 等写法），无法识别时回退 string。
+const ARG_TYPE_ALIASES = { int: 'int64', int32: 'int64', integer: 'int64', float: 'float64', float32: 'float64', double: 'float64', boolean: 'bool' };
+function argDefaultBindType(t) {
+  const v = String(t || '').trim().toLowerCase();
+  if (ARG_TYPE_OPTIONS.includes(v)) return v;
+  return ARG_TYPE_ALIASES[v] || 'string';
+}
 
 function addParamRow(key, label, type, required, defaultValue, description, policy) {
   paramSeq++;
@@ -10386,7 +10426,8 @@ function argRenderArgInput(key, bind, argCtx) {
   if (src === 'value') {
     // 手工配置：在输入框后追加「类型」选择框（string/int64/float64/formula）。
     // type 会写入绑定结构，后端按类型决定是否做类型计算/公式求值。
-    const typ = bind.type || 'string';
+    // 未保存过 type 时默认取 Activity 参数定义里的类型，用户可再手动修改。
+    const typ = argDefaultBindType(bind.type || bind._defType);
     const ph = typ === 'formula'
       ? '公式，如 {{arguments.a}} + {{arguments.b}}'
       : '固定配置（留空则用活动默认值）';
