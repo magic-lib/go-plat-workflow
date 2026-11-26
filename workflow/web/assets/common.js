@@ -338,7 +338,7 @@ function renderProjectConfig(cfg) {
     <tr>
       <td class="code-cell">${esc(e.env_name)}</td>
       <td>${esc(e.description||'')}</td>
-      <td>${e.redis_config? esc(e.redis_config.addr||'') : '-'}</td>
+      <td>${e.redis_config? esc(e.redis_config.addr||'') + (e.redis_config.worker_addr ? '<br><span style="color:var(--text-muted,#888);font-size:.8em">worker: ' + esc(e.redis_config.worker_addr) + '</span>' : '') : '-'}</td>
       <td>${e.mysql_config? esc((e.mysql_config.host||'')+':'+(e.mysql_config.port||'')) : '-'}</td>
       <td>${(e.env_vars||[]).length}</td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty-state"><p>暂无环境配置</p></div></td></tr>';
@@ -404,7 +404,7 @@ function resetEnvConfigForm() {
   document.getElementById('env-description').value = '';
   document.getElementById('env-vars-list').innerHTML = '';
   addEnvVarRow();
-  ['env-redis-addr','env-redis-pwd','env-redis-user','env-mysql-host','env-mysql-user','env-mysql-pwd','env-mysql-db','env-mysql-dsn'].forEach(id=>document.getElementById(id).value='');
+  ['env-redis-addr','env-redis-pwd','env-redis-user','env-redis-worker-addr','env-mysql-host','env-mysql-user','env-mysql-pwd','env-mysql-db','env-mysql-dsn'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('env-redis-db').value = '0';
   document.getElementById('env-mysql-port').value = '3306';
   document.getElementById('env-save-btn').textContent = '保存环境配置';
@@ -472,6 +472,7 @@ function editEnvConfigByIndex(i) {
   document.getElementById('env-redis-pwd').value = rc.password || '';
   document.getElementById('env-redis-db').value = (rc.db == null ? 0 : rc.db);
   document.getElementById('env-redis-user').value = rc.username || '';
+  document.getElementById('env-redis-worker-addr').value = rc.worker_addr || '';
   const mc = c.mysql_config || {};
   document.getElementById('env-mysql-host').value = mc.host || '';
   document.getElementById('env-mysql-port').value = (mc.port == null ? 3306 : mc.port);
@@ -611,6 +612,7 @@ function envRedisFormConfig() {
     password: document.getElementById('env-redis-pwd').value,
     db: parseInt(document.getElementById('env-redis-db').value) || 0,
     username: document.getElementById('env-redis-user').value.trim(),
+    worker_addr: document.getElementById('env-redis-worker-addr').value.trim(),
   };
 }
 
@@ -3400,12 +3402,14 @@ function onListenerEnvChange() {
   renderActivityListenerCode();
 }
 
-// 根据所选环境从缓存中取 Redis 配置（addr 形如 host:port）
+// 根据所选环境从缓存中取 Redis 配置（addr 形如 host:port）。
+// 代码示例给 worker 用，配置了 worker_addr（内网地址）时优先用它。
 function getListenerRedisCfg(envName) {
   const def = _listenerEnvs.find(e => e.env_name === envName);
   const cfg = { host: '127.0.0.1', port: '6379', password: '', db: '0' };
-  if (def && def.redis_config && def.redis_config.addr) {
-    const parts = def.redis_config.addr.split(':');
+  const workerAddr = def && def.redis_config ? ((def.redis_config.worker_addr || '').trim() || def.redis_config.addr) : '';
+  if (workerAddr) {
+    const parts = workerAddr.split(':');
     if (parts[0]) cfg.host = parts[0];
     if (parts[1]) cfg.port = parts[1];
     if (def.redis_config.password) cfg.password = def.redis_config.password;
