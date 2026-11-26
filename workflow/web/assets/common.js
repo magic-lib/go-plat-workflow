@@ -773,13 +773,24 @@ function applyNodeListFilter() {
   return result;
 }
 
+// Nodes 列表「参数数」单元格：与 Activities 列表参数数同款（td.arg-count），悬停弹出参数明细
+function nodeParamCountCell(n) {
+  let argData = [];
+  try {
+    const params = typeof n.params === 'string' ? JSON.parse(n.params || '[]') : n.params;
+    if (Array.isArray(params)) argData = params.map(p => ({ key: (p && p.key) || '-', label: (p && p.label) || '' }));
+  } catch (e) { argData = []; }
+  const cnt = argData.length;
+  return '<td class="arg-count" data-args="' + escAttr(JSON.stringify(argData)) + '"' + (cnt ? '' : ' data-empty="1"') + '>' + cnt + '</td>';
+}
+
 // 渲染 Nodes 表格当前页；数据变少（筛选/删除）导致页码越界时退回最后一页
 function renderNodeTable() {
   const tbody = document.querySelector('#nodes-table tbody');
   if (!tbody) return;
   const all = applyNodeListFilter();
   if (all.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">🔍</div><p>无匹配节点</p></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="icon">🔍</div><p>无匹配节点</p></div></td></tr>';
     renderNodePager(0);
     return;
   }
@@ -795,6 +806,7 @@ function renderNodeTable() {
         <td data-kind="${esc(nodeKindMeta(n.kind).kind)}"><span class="badge ${nodeKindMeta(n.kind).cls}">${nodeKindMeta(n.kind).label}</span></td>
         <td>${renderTagChipsHtml(n.tags)}</td>
         <td>${esc(n.namespace || '-')}</td>
+        ${nodeParamCountCell(n)}
         <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
         <td>
           <div class="actions">
@@ -1030,7 +1042,7 @@ async function loadNodes() {
     const tbody = document.querySelector('#nodes-table tbody');
     _nodeListRows = nodes || [];
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
       renderNodePager(0);
       return;
     }
