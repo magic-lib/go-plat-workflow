@@ -374,9 +374,21 @@ func (w *MQWorker) requestOneActivity(ctx context.Context, actNamespace, actName
 	return resp, nil
 }
 
+// ActivityRequestOptions 调用活动时的可选项。
+type ActivityRequestOptions struct {
+	// AllowNilReturn 为 true 时，活动返回 nil 不按错误处理，而是 new 一个空对象（或返回值类型的零值）继续处理。
+	AllowNilReturn bool
+}
+
 // RequestActivity 订阅指定 topic 并注册处理函数。
 func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, params any, headers http.Header,
 	returnValues []*config.ReturnValue) (*httputil.CommResponse, error) {
+	return w.RequestActivityWithOptions(ctx, act, params, headers, returnValues, ActivityRequestOptions{})
+}
+
+// RequestActivityWithOptions 同 RequestActivity，可通过 opts 控制返回值处理（如允许返回 nil）。
+func (w *MQWorker) RequestActivityWithOptions(ctx context.Context, act *activity.Activity, params any, headers http.Header,
+	returnValues []*config.ReturnValue, opts ActivityRequestOptions) (*httputil.CommResponse, error) {
 	if act == nil {
 		return nil, fmt.Errorf("activity is nil")
 	}
@@ -403,7 +415,7 @@ func (w *MQWorker) RequestActivity(ctx context.Context, act *activity.Activity, 
 	actKey := fmt.Sprintf("%s/%s", act.ActNamespace, act.ActName)
 
 	traceID := headers.Get(HeaderTraceIdKey)
-	data, err := w.execActivityResponse(actKey, resp.Data, act.Responses, returnValues, traceID)
+	data, err := w.execActivityResponse(actKey, resp.Data, act.Responses, returnValues, traceID, opts.AllowNilReturn)
 	if err != nil {
 		engine.MysqlLogErrorString("RequestActivity execActivityResponse", "argAny:", argAny, "argTemplate:", argTemplate, " params:", params,
 			"headers:", headers, " returnValues:", returnValues, " activity:", act, "actNamespace:", actNamespace,
@@ -450,7 +462,7 @@ func sendRulegoxAlert(project, env, title, content string) {
 }
 
 // execActivityResponse 处理活动返回值
-func (w *MQWorker) execActivityResponse(actKey string, respData any, respConfig map[string]any, returnValues []*config.ReturnValue, traceID string) (any, error) {
+func (w *MQWorker) execActivityResponse(actKey string, respData any, respConfig map[string]any, returnValues []*config.ReturnValue, traceID string, allowNil bool) (any, error) {
 	responses := ""
 	if len(respConfig) > 0 {
 		responses = conv.String(respConfig)
@@ -462,6 +474,12 @@ func (w *MQWorker) execActivityResponse(actKey string, respData any, respConfig 
 	}
 	if len(returnValues) == 0 {
 		return data, nil
+	}
+	if data == nil && allowNil {
+		// 允许返回 nil：new 一个空对象（或按返回值类型的零值）替代 nil，后续按返回值定义补齐字段零值，
+		// 下游可通过零值（如 user_id == 0）判断"无数据"。
+		data = nilReturnPlaceholder(returnValues)
+		log.Printf("mq_worker: activity %s returned nil, allow_nil_return=true, use placeholder %v, traceId=%s", actKey, data, traceID)
 	}
 	if data == nil {
 		// 执行返回 nil 但 returnValues 有定义：活动执行成功却无返回值，按错误返回，
@@ -530,6 +548,28 @@ func (w *MQWorker) execActivityResponse(actKey string, respData any, respConfig 
 		}
 		return newData, nil
 	}
+}
+
+// nilReturnPlaceholder 允许返回 nil 时的替代值：
+// 返回值定义中有具名 key（对象返回）时 new 一个空对象，由后续逻辑按类型补齐各字段零值；
+// 只有整体返回（key 为空）时取其类型的零值，类型为空/未知/map 时同样 new 一个空对象，保证不返回 nil。
+func nilReturnPlaceholder(returnValues []*config.ReturnValue) any {
+	var scalarType string
+	for _, rv := range returnValues {
+		if rv == nil {
+			continue
+		}
+		if rv.Key != "" {
+			return map[string]any{}
+		}
+		if scalarType == "" {
+			scalarType = rv.Type
+		}
+	}
+	if zero := conv.ZeroForTypeString(scalarType); zero != nil {
+		return zero
+	}
+	return map[string]any{}
 }
 
 // Stop 停止消费端，并清理心跳协程与 redis 连接。

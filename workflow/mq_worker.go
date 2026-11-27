@@ -74,13 +74,13 @@ func (w *WfWorker) RequestActivity(ctx context.Context, actDef *ActivityDef, par
 			params = commnode.GetActivityParam(ruleObj, params, bindConfig)
 		}
 	}
-	resp, err := w.MQWorker.RequestActivity(ctx, &activity.Activity{
+	resp, err := w.MQWorker.RequestActivityWithOptions(ctx, &activity.Activity{
 		ActivityType: actDef.ActivityType,
 		ActNamespace: actDef.ActNamespace,
 		ActName:      actDef.ActName,
 		ArgTemplate:  actDef.ArgTemplate,
 		Responses:    retMap,
-	}, params, headers, returnValues)
+	}, params, headers, returnValues, rulegox.ActivityRequestOptions{AllowNilReturn: actDef.AllowNilReturn})
 
 	return resp, params, err
 }

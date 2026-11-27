@@ -2735,7 +2735,7 @@ function renderActivityTable(list) {
     }
     return `<tr>
       <td class="act-col-id"><span class="code-cell">${escHtml(a.activity_id)}</span></td>
-      <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span>${a.published_in_root_chain ? publishedLockBadge('已发布') : ''}</td>
+      <td>${testIcon}${escHtml(a.name)}<span style="margin-left:4px">${hasActivityEnvSelected ? heartbeatIconHtml(a.heartbeat) : ''}</span>${a.published_in_root_chain ? publishedLockBadge('已发布') : ''}${a.allow_nil_return ? '<span class="badge" title="允许返回空：活动返回 nil 时按空对象/零值处理，不报错" style="margin-left:4px;background:#fef3c7;color:#92400e;font-size:.7rem">可空</span>' : ''}</td>
       <td class="act-col-tag">${tagsHtml}</td>
       <td class="act-ns-name"><div class="code-cell act-ns" title="命名空间：${escAttr(a.act_namespace)}">${escHtml(a.act_namespace)}</div><div class="code-cell" title="活动名称：${escAttr(a.act_name)}">${escHtml(a.act_name)}</div></td>
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
@@ -2936,6 +2936,7 @@ function openActivityModal(act) {
   if (Array.isArray(rvs) && rvs.length > 0) {
     rvs.forEach(it => addReturnValueRow(it.name, it.key || '', it.type || '', it.label || ''));
   }
+  document.getElementById('act-allow-nil-return').checked = !!(act && act.allow_nil_return);
   // 异步加载测试成功记录的返回 map 所有 key，回填 key 下拉选项
   loadReturnValueKeyOptions(act ? act.activity_id : '');
   document.getElementById('act-modal-overlay').classList.add('show');
@@ -3386,6 +3387,7 @@ async function saveActivity() {
     arg_template: document.getElementById('act-arg-template').value.trim(),
     responses: responsesVal,
     return_values: collectReturnValues(),
+    allow_nil_return: document.getElementById('act-allow-nil-return').checked,
     status: parseInt(document.getElementById('act-status').value),
     description: document.getElementById('act-description').value.trim(),
     tags: document.getElementById('act-tags').value.split(',').map(s => s.trim()).filter(s => s !== ''),

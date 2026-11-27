@@ -632,10 +632,14 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 		// 节点编排里的 activity.Activity.Id 不能稳定对应 ActivityDef.ID，故使用 namespace+name 反查。
 		// 若 store 未注入或无匹配模板，则回退为 nil（与历史行为一致）。
 		var returnValues = make([]*config.ReturnValue, 0)
+		var reqOpts rulegox.ActivityRequestOptions
 		if newAct.ActNamespace != "" && newAct.ActName != "" &&
 			defaultActivityStore != nil && metaData.Project != "" {
-			if actDef, fErr := defaultActivityStore.GetByNamespaceName(ctx.GetContext(), metaData.Project, newAct.ActNamespace, newAct.ActName); fErr == nil && len(actDef.ReturnValues) > 0 {
-				_ = conv.Unmarshal(string(actDef.ReturnValues), &returnValues)
+			if actDef, fErr := defaultActivityStore.GetByNamespaceName(ctx.GetContext(), metaData.Project, newAct.ActNamespace, newAct.ActName); fErr == nil && actDef != nil {
+				if len(actDef.ReturnValues) > 0 {
+					_ = conv.Unmarshal(string(actDef.ReturnValues), &returnValues)
+				}
+				reqOpts.AllowNilReturn = actDef.AllowNilReturn
 			}
 		}
 		engine.MysqlLogger.Info("execOneActivity traceId:", metaData.TraceId, " NodeSpanID:", nodeSpanId,
@@ -645,7 +649,7 @@ func (x *ActivityNode) execOneActivity(ctx types.RuleContext, nodeSpanId string,
 				"trace_id": metaData.TraceId,
 			})
 		// 执行Activity方法
-		resp, err := oneWorker.RequestActivity(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil), returnValues)
+		resp, err := oneWorker.RequestActivityWithOptions(ctx.GetContext(), newAct, dataMap, metaDataTemp.ToHeader(nil), returnValues, reqOpts)
 		if err != nil {
 			return err
 		}
