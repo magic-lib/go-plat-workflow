@@ -4238,6 +4238,7 @@ async function loadAllLogs() {
   params.set('page_size', String(_allLogPageSize));
 
   box.innerHTML = '<div class="log-empty">加载中…</div>';
+  setAllLogFlowTarget(null);
   try {
     const endpoint = _allLogType === 'activity' ? '/api/activity-logs' : '/api/node-logs';
     const resp = await api(endpoint + '?' + params.toString());
@@ -4250,9 +4251,27 @@ async function loadAllLogs() {
     }
     box.innerHTML = data.map(_allLogType === 'activity' ? renderLogItem : renderNodeLogItemWithActs).join('');
     renderAllLogPager(total);
+    // 选了根链且按 trace_id 查到结果时，提供「查看流程图」入口（按本次搜索条件，而非输入框里后来改动的值）
+    if (rootChainId && trace) setAllLogFlowTarget({ chainId: rootChainId, traceId: trace });
   } catch (e) {
     box.innerHTML = '<div class="log-empty">加载日志失败: ' + esc(e.message) + '</div>';
   }
+}
+
+// 日志页「查看流程图」：记录本次搜索的根链与 trace，并控制按钮显示
+let _allLogFlowTarget = null;
+function setAllLogFlowTarget(target) {
+  _allLogFlowTarget = target;
+  const btn = document.getElementById('all-log-flow-btn');
+  if (btn) btn.style.display = target ? '' : 'none';
+}
+
+// 新页面打开 /flow-view，显示该根链流程图并标出这次 trace 的执行路径（沿用当前登录态，只读用户也可查看）
+function openAllLogFlowView() {
+  const t = _allLogFlowTarget;
+  if (!t) return;
+  const q = new URLSearchParams({ project: getProject(), chain_id: t.chainId, trace_id: t.traceId });
+  window.open('/flow-view?' + q.toString(), '_blank', 'noopener');
 }
 
 // 渲染日志页分页器

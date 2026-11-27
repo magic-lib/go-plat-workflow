@@ -408,6 +408,7 @@
         <input id="all-log-trace-id" placeholder="trace_id" style="width:240px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
         <input id="all-log-payload" placeholder="payload 内容（模糊匹配，留空忽略）" style="width:260px;height:34px;padding:0 12px" onkeydown="if(event.key==='Enter')loadAllLogs()">
         <button class="btn btn-primary" onclick="loadAllLogs()">搜索</button>
+        <button class="btn btn-outline" id="all-log-flow-btn" onclick="openAllLogFlowView()" style="display:none" title="在新页面打开该根链的流程图，并标出这个 trace 的执行路径">查看流程图</button>
         <button class="btn btn-outline" onclick="clearAllLogFilters()">重置</button>
       </div>
     </div>
