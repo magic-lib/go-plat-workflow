@@ -129,3 +129,17 @@ func TestResolveFlowShareTraceID(t *testing.T) {
 		t.Fatalf("bound: got %q, %v", got, err)
 	}
 }
+
+// 没有项目角色（未登录、或对该项目无授权）时不允许生成分享链接
+func TestCreateFlowShareRequiresEditor(t *testing.T) {
+	ws := &WebServer{}
+	req := httptest.NewRequest("POST", "/api/flow-view/share?project=p", strings.NewReader(`{"chain_id":"R1"}`))
+	rec := httptest.NewRecorder()
+	ws.handleCreateFlowShare(rec, req)
+	if rec.Code != 403 {
+		t.Fatalf("want 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "只读权限不能生成分享链接") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}

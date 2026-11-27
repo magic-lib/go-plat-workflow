@@ -122,7 +122,7 @@ func (ws *WebServer) projectSecretKeys(ctx context.Context, project string) ([]s
 	return keys, nil
 }
 
-// handleCreateFlowShare 生成 /flow-view 只读分享链接（需登录，且对该项目有编辑权限，由中间件按 ?project= 校验）。
+// handleCreateFlowShare 生成 /flow-view 只读分享链接：仅 admin 与该项目的 editor（管理）可生成，viewer（只读）只能查看不能分享。
 // 请求体：{ chain_id, trace_id, bind_trace, expire_hours }，expire_hours 默认与最大均为 2160（90 天）。
 // 默认按根链分享：trace_id 只拼进返回的链接地址方便直接打开，不写进 token，换成该根链下其它 trace_id 同样可看；
 // bind_trace=true 时把 trace_id 绑进 token，只能看这一次执行。
@@ -130,6 +130,16 @@ func (ws *WebServer) handleCreateFlowShare(w http.ResponseWriter, r *http.Reques
 	project := projectParam(r)
 	if project == "" {
 		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	// 显式校验，不依赖中间件对 POST 的写操作归类：分享会把数据带出平台，只读用户不允许
+	role, err := ws.projectRoleOf(r, project)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if role != "admin" && role != "editor" {
+		writeError(w, http.StatusForbidden, "只读权限不能生成分享链接，请联系项目管理员")
 		return
 	}
 	var req struct {

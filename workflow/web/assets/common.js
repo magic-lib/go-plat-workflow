@@ -9246,6 +9246,7 @@ async function createOrchFlowShare() {
   const chainEl = document.getElementById('orch-chain-id');
   const chainId = ((chainEl && chainEl.value) || '').trim();
   if (!chainId) { showToast('当前没有加载根链，无法生成分享链接', 'error'); return; }
+  if (document.body.classList.contains('is-project-viewer')) { showToast('只读权限不能生成分享链接', 'error'); return; }
   const input = document.getElementById('orch-trace-input');
   const traceId = ((input && input.value) || '').trim();
   const btn = document.getElementById('orch-trace-share');
