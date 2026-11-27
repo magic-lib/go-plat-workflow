@@ -677,6 +677,9 @@ func (ws *WebServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	full := r.URL.Query().Get("full") == "true"
 	if !full {
 		for _, n := range nodes {
+			// 裁掉前先提取参数 / 返回值定义的摘要，列表据此展示参数数、返回值数及悬停明细
+			n.ParamBriefs = workflow.NodeFieldBriefs(n.Params)
+			n.OutputBriefs = workflow.NodeFieldBriefs(n.Outputs)
 			n.Configuration = nil
 			n.AdditionalInfo = nil
 			n.Params = nil

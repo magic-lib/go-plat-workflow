@@ -94,10 +94,12 @@ table { width: 100%; border-collapse: collapse; }
 #nodes-table th:nth-child(4), #nodes-table td:nth-child(4) { width: 7%; }  /* 大类 */
 #nodes-table th:nth-child(5), #nodes-table td:nth-child(5) { width: 10%; } /* 标签 */
 #nodes-table th:nth-child(6), #nodes-table td:nth-child(6) { width: 8%; }  /* 命名空间 */
-/* 已发布引用只显示数字，宽度够放下表头文字即可 */
-#nodes-table th:nth-child(7), #nodes-table td:nth-child(7) { width: 100px; } /* 已发布引用 */
+/* 参数数 / 已发布引用只显示数字，宽度够放下表头文字即可，数字居中（同 Activities 列表参数数） */
+#nodes-table th:nth-child(7), #nodes-table td:nth-child(7) { width: 80px; text-align: center; } /* 参数数 */
+#nodes-table th:nth-child(8), #nodes-table td:nth-child(8) { width: 90px; text-align: center; } /* 返回值数 */
+#nodes-table th:nth-child(9), #nodes-table td:nth-child(9) { width: 100px; } /* 已发布引用 */
 /* 操作列容纳 4 个图标按钮（编辑/测试/日志/删除，每个约 33px，间距 6px，约 150px）+ 内边距 32px */
-#nodes-table th:nth-child(8), #nodes-table td:nth-child(8) { width: 190px; overflow: visible; } /* 操作 */
+#nodes-table th:nth-child(10), #nodes-table td:nth-child(10) { width: 190px; overflow: visible; } /* 操作 */
 th, td { padding: 12px 16px; text-align: left; font-size: .875rem; }
 th { background: #f9fafb; font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; border-bottom: 2px solid var(--border); }
 td { border-bottom: 1px solid var(--border); }

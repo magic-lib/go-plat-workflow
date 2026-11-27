@@ -775,13 +775,36 @@ function applyNodeListFilter() {
   return result;
 }
 
+// 取节点参数定义 / 返回值定义的 key + 显示名列表。
+// 列表接口会裁掉 params / outputs，只返回摘要 param_briefs / output_briefs；完整数据（full=true 或详情）时直接用原字段。
+function nodeFieldBriefList(full, briefs) {
+  let list = full;
+  try { if (typeof list === 'string') list = JSON.parse(list || '[]'); } catch (e) { list = null; }
+  if (!Array.isArray(list)) list = Array.isArray(briefs) ? briefs : [];
+  return list.map(p => ({ key: (p && (p.key || p.name)) || '-', label: (p && p.label) || '' }));
+}
+
+// Nodes 列表「参数数」单元格：与 Activities 列表参数数同款（td.arg-count），悬停弹出参数明细
+function nodeParamCountCell(n) {
+  const argData = nodeFieldBriefList(n.params, n.param_briefs);
+  const cnt = argData.length;
+  return '<td class="arg-count" data-args="' + escAttr(JSON.stringify(argData)) + '"' + (cnt ? '' : ' data-empty="1"') + '>' + cnt + '</td>';
+}
+
+// Nodes 列表「返回值数」单元格：样式同参数数，悬停弹出返回值明细
+function nodeOutputCountCell(n) {
+  const outData = nodeFieldBriefList(n.outputs, n.output_briefs);
+  const cnt = outData.length;
+  return '<td class="arg-count output-count" data-outputs="' + escAttr(JSON.stringify(outData)) + '"' + (cnt ? '' : ' data-empty="1"') + '>' + cnt + '</td>';
+}
+
 // 渲染 Nodes 表格当前页；数据变少（筛选/删除）导致页码越界时退回最后一页
 function renderNodeTable() {
   const tbody = document.querySelector('#nodes-table tbody');
   if (!tbody) return;
   const all = applyNodeListFilter();
   if (all.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">🔍</div><p>无匹配节点</p></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><div class="icon">🔍</div><p>无匹配节点</p></div></td></tr>';
     renderNodePager(0);
     return;
   }
@@ -797,6 +820,8 @@ function renderNodeTable() {
         <td data-kind="${esc(nodeKindMeta(n.kind).kind)}"><span class="badge ${nodeKindMeta(n.kind).cls}">${nodeKindMeta(n.kind).label}</span></td>
         <td>${renderTagChipsHtml(n.tags)}</td>
         <td>${esc(n.namespace || '-')}</td>
+        ${nodeParamCountCell(n)}
+        ${nodeOutputCountCell(n)}
         <td class="pubref-count" data-chains="${publishedRefsJsonAttr(n)}" data-empty="${(n.published_root_chains && n.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(n)}</td>
         <td>
           <div class="actions">
@@ -1051,7 +1076,7 @@ async function loadNodes() {
     const tbody = document.querySelector('#nodes-table tbody');
     _nodeListRows = nodes || [];
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><div class="icon">📦</div><p>项目 <b>' + esc(getProject()) + '</b> 暂无节点数据</p></div></td></tr>';
       renderNodePager(0);
       return;
     }
@@ -10457,11 +10482,11 @@ try {
   }
 
   document.addEventListener('mouseover', e => {
-    const cell = e.target.closest && e.target.closest('td.arg-count');
+    const cell = e.target.closest && e.target.closest('td.arg-count:not(.output-count)');
     if (cell) showPop(cell);
   });
   document.addEventListener('mouseout', e => {
-    const cell = e.target.closest && e.target.closest('td.arg-count');
+    const cell = e.target.closest && e.target.closest('td.arg-count:not(.output-count)');
     if (cell) hidePop();
   });
   window.addEventListener('scroll', () => pop.classList.remove('show'), true);
@@ -10541,6 +10566,21 @@ attachCountPopover({
 
 // Activities 列表「引用 Nodes」列：悬停列出使用该 activity 的全部节点，
 // 并标注节点是否已发布（🔒）以区分线上还是草稿影响面。
+// Nodes 列表「返回值数」悬停明细（样式同参数数浮层）
+attachCountPopover({
+  popId: 'output-popover',
+  selector: 'td.output-count',
+  dataAttr: 'data-outputs',
+  buildContent: function(outputs) {
+    if (!outputs || !outputs.length) {
+      return '<div class="ap-none">无返回值</div>';
+    }
+    return '<div class="ap-title">返回值（' + outputs.length + '）</div>' + outputs.map(function(o) {
+      return '<div class="ap-item"><span class="ap-key">' + escHtml(o.key) + '</span>' + (o.label ? '<span class="ap-label">' + escHtml(o.label) + '</span>' : '') + '</div>';
+    }).join('');
+  }
+});
+
 attachCountPopover({
   popId: 'noderef-popover',
   selector: 'td.noderef-count',

@@ -213,6 +213,46 @@ type NodeDef struct {
 	// HasSwitchCondition 节点是否配置了路由条件 switch_condition，为 true 表示该节点带路由分支功能。
 	// 由列表/详情接口按节点配置实时计算填充，不入库。
 	HasSwitchCondition bool `json:"has_switch_condition,omitempty"`
+	// ParamBriefs 参数定义摘要（仅 key + 显示名），节点列表接口裁掉 params 后用它展示参数数与明细，不入库。
+	ParamBriefs []*NodeFieldBrief `json:"param_briefs,omitempty"`
+	// OutputBriefs 返回值定义摘要（仅 key + 显示名），节点列表接口裁掉 outputs 后用它展示返回值数与明细，不入库。
+	OutputBriefs []*NodeFieldBrief `json:"output_briefs,omitempty"`
+}
+
+// NodeFieldBrief 节点参数 / 返回值定义的精简信息，供列表展示。
+type NodeFieldBrief struct {
+	Key   string `json:"key"`
+	Label string `json:"label,omitempty"`
+}
+
+// NodeFieldBriefs 从节点参数定义 / 返回值定义的 JSON（数组，或历史上以字符串存放的数组）中提取 key + 显示名。
+// 解析失败或为空时返回 nil。
+func NodeFieldBriefs(raw json.RawMessage) []*NodeFieldBrief {
+	if len(raw) == 0 {
+		return nil
+	}
+	data := []byte(raw)
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		data = []byte(s)
+	}
+	var items []struct {
+		Key   string `json:"key"`
+		Name  string `json:"name"`
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal(data, &items); err != nil || len(items) == 0 {
+		return nil
+	}
+	briefs := make([]*NodeFieldBrief, 0, len(items))
+	for _, it := range items {
+		key := it.Key
+		if key == "" {
+			key = it.Name
+		}
+		briefs = append(briefs, &NodeFieldBrief{Key: key, Label: it.Label})
+	}
+	return briefs
 }
 
 // HasSwitchConditionExpr 判断节点是否配置了路由条件 switch_condition（非空即表示带路由功能）。
