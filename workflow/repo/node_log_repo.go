@@ -126,11 +126,16 @@ func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(s)
 }
 
-// statsNodeLogTable 统计查询用的表名：忽略 (project, node_id) 索引。
-// 统计按「项目 + 时间范围」扫大量日志，走该索引会对每行回表随机读，
-// 正式库约 100 万行时比全表顺序扫描慢约一倍（30 天 8s vs 5.5s，7 天 4.3s vs 2.1s）。
-// idx_node_proj 由 NodeLogModel 的 gorm 标签维护，AutoMigrate 保证其存在。
-const statsNodeLogTable = "wf_node_logs IGNORE INDEX (idx_node_proj)"
+// statsNodeLogTable 统计查询用的表名：忽略所有以 project 开头的联合索引。
+// 统计按「项目 + ts 时间范围」扫大量日志，这些索引都只能用上 project 一列，帮不了 ts 范围过滤，
+// 走它们会对每行回表随机读，正式库约 100 万行时比全表顺序扫描慢约一倍（30 天 8s vs 5.5s，7 天 4.3s vs 2.1s）。
+//   - idx_node_proj       (project, node_id)
+//   - idx_nl_proj_id      (project, id)         日志列表按项目分页用
+//   - idx_nl_proj_created (project, created_at) 按天统计用（条件是 created_at，不是 ts）
+//
+// 这些索引都由 NodeLogModel 的 gorm 标签维护、AutoMigrate 保证存在；IGNORE INDEX 写了不存在的索引 MySQL 会报错，
+// 改名或删除索引时要同步修改这里。新增以 project 开头的索引时也要考虑是否加进来。
+const statsNodeLogTable = "wf_node_logs IGNORE INDEX (idx_node_proj, idx_nl_proj_id, idx_nl_proj_created)"
 
 // ExecBuckets 按执行聚合 node 日志后，再按（根链、发布版本、耗时分桶）汇总执行次数、失败次数与耗时。
 // 一次执行 = 同一 trace_id + 根链 + 10 分钟窗口（见 workflow.StatsExecWindow）。
