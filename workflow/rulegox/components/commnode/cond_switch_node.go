@@ -6,6 +6,7 @@ import (
 	"github.com/magic-lib/go-plat-utils/id-generator/id"
 	"github.com/magic-lib/go-plat-utils/plugins/paramx"
 	"github.com/magic-lib/go-plat-utils/templates"
+	"github.com/magic-lib/go-plat-utils/utils/httputil/param"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/redis/go-redis/v9"
 	"github.com/rulego/rulego"
@@ -18,11 +19,18 @@ type condSwitchCfg struct {
 	SwitchCondition string `json:"switch_condition"`
 }
 
+// condSwitchInputCfg 编排时在本链为条件判断节点定义的参数（组装 DSL 时写入 configuration.input_params）。
+type condSwitchInputCfg struct {
+	InputParams []*ParamInputParam `json:"input_params"`
+}
+
 type CondSwitchNode struct {
 	Configuration   *CommConfiguration `json:"configuration"`
 	switchCondition string
-	nodeLogCli      *redis.Client
-	ruleObj         *templates.RuleExprEngine
+	// inputParams 本链定义的参数，来源取不到值时按其默认值解析
+	inputParams []*ParamInputParam
+	nodeLogCli  *redis.Client
+	ruleObj     *templates.RuleExprEngine
 	// nodeName node 中文名（来自 DSL 中 ruleNode.Name，由管理端 builder 写入 NodeDef.Name），
 	// 在 Init 时从 SelfDefinition 解析并缓存，用于上报 node 运行日志的 node_name 字段。
 	nodeName string
@@ -62,6 +70,11 @@ func (x *CondSwitchNode) Init(_ types.Config, configuration types.Configuration)
 		return fmt.Errorf("condRouter error parsing node_config: %s, %v", conv.String(x.Configuration.NodeConfig), err)
 	}
 	x.switchCondition = newCond.SwitchCondition
+	inputCfg := new(condSwitchInputCfg)
+	if err := conv.Unmarshal(configuration, inputCfg); err != nil {
+		return fmt.Errorf("condRouter error parsing input_params: %w", err)
+	}
+	x.inputParams = inputCfg.InputParams
 	x.ruleObj = templates.NewRuleExprEngine()
 	return nil
 }
@@ -86,6 +99,9 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	nodeSpanId := id.GetUUID(nodeStr)
 
 	nodeParams, argErr := NodeArguments(allParams, currNodeId, x.Configuration.ArgTemplate, x.Configuration.Arguments)
+	if argErr == nil {
+		nodeParams = x.applyInputDefaults(allParams, nodeParams)
+	}
 
 	condStr := x.switchCondition
 	if condStr == "" {
@@ -131,6 +147,46 @@ func (x *CondSwitchNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	msg.SetData(conv.String(allParams))
 
 	ctx.TellNext(msg, relationType)
+}
+
+// applyInputDefaults 处理本链定义的参数，与参数输入节点的语义一致：
+// 来源取到值时按转换类型转换（formula 除外）；取不到值（未配置或为空）时按默认值解析，没有默认值则保持原样。
+func (x *CondSwitchNode) applyInputDefaults(allParams *paramx.FlowContext, nodeParams map[string]any) map[string]any {
+	if len(x.inputParams) == 0 {
+		return nodeParams
+	}
+	if nodeParams == nil {
+		nodeParams = make(map[string]any, len(x.inputParams))
+	}
+	exprs := make(map[string]string, len(x.Configuration.Arguments))
+	for _, b := range x.Configuration.Arguments {
+		if b != nil {
+			exprs[b.Key] = conv.String(b.Value)
+		}
+	}
+	var allDataMap map[string]any
+	for _, p := range x.inputParams {
+		if p == nil || p.Key == "" {
+			continue
+		}
+		if v, ok := nodeParams[p.Key]; ok && !isEmptyParamValue(v, exprs[p.Key]) {
+			if p.Type != "" && p.Type != "formula" {
+				if cv, ok := conv.ConvertForTypeString(p.Type, v); ok {
+					nodeParams[p.Key] = cv
+				}
+			}
+			continue
+		}
+		if p.Value == "" {
+			continue
+		}
+		if allDataMap == nil {
+			allDataMap, _ = allParams.ToMaps()
+		}
+		def := replaceBindConfig(x.ruleObj, allDataMap, []*param.BindConfig{{Key: p.Key, Value: p.Value, Type: p.Type}})
+		nodeParams[p.Key] = def[p.Key]
+	}
+	return nodeParams
 }
 
 // Desc returns the component description
