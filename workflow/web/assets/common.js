@@ -4266,12 +4266,34 @@ function setAllLogFlowTarget(target) {
   if (btn) btn.style.display = target ? '' : 'none';
 }
 
-// 新页面打开 /flow-view，显示该根链流程图并标出这次 trace 的执行路径（沿用当前登录态，只读用户也可查看）
-function openAllLogFlowView() {
+// 新页面打开 /flow-view，显示该根链流程图并标出这次 trace 的执行路径。
+//   - 管理员 / 项目管理角色：先生成按根链分享的 token，地址带 share，复制给未登录的人也能看；
+//   - 只读用户：不能生成分享，地址不带 share，别人打开需要登录。
+// 生成 token 是异步的，先同步打开空白页再跳转，避免被浏览器当作弹窗拦截。
+async function openAllLogFlowView() {
   const t = _allLogFlowTarget;
   if (!t) return;
-  const q = new URLSearchParams({ project: getProject(), chain_id: t.chainId, trace_id: t.traceId });
-  window.open('/flow-view?' + q.toString(), '_blank', 'noopener');
+  const project = getProject();
+  const q = new URLSearchParams({ project: project, chain_id: t.chainId, trace_id: t.traceId });
+  const loginUrl = '/flow-view?' + q.toString();
+  if (!document.body.classList.contains('is-project-editor')) {
+    window.open(loginUrl, '_blank', 'noopener');
+    return;
+  }
+  const win = window.open('', '_blank');
+  if (win) win.opener = null;
+  let url = loginUrl;
+  try {
+    const res = await api('/api/flow-view/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chain_id: t.chainId, trace_id: t.traceId }),
+    });
+    if (res && res.url) url = res.url;
+  } catch (e) {
+    showToast('生成分享链接失败，已按登录方式打开: ' + e.message, 'error');
+  }
+  if (win) win.location.href = url;
+  else window.open(url, '_blank', 'noopener');
 }
 
 // 渲染日志页分页器
