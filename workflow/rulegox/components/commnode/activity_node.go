@@ -406,6 +406,10 @@ type NodeLogDef struct {
 	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3）。
 	RootChainReleaseID string `json:"root_chain_release_id"`
 	SpanID             string `json:"span_id"`
+	// ChainID 节点实际所在的链：主链节点为根链 ID，子链（经调用子链节点执行）里的节点为子链 ID（如 F000001）。
+	ChainID string `json:"chain_id"`
+	// CallPath 子链调用路径：调用该子链的子链节点实例 ID，多层嵌套用 "/" 拼接（如 F000001__2p0mg/F000003__abcde）；主链节点为空。
+	CallPath string `json:"call_path"`
 	// RelationType 该 node 执行完成后往下传递的连接类型（relationType），
 	// 对应 rulego 的 TellSuccess/TellFailure/TellNext 等，取值如 Success/Failure/True/False 或自定义字符串。
 	// 用于回查本次 node 走了哪条分支链路。
@@ -423,23 +427,28 @@ func pushNodeLog(nodeLogCli *redis.Client, metaData *rulegox.ActivityMetaData, n
 	}
 	now := time.Now()
 	rec := NodeLogDef{
-		Project:      metaData.Project,
-		Env:          metaData.Env,
-		NodeID:       nodeID,
-		NodeName:     nodeName,
-		EventID:      eventID,
-		DurationMs:   durationMs,
-		Level:        level,
-		Timestamp:    now.Unix(),
-		Payload:      json.RawMessage(conv.String(payload)),
-		Arguments:    json.RawMessage(conv.String(arguments)),
-		Result:       conv.String(result),
-		TraceID:      metaData.TraceId,
-		RootChainID:  metaData.RootChainID,
+		Project:            metaData.Project,
+		Env:                metaData.Env,
+		NodeID:             nodeID,
+		NodeName:           nodeName,
+		EventID:            eventID,
+		DurationMs:         durationMs,
+		Level:              level,
+		Timestamp:          now.Unix(),
+		Payload:            json.RawMessage(conv.String(payload)),
+		Arguments:          json.RawMessage(conv.String(arguments)),
+		Result:             conv.String(result),
+		TraceID:            metaData.TraceId,
+		RootChainID:        metaData.RootChainID,
 		RootChainReleaseID: metaData.RootChainReleaseID,
-		SpanID:       nodeSpanId,
-		RelationType: utils.SubStrMaxLen(relationType, 30),
-		CreatedAt:    now,
+		SpanID:             nodeSpanId,
+		ChainID:            metaData.ChainID,
+		CallPath:           metaData.CallPath,
+		RelationType:       utils.SubStrMaxLen(relationType, 30),
+		CreatedAt:          now,
+	}
+	if rec.ChainID == "" {
+		rec.ChainID = metaData.RootChainID
 	}
 	if runErr != nil {
 		rec.ErrorMsg = runErr.Error()

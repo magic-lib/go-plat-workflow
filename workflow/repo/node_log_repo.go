@@ -127,6 +127,9 @@ func (r *NodeLogRepo) ListByFilter(ctx context.Context, project string, f *workf
 	if f.RootChainID != "" {
 		query = query.Where("root_chain_id = ?", f.RootChainID)
 	}
+	if f.ChainID != "" {
+		query = query.Where("chain_id = ?", f.ChainID)
+	}
 	if f.Keyword != "" {
 		kw := "%" + f.Keyword + "%"
 		query = query.Where("payload LIKE ? OR result LIKE ? OR error_msg LIKE ?", kw, kw, kw)

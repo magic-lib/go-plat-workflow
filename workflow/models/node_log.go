@@ -26,10 +26,14 @@ type NodeLogModel struct {
 	TraceID     string `gorm:"column:trace_id;type:varchar(128);index;default:''" json:"trace_id"`
 	RootChainID string `gorm:"column:root_chain_id;type:varchar(128);index;default:''" json:"root_chain_id"`
 	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），用于追溯当时执行的是哪个发布版本。
-	RootChainReleaseID string    `gorm:"column:root_chain_release_id;type:varchar(128);index;default:''" json:"root_chain_release_id"`
-	SpanID             string    `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
-	RelationType       string    `gorm:"column:relation_type;type:varchar(500);default:''" json:"relation_type"`
-	CreatedAt          time.Time `json:"created_at"`
+	RootChainReleaseID string `gorm:"column:root_chain_release_id;type:varchar(128);index;default:''" json:"root_chain_release_id"`
+	SpanID             string `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
+	RelationType       string `gorm:"column:relation_type;type:varchar(500);default:''" json:"relation_type"`
+	// ChainID 节点实际所在的链：主链节点为根链 ID，子链里的节点为子链 ID。
+	ChainID string `gorm:"column:chain_id;type:varchar(128);index;default:''" json:"chain_id"`
+	// CallPath 子链调用路径（调用子链的子链节点实例 ID，嵌套用 "/" 拼接）；主链节点为空。
+	CallPath  string    `gorm:"column:call_path;type:varchar(500);default:''" json:"call_path"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // TableName 返回表名。
@@ -58,6 +62,8 @@ func (m *NodeLogModel) ToDef() *workflow.NodeLogDef {
 		RootChainReleaseID: m.RootChainReleaseID,
 		SpanID:             m.SpanID,
 		RelationType:       m.RelationType,
+		ChainID:            m.ChainID,
+		CallPath:           m.CallPath,
 		CreatedAt:          m.CreatedAt,
 	}
 }
@@ -81,4 +87,6 @@ func (m *NodeLogModel) FromDef(def *workflow.NodeLogDef) {
 	m.RootChainReleaseID = def.RootChainReleaseID
 	m.SpanID = def.SpanID
 	m.RelationType = def.RelationType
+	m.ChainID = def.ChainID
+	m.CallPath = def.CallPath
 }

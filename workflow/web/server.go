@@ -198,6 +198,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("GET /api/sub-chains", ws.handleListSubChains)
 	ws.mux.HandleFunc("POST /api/sub-chains", ws.handleCreateSubChain)
 	ws.mux.HandleFunc("GET /api/sub-chains/{chain_id}", ws.handleGetSubChain)
+	ws.mux.HandleFunc("GET /api/sub-chains/{chain_id}/call-signature", ws.handleGetSubChainCallSignature)
 	ws.mux.HandleFunc("PUT /api/sub-chains/{chain_id}", ws.handleUpdateSubChain)
 	ws.mux.HandleFunc("DELETE /api/sub-chains/{chain_id}", ws.handleDeleteSubChain)
 	// SubChains 编排构建（创建时 chain_id 自动生成）
@@ -915,6 +916,27 @@ func (ws *WebServer) handleGetSubChain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, def)
 }
 
+// handleGetSubChainCallSignature 获取子链的调用签名（入参列表 + 返回值定义），
+// 编排页把子链实例当作普通节点时据此生成参数配置与可引用的返回值字段。
+func (ws *WebServer) handleGetSubChainCallSignature(w http.ResponseWriter, r *http.Request) {
+	project := projectParam(r)
+	chainID := r.PathValue("chain_id")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+	sig, err := ws.svc.GetSubChainCallSignature(r.Context(), project, chainID)
+	if err != nil {
+		if errors.Is(err, workflow.ErrSubChainNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sig)
+}
+
 func (ws *WebServer) handleUpdateSubChain(w http.ResponseWriter, r *http.Request) {
 	project := projectParam(r)
 	chainID := r.PathValue("chain_id")
@@ -929,8 +951,9 @@ func (ws *WebServer) handleUpdateSubChain(w http.ResponseWriter, r *http.Request
 	}
 	def.Project = project
 	def.ChainID = chainID
-	if err := ws.svc.UpdateSubChain(r.Context(), &def); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	confirmed := r.URL.Query().Get("confirm_published") == "1"
+	if err := ws.svc.UpdateSubChainWithConfirm(r.Context(), &def, confirmed); err != nil {
+		writeSubChainSaveError(w, err)
 		return
 	}
 	log.Info().Str("project", project).Str("chain_id", chainID).Msg("sub chain updated via web")
@@ -945,6 +968,10 @@ func (ws *WebServer) handleDeleteSubChain(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := ws.svc.DeleteSubChain(r.Context(), project, chainID); err != nil {
+		if errors.Is(err, workflow.ErrSubChainReferencedByRootChain) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -952,36 +979,49 @@ func (ws *WebServer) handleDeleteSubChain(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
 }
 
+// handleExecuteSubChain 测试执行子链：与根链测试执行一致，入参按「调用传入」参数包成流程上下文，
+// 必须选择执行环境（运行数据打入对应 Redis），返回结构与根链测试执行相同。
+// 子链按自身 ID 作为本次执行的链 ID，引擎池用独立 key，不影响根链里引用的同名子链实例。
 func (ws *WebServer) handleExecuteSubChain(w http.ResponseWriter, r *http.Request) {
-	project := projectParam(r)
-	chainID := r.PathValue("chain_id")
-	if project == "" {
-		writeError(w, http.StatusBadRequest, "project query parameter is required")
-		return
-	}
-	var req struct {
-		Payload string `json:"payload"`
-	}
+	var req executeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
-	if req.Payload == "" {
-		req.Payload = "{}"
-	}
-	result, err := ws.svc.LoadAndExecuteSubChain(r.Context(), project, chainID, req.Payload)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	project, ok := ws.resolveProject(w, r, req.Project)
+	if !ok {
 		return
 	}
-	_ = ws.svc.UnloadChain(r.Context(), project, chainID)
-	log.Info().Str("project", project).Str("chain_id", chainID).Msg("sub chain executed via web")
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"project":     project,
-		"chain_id":    chainID,
-		"result":      result,
-		"use_release": false,
-	})
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	req.Project = project
+	req.ChainID = r.PathValue("chain_id")
+	payloadMap, err := parsePayload(req.Payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "parse payload failed: "+err.Error())
+		return
+	}
+	if req.EnvName == "" {
+		writeError(w, http.StatusBadRequest, "env_name is required")
+		return
+	}
+	if _, err := ws.svc.GetRedisConnect(r.Context(), req.Project, req.EnvName); err != nil {
+		writeError(w, http.StatusBadRequest, "resolve redis config failed: "+err.Error())
+		return
+	}
+	def, err := ws.svc.GetSubChain(r.Context(), req.Project, req.ChainID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "sub chain not found: "+err.Error())
+		return
+	}
+	var ruleChain types.RuleChain
+	if err := json.Unmarshal([]byte(def.DSLJSON), &ruleChain); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse sub chain dsl failed: "+err.Error())
+		return
+	}
+	ws.executeDraftChain(w, r, &req, &ruleChain, payloadMap, "subchain-test:"+req.Project+":"+req.ChainID)
 }
 
 // ============================================================
@@ -1184,6 +1224,8 @@ type buildSubChainRequest struct {
 	NodeSwitchOverrides   map[string]string                 `json:"node_switch_overrides"`
 	NodeNameOverrides     map[string]string                 `json:"node_name_overrides"`
 	NodeCollapseOverrides map[string]bool                   `json:"node_collapse_overrides"`
+	ConfirmPublished      bool                              `json:"confirm_published"`
+	RootResponses         []workflow.RootResponseItem       `json:"root_responses"`
 }
 
 func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSubChainRequest {
@@ -1200,6 +1242,8 @@ func (r *buildSubChainRequest) toBuildRequest(project string) *workflow.BuildSub
 		NodeSwitchOverrides:   r.NodeSwitchOverrides,
 		NodeNameOverrides:     r.NodeNameOverrides,
 		NodeCollapseOverrides: r.NodeCollapseOverrides,
+		ConfirmPublished:      r.ConfirmPublished,
+		RootResponses:         r.RootResponses,
 	}
 }
 
@@ -1223,13 +1267,27 @@ func (ws *WebServer) handleBuildSubChain(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "chain_name is required")
 		return
 	}
-	def, err := ws.svc.CreateSubChainBuild(r.Context(), req.toBuildRequest(req.Project))
+	// chain_id 对应的子链已存在则更新，不存在则新增（避免重复点击保存时生成多条子链）
+	def, err := ws.svc.SaveSubChainBuild(r.Context(), req.toBuildRequest(req.Project))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeSubChainSaveError(w, err)
 		return
 	}
 	log.Info().Str("project", def.Project).Str("chain_id", def.ChainID).Msg("sub chain built via web")
 	writeJSON(w, http.StatusOK, def)
+}
+
+// writeSubChainSaveError 子链保存失败：被已发布根链引用且未确认时返回 409 + code，前端据此弹确认框后带 confirm_published 重试。
+func writeSubChainSaveError(w http.ResponseWriter, err error) {
+	if errors.Is(err, workflow.ErrSubChainPublishedNeedConfirm) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "sub_chain_published"})
+		return
+	}
+	if errors.Is(err, workflow.ErrSubChainReferencedByRootChain) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
 }
 
 // handleUpdateSubChainBuild 编排方式更新子链 DSL（保留原 chain_id）。
@@ -1254,9 +1312,10 @@ func (ws *WebServer) handleUpdateSubChainBuild(w http.ResponseWriter, r *http.Re
 		return
 	}
 	req.ChainID = chainID
-	def, err := ws.svc.UpdateSubChainBuild(r.Context(), req.toBuildRequest(req.Project))
+	// 子链已存在则更新，不存在则按该 chain_id 新增
+	def, err := ws.svc.SaveSubChainBuild(r.Context(), req.toBuildRequest(req.Project))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeSubChainSaveError(w, err)
 		return
 	}
 	log.Info().Str("project", def.Project).Str("chain_id", def.ChainID).Msg("sub chain re-built via web")
@@ -1572,8 +1631,8 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "env_name is required")
 		return
 	}
-	redisCfg, err := ws.svc.GetRedisConnect(r.Context(), req.Project, req.EnvName)
-	if err != nil {
+	// 先校验执行环境的 Redis 配置可用（执行时按环境再次解析）
+	if _, err := ws.svc.GetRedisConnect(r.Context(), req.Project, req.EnvName); err != nil {
 		writeError(w, http.StatusBadRequest, "resolve redis config failed: "+err.Error())
 		return
 	}
@@ -1588,20 +1647,25 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		req.ChainID = def.ChainID
 	}
 
-	// 生产模式：执行当前发布版本（忽略编排配置，使用发布快照）
+	// 生产模式：执行当前发布版本（忽略编排配置，使用发布快照）。
+	// 与线上按 chain_key 调用（InvokeRootChain）走同一条路径：入参包成流程上下文（{{arguments.x}} 可取值），
+	// 入参校验/过滤、嵌入子链加载与线上一致；引擎池按发布版本隔离，执行后不卸载，不影响线上实例。
 	if req.UseRelease {
-		//chainID 必须为release中chainId随机生成的那个，不然如果测试时，就会把正式的利用 ws.svc.UnloadChain 卸载掉。
-
-		payloadStr, _ := json.Marshal(payloadMap)
-		result, err := ws.svc.ExecutePublishedRootChain(r.Context(), req.Project, req.ChainID, string(payloadStr), req.EnvName, redisCfg)
+		def, err := ws.svc.GetRootChain(r.Context(), req.Project, req.ChainID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "root chain not found: "+err.Error())
+			return
+		}
+		req.TraceId = id.GetUUID(req.TraceId)
+		result, err := ws.svc.InvokeRootChain(r.Context(), req.Project, def.ChainKey, req.EnvName, req.TraceId, payloadMap, false)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		_ = ws.svc.UnloadChain(r.Context(), req.Project, req.ChainID)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"project":     req.Project,
 			"chain_id":    req.ChainID,
+			"trace_id":    req.TraceId,
 			"result":      result,
 			"use_release": true,
 			"env_name":    req.EnvName,
@@ -1622,11 +1686,19 @@ func (ws *WebServer) handleExecuteWorkflow(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	ws.executeDraftChain(w, r, &req, &ruleChain, payloadMap, "")
+}
+
+// executeDraftChain 草稿执行链 DSL（根链测试与子链测试共用），按环境把运行数据打入对应 Redis，
+// 记录执行日志并返回统一结构（http_status / trace_id / result / env_name / error）。
+// poolKey 非空时用作引擎池 key，与同 ID 的其它实例隔离。
+func (ws *WebServer) executeDraftChain(w http.ResponseWriter, r *http.Request, req *executeRequest, ruleChain *types.RuleChain, payloadMap map[string]any, poolKey string) {
 	req.TraceId = id.GetUUID(req.TraceId)
 	startTime := time.Now().UnixMilli()
-	result, err := ws.svc.ExecuteRootChainByID(r.Context(), &ruleChain, payloadMap, req.Project, req.EnvName, req.TraceId, &rulegox.ActivityFlowConfig{
+	result, err := ws.svc.ExecuteRootChainByID(r.Context(), ruleChain, payloadMap, req.Project, req.EnvName, req.TraceId, &rulegox.ActivityFlowConfig{
 		UseCache: false,
 		IsAsync:  false,
+		PoolKey:  poolKey,
 	})
 	cost := time.Now().UnixMilli() - startTime
 
@@ -2584,6 +2656,7 @@ func (ws *WebServer) handleListNodeLogsGlobal(w http.ResponseWriter, r *http.Req
 		Env:         q.Get("env"),
 		TraceID:     strings.TrimSpace(q.Get("trace_id")),
 		RootChainID: strings.TrimSpace(q.Get("root_chain_id")),
+		ChainID:     strings.TrimSpace(q.Get("chain_id")),
 		Keyword:     q.Get("keyword"),
 		Limit:       pageSize,
 		Offset:      (page - 1) * pageSize,

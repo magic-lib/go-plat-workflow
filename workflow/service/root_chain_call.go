@@ -71,7 +71,7 @@ func (s *WorkflowService) GetRootChainCallSignature(ctx context.Context, project
 	return sig, err
 }
 
-// rootChainCallSignature 读取目标根链当前发布版本：入参取发布 DSL（含引用的子链）里所有 {{arguments.xxx}}，
+// rootChainCallSignature 读取目标根链当前发布版本：入参取发布 DSL（含与它共用入参的子链）里所有 {{arguments.xxx}}，
 // 返回值取发布快照的 root_responses。同时返回发布版本的全部节点（含子链节点），供循环调用检查继续向下遍历。
 func (s *WorkflowService) rootChainCallSignature(ctx context.Context, project, chainID string) (*workflow.RootChainCallSignature, []*types.RuleNode, error) {
 	def, err := s.rootChainRepo.GetByProjectID(ctx, project, chainID)
@@ -86,13 +86,15 @@ func (s *WorkflowService) rootChainCallSignature(ctx context.Context, project, c
 	if err := json.Unmarshal([]byte(release.DSLJSON), rc); err != nil {
 		return nil, nil, fmt.Errorf("parse root chain %s release dsl failed: %w", chainID, err)
 	}
-	_, subNodes, err := s.collectSubChains(ctx, project, rc.Metadata.Nodes)
+	_, subNodes, subArgNodes, err := s.collectSubChainsWithArgNodes(ctx, project, rc)
 	if err != nil {
 		return nil, nil, err
 	}
 	allNodes := make([]*types.RuleNode, 0, len(rc.Metadata.Nodes)+len(subNodes))
 	allNodes = append(allNodes, rc.Metadata.Nodes...)
 	allNodes = append(allNodes, subNodes...)
+	// 入参只取本链节点与共用入参的子链节点（经调用子链节点引用的子链，入参由该节点的参数配置给出）
+	argNodes := append(append(make([]*types.RuleNode, 0, len(rc.Metadata.Nodes)+len(subArgNodes)), rc.Metadata.Nodes...), subArgNodes...)
 
 	responses := make([]workflow.RootResponseItem, 0)
 	if strings.TrimSpace(release.RootResponses) != "" {
@@ -105,7 +107,7 @@ func (s *WorkflowService) rootChainCallSignature(ctx context.Context, project, c
 		ChainKey:  def.ChainKey,
 		Name:      release.Name,
 		Version:   release.Version,
-		Arguments: builder.CollectAllInputArguments(allNodes),
+		Arguments: builder.CollectAllInputArguments(argNodes),
 		Responses: responses,
 	}, allNodes, nil
 }

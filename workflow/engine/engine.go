@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/magic-lib/go-plat-utils/logs"
 	"github.com/samber/lo"
@@ -120,7 +121,11 @@ func (e *WorkflowEngine) LoadChain(ctx context.Context, project, chainID string)
 func (e *WorkflowEngine) LoadChainDSL(ctx context.Context, project, chainID, dslJSON, subChainIDs string) error {
 	key := chainKey(project, chainID)
 
-	// 先加载子链（flow 节点按 ruleChainId 从 pool 查找，递归加载嵌套子链）
+	// 先加载子链：DSL 里嵌入的子链（保存时的子链内容）直接注册；未嵌入的（旧数据）按子链 ID 从库里实时加载，
+	// 嵌套子链同样处理。DSL 无法解析时退回按 sub_chain_ids 实时加载。
+	if liveIDs, ok := e.loadEmbeddedSubChains(project, []byte(dslJSON), subChainIDs); ok {
+		subChainIDs = strings.Join(liveIDs, ",")
+	}
 	if err := e.loadSubChains(ctx, project, subChainIDs, 0); err != nil {
 		return err
 	}
@@ -140,6 +145,45 @@ func (e *WorkflowEngine) LoadChainDSL(ctx context.Context, project, chainID, dsl
 	return nil
 }
 
+// loadEmbeddedSubChains 注册 DSL 中嵌入的全部子链（含多级嵌入），返回仍需按子链 ID 实时加载的子链：
+// 调用方给的 sub_chain_ids 里、flow 节点 targetId 不是嵌入子链的那些（旧数据）。DSL 无法解析时 ok=false。
+func (e *WorkflowEngine) loadEmbeddedSubChains(project string, dsl []byte, subChainIDs string) ([]string, bool) {
+	embedded, ok := ExtractEmbeddedSubChains(dsl)
+	if !ok {
+		return nil, false
+	}
+	wanted := make(map[string]bool)
+	for _, raw := range strings.Split(subChainIDs, ",") {
+		if id := SubChainBaseID(strings.TrimSpace(raw)); id != "" {
+			wanted[id] = true
+		}
+	}
+	chains := [][]byte{dsl}
+	for id, sub := range embedded {
+		if _, err := LoadOrReload(chainKey(project, id), sub); err != nil {
+			log.Warn().Err(err).Str("project", project).Str("chain_id", id).Msg("load embedded sub chain failed")
+			continue
+		}
+		chains = append(chains, sub)
+	}
+	var live []string
+	seen := make(map[string]bool)
+	for _, c := range chains {
+		chain := new(types.RuleChain)
+		if err := json.Unmarshal(c, chain); err != nil {
+			continue
+		}
+		for _, ft := range FlowTargets(chain.Metadata.Nodes) {
+			if _, isEmbedded := embedded[ft.TargetID]; isEmbedded || seen[ft.SubChainID] || !wanted[ft.SubChainID] {
+				continue
+			}
+			seen[ft.SubChainID] = true
+			live = append(live, ft.SubChainID)
+		}
+	}
+	return live, true
+}
+
 // loadSubChains 加载逗号分隔的子链列表到引擎池（已加载且 DSL 未变的直接复用，变了则热更新）。
 // depth 用于防止子链循环引用导致的无限递归加载，达到最大深度后停止。
 func (e *WorkflowEngine) loadSubChains(ctx context.Context, project, subChainIDs string, depth int) error {
@@ -147,11 +191,14 @@ func (e *WorkflowEngine) loadSubChains(ctx context.Context, project, subChainIDs
 	if subChainIDs == "" || depth >= maxSubChainDepth {
 		return nil
 	}
-	for _, scID := range strings.Split(subChainIDs, ",") {
-		scID = strings.TrimSpace(scID)
-		if scID == "" {
+	seen := make(map[string]bool)
+	for _, raw := range strings.Split(subChainIDs, ",") {
+		// 根链里同一子链可添加多次，sub_chain_ids 存的是实例 ID（F000001__ab12c），按子链 ID 去重加载
+		scID := SubChainBaseID(strings.TrimSpace(raw))
+		if scID == "" || seen[scID] {
 			continue
 		}
+		seen[scID] = true
 		scKey := chainKey(project, scID)
 		// 不能因为池里已有就跳过：子链修改后池里仍是旧实例，这里每次取最新 DSL 交给 LoadOrReload 比对
 		scDef, err := e.subChainStore.GetByID(ctx, project, scID)
@@ -165,14 +212,26 @@ func (e *WorkflowEngine) loadSubChains(ctx context.Context, project, subChainIDs
 			Str("project", project).
 			Str("chain_id", scID).
 			Msg("sub chain loaded into engine pool")
-		// 递归加载该子链引用的子链
-		if scDef.SubChainIDs != "" {
-			if err := e.loadSubChains(ctx, project, scDef.SubChainIDs, depth+1); err != nil {
+		// 递归加载该子链引用的子链：嵌入的直接注册，未嵌入的按子链 ID 继续实时加载
+		nested := scDef.SubChainIDs
+		if liveIDs, ok := e.loadEmbeddedSubChains(project, []byte(scDef.DSLJSON), scDef.SubChainIDs); ok {
+			nested = strings.Join(liveIDs, ",")
+		}
+		if nested != "" {
+			if err := e.loadSubChains(ctx, project, nested, depth+1); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// SubChainBaseID 去掉子链实例 ID 的后缀（F000001__ab12c → F000001），返回子链 ID；不带后缀的旧数据原样返回。
+func SubChainBaseID(id string) string {
+	if i := strings.Index(id, "__"); i >= 0 {
+		return id[:i]
+	}
+	return id
 }
 
 // LoadSubChain 从数据库加载指定项目下的子链 DSL 并注册到 rulego 引擎池。

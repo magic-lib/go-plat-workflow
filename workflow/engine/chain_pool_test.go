@@ -116,3 +116,151 @@ func TestFlowNodeWithRuleChainIdCallsSubChain(t *testing.T) {
 		t.Fatalf("sub chain not executed, result: %s", data)
 	}
 }
+
+// 未设置 firstNodeIndex 时按连线推算入口节点；已设置或推算结果就是 0 时不改动。
+func TestNormalizeFirstNode(t *testing.T) {
+	conns := []types.NodeConnection{{FromId: "s1", ToId: "s2", Type: "Success"}}
+	nodes := []*types.RuleNode{{Id: "s2"}, {Id: "s1"}}
+	chain := &types.RuleChain{Metadata: types.RuleMetadata{Nodes: nodes, Connections: conns}}
+	if !NormalizeFirstNode(chain) || chain.Metadata.FirstNodeIndex != 1 {
+		t.Fatalf("first node should be inferred as 1, got %d", chain.Metadata.FirstNodeIndex)
+	}
+	chain = &types.RuleChain{Metadata: types.RuleMetadata{FirstNodeIndex: 1, Nodes: []*types.RuleNode{{Id: "s1"}, {Id: "s2"}}, Connections: conns}}
+	if NormalizeFirstNode(chain) || chain.Metadata.FirstNodeIndex != 1 {
+		t.Fatal("explicit firstNodeIndex should be kept")
+	}
+	chain = &types.RuleChain{Metadata: types.RuleMetadata{Nodes: []*types.RuleNode{{Id: "s1"}, {Id: "s2"}}, Connections: conns}}
+	if NormalizeFirstNode(chain) {
+		t.Fatal("entry node already at index 0, should not change")
+	}
+}
+
+// 子链节点按添加顺序排列、入口节点不在第一个时，子链也要从推算出的入口节点开始执行。
+func TestSubChainStartsFromInferredFirstNode(t *testing.T) {
+	e := newTestEngine()
+	project := "test"
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	subID, rootID := "F_"+suffix, "R_"+suffix
+	subKey := project + ":" + subID
+	// s2 先添加、s1 后添加，连线 s1 -> s2：入口应为 s1
+	sub := chainDSL(subID, false,
+		[]string{jsNode("s2", "from_s2", "yes"), jsNode("s1", "from_s1", "yes")},
+		`{"fromId":"s1","toId":"s2","type":"Success"}`)
+	if _, err := LoadOrReload(subKey, []byte(sub)); err != nil {
+		t.Fatal(err)
+	}
+	defer rulego.Del(subKey)
+	root := chainDSL(rootID, true,
+		[]string{jsNode("n1", "a", "1"), fmt.Sprintf(`{"id":"f1","type":"flow","configuration":{"ruleChainId":%q}}`, subKey)},
+		`{"fromId":"n1","toId":"f1","type":"Success"}`)
+	if err := e.LoadChainDSL(context.Background(), project, rootID, root, ""); err != nil {
+		t.Fatal(err)
+	}
+	defer e.UnloadChain(context.Background(), project, rootID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	data, err := e.Execute(ctx, project, rootID, `{}`)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(data, "from_s1") || !strings.Contains(data, "from_s2") {
+		t.Fatalf("sub chain should run s1 then s2, result: %s", data)
+	}
+}
+
+// 同一子链在根链里添加两次（两个 flow 实例节点指向同一子链），两次都要执行。
+func TestSameSubChainTwoInstances(t *testing.T) {
+	e := newTestEngine()
+	project := "test"
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	subID, rootID := "F_"+suffix, "R_"+suffix
+	subKey := project + ":" + subID
+	counter := `{"id":"c1","type":"jsTransform","name":"c1","configuration":{"jsScript":"msg['cnt']=String(Number(msg['cnt']||0)+1); return {'msg':msg,'metadata':metadata,'msgType':msgType};"}}`
+	if _, err := LoadOrReload(subKey, []byte(chainDSL(subID, false, []string{counter}, ""))); err != nil {
+		t.Fatal(err)
+	}
+	defer rulego.Del(subKey)
+	flow := func(id string) string {
+		return fmt.Sprintf(`{"id":%q,"type":"flow","configuration":{"ruleChainId":%q}}`, id, subKey)
+	}
+	root := chainDSL(rootID, true,
+		[]string{jsNode("n1", "a", "1"), flow(subID + "__aaaaa"), flow(subID + "__bbbbb")},
+		fmt.Sprintf(`{"fromId":"n1","toId":%q,"type":"Success"},{"fromId":%q,"toId":%q,"type":"Success"}`,
+			subID+"__aaaaa", subID+"__aaaaa", subID+"__bbbbb"))
+	if err := e.LoadChainDSL(context.Background(), project, rootID, root, ""); err != nil {
+		t.Fatal(err)
+	}
+	defer e.UnloadChain(context.Background(), project, rootID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	data, err := e.Execute(ctx, project, rootID, `{}`)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(data, `"cnt":"2"`) {
+		t.Fatalf("sub chain should run twice, result: %s", data)
+	}
+}
+
+func TestSubChainBaseID(t *testing.T) {
+	for in, want := range map[string]string{"F000001__ab12c": "F000001", "F000001": "F000001", "": ""} {
+		if got := SubChainBaseID(in); got != want {
+			t.Errorf("SubChainBaseID(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
+// 嵌入子链：两条根链嵌入同一子链 ID 的不同内容（保存时间不同），各自执行自己嵌入的内容，互不覆盖。
+func TestEmbeddedSubChainVersionsIsolated(t *testing.T) {
+	e := newTestEngine()
+	project := "test"
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	subID := "F_" + suffix
+	build := func(rootID, val string) string {
+		root := &types.RuleChain{}
+		eid, err := EmbedSubChain(root, subID, chainDSL(subID, false, []string{jsNode("s1", "ver", val)}, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, _ := json.Marshal(root.RuleChain.AdditionalInfo)
+		return fmt.Sprintf(`{"ruleChain":{"id":%q,"name":%q,"root":true,"additionalInfo":%s},"metadata":{"nodes":[%s,%s],"connections":[{"fromId":"n1","toId":"f1","type":"Success"}]}}`,
+			rootID, rootID, info, jsNode("n1", "a", "1"),
+			fmt.Sprintf(`{"id":"f1","type":"flow","configuration":{"ruleChainId":%q,"targetId":%q}}`, project+":"+subID, project+":"+eid))
+	}
+	rootA, rootB := "RA_"+suffix, "RB_"+suffix
+	for id, val := range map[string]string{rootA: "v1", rootB: "v2"} {
+		if err := e.LoadChainDSL(context.Background(), project, id, build(id, val), subID); err != nil {
+			t.Fatal(err)
+		}
+		defer e.UnloadChain(context.Background(), project, id)
+	}
+	for id, want := range map[string]string{rootA: `"ver":"v1"`, rootB: `"ver":"v2"`} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		data, err := e.Execute(ctx, project, id, `{}`)
+		cancel()
+		if err != nil {
+			t.Fatalf("execute %s failed: %v", id, err)
+		}
+		if !strings.Contains(data, want) {
+			t.Fatalf("%s should run its embedded sub chain (%s), result: %s", id, want, data)
+		}
+	}
+}
+
+func TestExtractEmbeddedSubChainsNested(t *testing.T) {
+	inner := &types.RuleChain{}
+	innerID, _ := EmbedSubChain(inner, "F2", `{"ruleChain":{"id":"F2"},"metadata":{"nodes":[]}}`)
+	innerDSL, _ := json.Marshal(inner)
+	root := &types.RuleChain{}
+	outerID, _ := EmbedSubChain(root, "F1", string(innerDSL))
+	dsl, _ := json.Marshal(root)
+	got, ok := ExtractEmbeddedSubChains(dsl)
+	if !ok || len(got) != 2 || got[innerID] == nil || got[outerID] == nil {
+		t.Fatalf("got %v ok=%v", got, ok)
+	}
+	if EmbeddedSubChainBaseID(outerID) != "F1" {
+		t.Fatalf("base id of %s", outerID)
+	}
+}
