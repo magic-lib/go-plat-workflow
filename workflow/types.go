@@ -471,6 +471,23 @@ type RedisConfig struct {
 	DB int `json:"db"`
 	// Username 用户名（Redis 6+ ACL，可选）
 	Username string `json:"username,omitempty"`
+	// WorkerAddr worker 侧使用的 Redis 地址（可选，如内网地址 10.0.0.1:6379）。
+	// 流程服务自身（投递、心跳监听、节点日志、测试连接）始终用 Addr；
+	// 对外 redis-config 接口返回给 worker 时，若 WorkerAddr 非空则用它替换 Addr。
+	// 两个地址必须指向同一个 Redis 实例。
+	WorkerAddr string `json:"worker_addr,omitempty"`
+}
+
+// ForWorker 返回 worker 侧使用的 Redis 配置副本：WorkerAddr 非空时用它替换 Addr，否则原样返回副本。
+func (c *RedisConfig) ForWorker() *RedisConfig {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	if addr := strings.TrimSpace(c.WorkerAddr); addr != "" {
+		cp.Addr = addr
+	}
+	return &cp
 }
 
 // MySQLConfig 不同环境下的 MySQL 连接配置。

@@ -420,11 +420,16 @@ func (s *WorkflowService) GetProjectConfig(ctx context.Context, project string) 
 
 // GetProjectRedisConfig 对外配置查询：校验项目密钥后，按项目 + 环境名返回该环境的 Redis 配置。
 // 与 GetProjectConfig 共用 secret_key 鉴权；环境未配置或无 Redis 时返回明确错误。
+// 该接口供 worker 拉取配置，配置了 WorkerAddr 时返回的 addr 为 WorkerAddr（见 RedisConfig.ForWorker）。
 func (s *WorkflowService) GetProjectRedisConfig(ctx context.Context, project, envName string) (*workflow.RedisConfig, error) {
 	if envName == "" {
 		return nil, fmt.Errorf("env_name is required")
 	}
-	return s.getRedisConfig(ctx, project, envName)
+	cfg, err := s.getRedisConfig(ctx, project, envName)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.ForWorker(), nil
 }
 
 // ============================================================
