@@ -27,7 +27,8 @@ import (
 //   - payload 绑定 project / chain_id / trace_id / 过期时间，只能查看这一条根链在这个 trace 下的执行路径；
 //   - 签名密钥用项目已配置的 secret_key：平台签发时用最早创建的那个，校验时任一 secret_key 验过即可。
 //     对接方后端持有 secret_key 时可按同样算法自行签发；删除对应 secret_key 即让其签发的 token 全部失效。
-//   - 分享接口只返回画图所需的字段，不返回节点配置、执行入参与返回值等业务数据。
+//   - 分享接口不返回节点配置（地址、参数模板等）；该 trace 的节点执行记录会带上入参、返回值、错误与耗时，
+//     供页面悬停查看，持有链接即可看到这些执行数据。
 const (
 	flowShareDefaultTTL = 90 * 24 * time.Hour
 	flowShareMaxTTL     = 90 * 24 * time.Hour
@@ -218,13 +219,19 @@ type flowShareNode struct {
 	HasSwitchCondition bool   `json:"has_switch_condition,omitempty"`
 }
 
+// flowShareLog 分享接口返回的节点执行记录：用于标出执行路径，并在节点上显示耗时、悬停查看入参与返回值。
 type flowShareLog struct {
-	ID           uint      `json:"id"`
-	NodeID       string    `json:"node_id"`
-	Level        string    `json:"level"`
-	RelationType string    `json:"relation_type"`
-	Timestamp    int64     `json:"timestamp"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           uint            `json:"id"`
+	NodeID       string          `json:"node_id"`
+	NodeName     string          `json:"node_name,omitempty"`
+	Level        string          `json:"level"`
+	RelationType string          `json:"relation_type"`
+	DurationMs   int64           `json:"duration_ms"`
+	Arguments    json.RawMessage `json:"arguments,omitempty"`
+	Result       string          `json:"result,omitempty"`
+	ErrorMsg     string          `json:"error_msg,omitempty"`
+	Timestamp    int64           `json:"timestamp"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 // slimFlowDSL 从完整 DSL 中只抽出画图要用的节点字段，避免把节点配置（地址、参数等）暴露给分享链接。
@@ -350,7 +357,15 @@ func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) 
 				if level != "flow_total" && (l.ErrorMsg != "" || l.Error != "") {
 					level = "error"
 				}
-				logs = append(logs, flowShareLog{ID: l.ID, NodeID: l.NodeID, Level: level, RelationType: l.RelationType, Timestamp: l.Timestamp, CreatedAt: l.CreatedAt})
+				errMsg := l.ErrorMsg
+				if errMsg == "" {
+					errMsg = l.Error
+				}
+				logs = append(logs, flowShareLog{
+					ID: l.ID, NodeID: l.NodeID, NodeName: l.NodeName, Level: level, RelationType: l.RelationType,
+					DurationMs: l.DurationMs, Arguments: l.Arguments, Result: l.Result, ErrorMsg: errMsg,
+					Timestamp: l.Timestamp, CreatedAt: l.CreatedAt,
+				})
 			}
 			if len(list) < pageSize || int64(offset+len(list)) >= total {
 				break

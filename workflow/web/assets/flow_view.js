@@ -65,7 +65,8 @@
   const KIND_FALLBACK = { fill: '#f3f4f6', stroke: '#9ca3af', color: '#374151' };
   const ROUTE_FILL = { fill: '#dbeafe', stroke: '#2563eb', color: '#1e3a8a' };
 
-  function buildMermaid(chain, nodeDefs) {
+  // trace 可选：传入时在执行过的节点标签下显示耗时
+  function buildMermaid(chain, nodeDefs, trace) {
     const nodeIds = splitIds(chain.node_ids);
     const subIds = splitIds(chain.sub_chain_ids);
     const conns = parseJSON(chain.connections_data, []) || [];
@@ -120,6 +121,8 @@
       if (id !== baseId) label += `<br/><small>Id: ${esc(id)}</small>`;
       if (type === 'custom/RootChainCall' && cfg.target_chain_id) label += `<br/><small>→ 调用根链: ${esc(cfg.target_chain_id)}</small>`;
       if (expr) label += `<span class='orch-sw-cond'>⑂ ${escMermaidText(expr)}</span>`;
+      const durText = trace && trace.nodes[id] ? traceDurText(trace.nodes[id]) : '';
+      if (durText) label += `<br/><span class='fv-dur'>⏱ ${esc(durText)}</span>`;
       lines.push(`    ${safe}["${label}"]`);
       (kindSafeIds[clsName] = kindSafeIds[clsName] || []).push(safe);
     });
@@ -186,6 +189,31 @@
     return all;
   }
 
+  // 根链里参与画图的实例 ID 与连线（与 buildMermaid 口径一致），用于先算执行路径再画图
+  function chainGraph(chain) {
+    return {
+      graphIds: new Set([...splitIds(chain.node_ids), ...splitIds(chain.sub_chain_ids)]),
+      conns: parseJSON(chain.connections_data, []) || [],
+    };
+  }
+
+  function fmtMs(ms) {
+    const n = Number(ms);
+    if (!isFinite(n) || n < 0) return '';
+    if (n < 1000) return Math.round(n) + 'ms';
+    if (n < 60000) return (n / 1000).toFixed(n < 10000 ? 2 : 1) + 's';
+    return Math.floor(n / 60000) + 'm' + Math.round((n % 60000) / 1000) + 's';
+  }
+  // 节点耗时文本：执行一次直接显示；多次（循环等）显示每次耗时，超过 3 次只显示前 3 次与合计
+  function traceDurText(info) {
+    const ds = (info.runs || []).map(r => Number(r.log.duration_ms)).filter(d => isFinite(d) && d >= 0);
+    if (!ds.length) return '';
+    if (ds.length === 1) return fmtMs(ds[0]);
+    const total = ds.reduce((a, b) => a + b, 0);
+    const shown = ds.slice(0, 3).map(fmtMs).join(' / ') + (ds.length > 3 ? ' …' : '');
+    return shown + '（' + ds.length + ' 次，共 ' + fmtMs(total) + '）';
+  }
+
   function buildTracePath(logs, graphIds, conns) {
     const nodes = {};
     const steps = [];
@@ -193,8 +221,9 @@
       if (!graphIds.has(r.node_id)) return;
       const order = steps.length + 1;
       steps.push({ instId: r.node_id, order: order, log: r });
-      const n = nodes[r.node_id] || (nodes[r.node_id] = { orders: [], error: false });
+      const n = nodes[r.node_id] || (nodes[r.node_id] = { orders: [], error: false, runs: [] });
       n.orders.push(order);
+      n.runs.push({ order: order, log: r });
       if (r.level === 'error' || r.error_msg) n.error = true;
     });
     const edges = new Set();
@@ -245,6 +274,7 @@
       if (!g) return;
       const info = trace.nodes[instId];
       g.classList.add('fv-trace-node');
+      bindNodeTip(g, info);
       g.querySelectorAll(':scope > .label-container, :scope > g > .label-container').forEach(shape => {
         shape.style.setProperty('stroke', info.error ? '#7f1d1d' : '#ef4444', 'important');
         shape.style.setProperty('stroke-width', '4px', 'important');
@@ -267,6 +297,86 @@
         (l.closest('g.edgeLabel') || l).classList.add('fv-trace-label');
       });
     });
+  }
+
+  // ---------- 节点悬停：显示该节点本次执行的参数与返回值 ----------
+  let tipHideTimer = null;
+  function prettyVal(v) {
+    if (v === null || v === undefined || v === '') return '';
+    let obj = v;
+    if (typeof v === 'string') {
+      try { obj = JSON.parse(v); } catch (e) { return v; }
+    }
+    if (obj === null || obj === undefined) return '';
+    return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+  }
+  function tipSection(title, val) {
+    const text = prettyVal(val);
+    return '<div class="fv-tip-sec">' + title + '</div>' +
+      (text ? '<pre>' + esc(text) + '</pre>' : '<div class="fv-tip-empty">（无）</div>');
+  }
+  function tipHTML(info) {
+    const runs = info.runs || [];
+    const MAX = 10;
+    const parts = runs.slice(0, MAX).map(run => {
+      const r = run.log;
+      const head = ['第 ' + run.order + ' 步'];
+      const d = fmtMs(r.duration_ms);
+      if (d) head.push('⏱ ' + d);
+      if (r.relation_type) head.push('→ ' + esc(r.relation_type));
+      const err = r.error_msg || r.error || '';
+      return '<div class="fv-tip-run">' +
+        '<div class="fv-tip-head">' + esc(r.node_name || '') + ' <span>' + head.join(' · ') + '</span></div>' +
+        (err ? '<div class="fv-tip-err">错误：' + esc(err) + '</div>' : '') +
+        tipSection('参数', r.arguments) + tipSection('返回值', r.result) +
+        '</div>';
+    });
+    if (runs.length > MAX) parts.push('<div class="fv-tip-empty">共执行 ' + runs.length + ' 次，只显示前 ' + MAX + ' 次</div>');
+    return parts.join('');
+  }
+  function placeTip(tip, g) {
+    const rect = g.getBoundingClientRect();
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = rect.right + 8;
+    if (left + tw > vw - 8) left = rect.left - tw - 8;
+    if (left < 8) left = Math.max(8, Math.min(vw - tw - 8, rect.left));
+    let top = rect.top;
+    if (top + th > vh - 8) top = vh - th - 8;
+    if (top < 8) top = 8;
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+  }
+  function hideTip() {
+    clearTimeout(tipHideTimer);
+    const tip = $('fv-tip');
+    if (tip) tip.style.display = 'none';
+  }
+  function bindNodeTip(g, info) {
+    const tip = $('fv-tip');
+    if (!tip || !info || !(info.runs || []).length) return;
+    g.style.cursor = 'help';
+    g.addEventListener('mouseenter', () => {
+      clearTimeout(tipHideTimer);
+      tip.innerHTML = tipHTML(info);
+      tip.scrollTop = 0;
+      tip.style.display = 'block';
+      placeTip(tip, g);
+    });
+    g.addEventListener('mouseleave', () => {
+      clearTimeout(tipHideTimer);
+      tipHideTimer = setTimeout(hideTip, 200);
+    });
+  }
+  function initTip() {
+    const tip = $('fv-tip');
+    if (!tip) return;
+    // 鼠标移进浮层时保持显示，便于滚动查看较长的参数/返回值
+    tip.addEventListener('mouseenter', () => clearTimeout(tipHideTimer));
+    tip.addEventListener('mouseleave', () => { tipHideTimer = setTimeout(hideTip, 200); });
+    $('fv-stage').addEventListener('scroll', hideTip);
   }
 
   // ---------- 缩放与拖拽 ----------
@@ -358,12 +468,16 @@
     mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose',
       flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' } });
     initControls();
+    initTip();
     try {
       const data = await loadData();
       const chain = data.chain;
       if (!chain) { showMsg('未找到根链：' + esc(chainId)); return; }
-      const built = buildMermaid(chain, data.nodeDefs);
-      const logsPromise = data.logsPromise || (traceId ? fetchTraceLogs() : Promise.resolve([]));
+      // 先取执行记录算出路径，再画图：耗时要写进节点标签
+      const logs = await (data.logsPromise || (traceId ? fetchTraceLogs() : Promise.resolve([])));
+      const graph = chainGraph(chain);
+      const trace = buildTracePath(logs, graph.graphIds, graph.conns);
+      const built = buildMermaid(chain, data.nodeDefs, trace);
       const { svg } = await mermaid.render('fv-mermaid-' + Date.now(), built.syntax);
       $('fv-graph').innerHTML = svg;
       const svgEl = document.querySelector('#fv-graph svg');
@@ -371,11 +485,8 @@
       baseSize = vb && vb.width ? { w: vb.width, h: vb.height } : { w: svgEl.getBBox().width, h: svgEl.getBBox().height };
       $('fv-bar').classList.remove('hidden');
       $('fv-zoom').style.display = '';
-      renderInfo(chain, null, 0);
       fitScale();
       showMsg('');
-      const logs = await logsPromise;
-      const trace = buildTracePath(logs, built.graphIds, built.conns);
       applyTraceHighlight(trace);
       renderInfo(chain, trace, logs.length);
     } catch (e) {
