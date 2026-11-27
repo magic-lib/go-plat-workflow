@@ -15,7 +15,7 @@ type NodeLogModel struct {
 	Env         string `gorm:"column:env;type:varchar(128);not null" json:"env"`
 	NodeID      string `gorm:"column:node_id;type:varchar(255);not null;index:idx_node_proj" json:"node_id"`
 	NodeName    string `gorm:"column:node_name;type:varchar(255);not null" json:"node_name"`
-	EventID     string `gorm:"column:event_id;type:varchar(500)" json:"event_id"`
+	EventID     string `gorm:"column:event_id;type:varchar(500);index:event_id,length:191" json:"event_id"`
 	Level       string `gorm:"column:level;type:varchar(16);not null;index" json:"level"`
 	Timestamp   int64  `gorm:"column:ts;not null;index" json:"timestamp"`
 	DurationMs  int64  `gorm:"column:duration_ms" json:"duration_ms"`
@@ -28,7 +28,7 @@ type NodeLogModel struct {
 	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），用于追溯当时执行的是哪个发布版本。
 	RootChainReleaseID string `gorm:"column:root_chain_release_id;type:varchar(128);index;default:''" json:"root_chain_release_id"`
 	SpanID             string `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
-	RelationType       string `gorm:"column:relation_type;type:varchar(500);default:''" json:"relation_type"`
+	RelationType       string `gorm:"column:relation_type;type:varchar(500);default:'';index:relation_type,length:191" json:"relation_type"`
 	// ChainID 节点实际所在的链：主链节点为根链 ID，子链里的节点为子链 ID。
 	ChainID string `gorm:"column:chain_id;type:varchar(128);index;default:''" json:"chain_id"`
 	// CallPath 子链调用路径（调用子链的子链节点实例 ID，嵌套用 "/" 拼接）；主链节点为空。
