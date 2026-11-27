@@ -9240,7 +9240,7 @@ async function queryOrchTracePath() {
   }
 }
 
-// 生成 /flow-view 只读分享链接（免登录，默认 7 天有效）：绑定当前根链与输入框里的 traceId（可为空，只看流程图）
+// 生成 /flow-view 只读分享链接（免登录，默认 90 天有效）：绑定当前根链与输入框里的 traceId（可为空，只看流程图）
 async function createOrchFlowShare() {
   const chainEl = document.getElementById('orch-chain-id');
   const chainId = ((chainEl && chainEl.value) || '').trim();

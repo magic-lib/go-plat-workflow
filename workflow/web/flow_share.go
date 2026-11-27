@@ -29,8 +29,8 @@ import (
 //     对接方后端持有 secret_key 时可按同样算法自行签发；删除对应 secret_key 即让其签发的 token 全部失效。
 //   - 分享接口只返回画图所需的字段，不返回节点配置、执行入参与返回值等业务数据。
 const (
-	flowShareDefaultTTL = 7 * 24 * time.Hour
-	flowShareMaxTTL     = 30 * 24 * time.Hour
+	flowShareDefaultTTL = 90 * 24 * time.Hour
+	flowShareMaxTTL     = 90 * 24 * time.Hour
 	// flowShareMaxLogs 分享接口最多返回的节点日志条数，与页面登录态下的查询上限一致。
 	flowShareMaxLogs = 1000
 )
@@ -120,7 +120,7 @@ func (ws *WebServer) projectSecretKeys(ctx context.Context, project string) ([]s
 }
 
 // handleCreateFlowShare 生成 /flow-view 只读分享链接（需登录，且对该项目有编辑权限，由中间件按 ?project= 校验）。
-// 请求体：{ chain_id, trace_id, expire_hours }，expire_hours 默认 168（7 天），最大 720（30 天）。
+// 请求体：{ chain_id, trace_id, expire_hours }，expire_hours 默认与最大均为 2160（90 天）。
 func (ws *WebServer) handleCreateFlowShare(w http.ResponseWriter, r *http.Request) {
 	project := projectParam(r)
 	if project == "" {
