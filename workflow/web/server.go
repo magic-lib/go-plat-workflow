@@ -148,6 +148,9 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("GET /orch", ws.serveOrch)
 	// 流程执行路径查看页（独立精简页，只显示流程图与 trace 执行路径，便于嵌入其它页面）
 	ws.mux.HandleFunc("GET /flow-view", ws.serveFlowView)
+	// 流程执行路径查看页的只读分享：登录后生成分享链接；凭分享 token 免登录取数
+	ws.mux.HandleFunc("POST /api/flow-view/share", ws.handleCreateFlowShare)
+	ws.mux.HandleFunc("GET /api/flow-view/shared", ws.handleGetFlowShare)
 	// 公共静态资源（CSS / JS）
 	ws.mux.HandleFunc("GET /assets/", ws.serveAssets)
 

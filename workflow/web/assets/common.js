@@ -9240,6 +9240,36 @@ async function queryOrchTracePath() {
   }
 }
 
+// 生成 /flow-view 只读分享链接（免登录，默认 7 天有效）：绑定当前根链与输入框里的 traceId（可为空，只看流程图）
+async function createOrchFlowShare() {
+  const chainEl = document.getElementById('orch-chain-id');
+  const chainId = ((chainEl && chainEl.value) || '').trim();
+  if (!chainId) { showToast('当前没有加载根链，无法生成分享链接', 'error'); return; }
+  const input = document.getElementById('orch-trace-input');
+  const traceId = ((input && input.value) || '').trim();
+  const btn = document.getElementById('orch-trace-share');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/api/flow-view/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chain_id: chainId, trace_id: traceId }),
+    });
+    const link = location.origin + res.url;
+    const expires = new Date(res.expires_at).toLocaleString();
+    const done = () => showToast('分享链接已复制，有效期至 ' + expires, 'success');
+    const fallback = () => window.prompt('分享链接（有效期至 ' + expires + '），请手动复制：', link);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done).catch(fallback);
+    } else {
+      fallback();
+    }
+  } catch (e) {
+    showToast('生成分享链接失败: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // 清除执行路径高亮
 function clearOrchTrace() {
   _orchTrace = null;

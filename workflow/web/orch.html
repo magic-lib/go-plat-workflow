@@ -188,6 +188,7 @@
                 <input id="orch-trace-input" class="orch-trace-input" type="text" placeholder="输入 traceId 查看执行路径" onkeydown="if(event.key==='Enter')queryOrchTracePath()">
                 <button id="orch-trace-btn" class="btn btn-sm btn-primary" type="button" onclick="queryOrchTracePath()">查询</button>
                 <button id="orch-trace-clear" class="btn btn-sm btn-outline" type="button" onclick="clearOrchTrace()" style="display:none">清除</button>
+                <button id="orch-trace-share" class="btn btn-sm btn-outline" type="button" onclick="createOrchFlowShare()" title="生成免登录的只读查看链接（7 天有效），可嵌入其它系统">分享</button>
               </span>
             </span>
             <span class="orch-zoom">

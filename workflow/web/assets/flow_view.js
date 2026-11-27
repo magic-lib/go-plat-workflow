@@ -1,5 +1,6 @@
 // 流程执行路径查看页（/flow-view）：只渲染根链流程图，并按 trace_id 高亮执行路径。
 // 用法：/flow-view?project=yangloan&chain_id=R000012&trace_id=xxx
+// 免登录嵌入：在编排页生成分享链接，地址里带 share=<只读分享 token>，此时只走 /api/flow-view/shared 一个接口。
 // 独立轻量实现，不依赖 common.js；节点配色、标签、路径高亮规则与编排页 Live Preview 保持一致。
 (function () {
   'use strict';
@@ -7,7 +8,8 @@
   const params = new URLSearchParams(location.search);
   const project = (params.get('project') || '').trim();
   const chainId = (params.get('chain_id') || '').trim();
-  const traceId = (params.get('trace_id') || '').trim();
+  let traceId = (params.get('trace_id') || '').trim();
+  const shareToken = (params.get('share') || '').trim();
 
   const $ = id => document.getElementById(id);
   let idMap = {};      // 实例 ID -> mermaid 安全 ID
@@ -170,7 +172,12 @@
       all = all.concat(list);
       if (list.length < pageSize || all.length >= ((resp && resp.total) || 0)) break;
     }
-    all = all.filter(r => r && r.node_id && r.level !== 'flow_total');
+    return sortTraceLogs(all);
+  }
+
+  // 去掉汇总行，按执行时间正序
+  function sortTraceLogs(all) {
+    all = (all || []).filter(r => r && r.node_id && r.level !== 'flow_total');
     const t = r => {
       const ms = Date.parse(r.created_at || '');
       return isNaN(ms) ? (Number(r.timestamp) || 0) * 1000 : ms;
@@ -319,8 +326,31 @@
     info.title = info.textContent;
   }
 
+  // 取画图数据：带分享 token 时一次取齐（免登录），否则按登录态分别请求
+  async function loadData() {
+    if (shareToken) {
+      const res = await fetch('/api/flow-view/shared?share=' + encodeURIComponent(shareToken), { credentials: 'omit' });
+      let data = null;
+      try { data = await res.json(); } catch (e) { data = null; }
+      if (!res.ok) {
+        const err = new Error((data && data.error) || res.statusText);
+        err.status = res.status;
+        err.share = true;
+        throw err;
+      }
+      // trace_id 以 token 里绑定的为准，防止改地址参数造成误解
+      traceId = data.trace_id || '';
+      return { chain: data.chain, nodeDefs: data.nodes || [], logsPromise: Promise.resolve(sortTraceLogs(data.logs)) };
+    }
+    const [chain, nodeDefs] = await Promise.all([
+      api('/api/root-chains/' + encodeURIComponent(chainId)),
+      api('/api/nodes'),
+    ]);
+    return { chain: chain, nodeDefs: nodeDefs, logsPromise: null };
+  }
+
   async function main() {
-    if (!project || !chainId) {
+    if (!shareToken && (!project || !chainId)) {
       showMsg('缺少参数：请在地址中带上 project 和 chain_id，例如 /flow-view?project=xxx&chain_id=R000001&trace_id=xxx');
       return;
     }
@@ -329,13 +359,11 @@
       flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' } });
     initControls();
     try {
-      const [chain, nodeDefs] = await Promise.all([
-        api('/api/root-chains/' + encodeURIComponent(chainId)),
-        api('/api/nodes'),
-      ]);
+      const data = await loadData();
+      const chain = data.chain;
       if (!chain) { showMsg('未找到根链：' + esc(chainId)); return; }
-      const built = buildMermaid(chain, nodeDefs);
-      const logsPromise = traceId ? fetchTraceLogs() : Promise.resolve([]);
+      const built = buildMermaid(chain, data.nodeDefs);
+      const logsPromise = data.logsPromise || (traceId ? fetchTraceLogs() : Promise.resolve([]));
       const { svg } = await mermaid.render('fv-mermaid-' + Date.now(), built.syntax);
       $('fv-graph').innerHTML = svg;
       const svgEl = document.querySelector('#fv-graph svg');
@@ -351,7 +379,9 @@
       applyTraceHighlight(trace);
       renderInfo(chain, trace, logs.length);
     } catch (e) {
-      if (e.status === 401) {
+      if (e.share) {
+        showMsg('无法查看：' + esc(e.message) + '，请联系分享人重新生成链接');
+      } else if (e.status === 401) {
         showMsg('未登录或会话已过期，请先<a href="/" target="_blank" rel="noopener">登录流程管理中心</a>后刷新本页');
       } else {
         showMsg('加载失败：' + esc(e.message));
