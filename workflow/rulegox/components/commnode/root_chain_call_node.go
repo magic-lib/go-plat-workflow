@@ -199,13 +199,17 @@ func (x *RootChainCallNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 
 // invoke 校验循环与深度后，通过注入的 RootChainInvoker 调用目标根链。
 func (x *RootChainCallNode) invoke(goCtx context.Context, metaData *rulegox.ActivityMetaData, arguments map[string]any) (any, error) {
+	return invokeRootChainTarget(goCtx, metaData, x.Configuration.TargetChainID, arguments)
+}
+
+// invokeRootChainTarget 校验循环与深度后，通过注入的 RootChainInvoker 调用目标根链（调用根链节点、循环节点共用）。
+func invokeRootChainTarget(goCtx context.Context, metaData *rulegox.ActivityMetaData, target string, arguments map[string]any) (any, error) {
 	if defaultRootChainInvoker == nil {
 		return nil, fmt.Errorf("调用根链节点未初始化（RootChainInvoker 未注入）")
 	}
 	if goCtx == nil {
 		goCtx = context.Background()
 	}
-	target := x.Configuration.TargetChainID
 	path, err := nextRootChainCallPath(rootChainCallPath(goCtx), metaData.RootChainID, target)
 	if err != nil {
 		return nil, err

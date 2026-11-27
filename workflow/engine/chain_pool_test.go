@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 )
@@ -262,5 +263,22 @@ func TestExtractEmbeddedSubChainsNested(t *testing.T) {
 	}
 	if EmbeddedSubChainBaseID(outerID) != "F1" {
 		t.Fatalf("base id of %s", outerID)
+	}
+}
+
+func TestLoopSubChainTarget(t *testing.T) {
+	n := &types.RuleNode{Id: "N1__a", Type: common.LoopNodeTypeName, Configuration: types.Configuration{
+		common.LoopConfigField: `{"body_type":"subchain","body_id":"S1","body_target":"p:S1#abc"}`,
+	}}
+	ft, ok := LoopSubChainTarget(n)
+	if !ok || ft.SubChainID != "S1" || ft.TargetID != "S1#abc" || ft.Scoped {
+		t.Fatalf("ft=%+v ok=%v", ft, ok)
+	}
+	n.Configuration[common.LoopConfigField] = map[string]any{"body_type": "rootchain", "body_id": "R1"}
+	if _, ok := LoopSubChainTarget(n); ok {
+		t.Fatal("root chain loop body is not a sub chain target")
+	}
+	if _, ok := LoopSubChainTarget(&types.RuleNode{Type: "flow"}); ok {
+		t.Fatal("flow node is not a loop")
 	}
 }

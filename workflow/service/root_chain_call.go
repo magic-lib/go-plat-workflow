@@ -112,7 +112,7 @@ func (s *WorkflowService) rootChainCallSignature(ctx context.Context, project, c
 	}, allNodes, nil
 }
 
-// checkRootChainCalls 发布前校验链中的调用根链节点：
+// checkRootChainCalls 发布前校验链中的调用根链节点（以及循环体为根链的循环节点）：
 //   - 必须选择了目标根链，且目标根链有线上发布版本；
 //   - 节点配置的入参覆盖目标根链当前发布版本所需的全部入参；
 //   - 沿调用关系向下不能回到已在调用路径上的根链（循环调用），嵌套层数不超过 commnode.MaxRootChainCallDepth。
@@ -122,12 +122,12 @@ func (s *WorkflowService) checkRootChainCalls(ctx context.Context, project, chai
 
 func (s *WorkflowService) walkRootChainCalls(ctx context.Context, project string, path []string, nodes []*types.RuleNode, checkArgs bool) error {
 	for _, n := range nodes {
-		if n == nil || n.Type != common.RootChainCallNodeTypeName {
+		target, label, ok := rootChainCallTarget(n)
+		if !ok {
 			continue
 		}
-		target := strings.TrimSpace(conv.String(n.Configuration[common.RootChainCallConfigKey]))
 		if target == "" {
-			return fmt.Errorf("调用根链节点 %s 未选择目标根链", n.Id)
+			return fmt.Errorf("%s %s 未选择目标根链", label, n.Id)
 		}
 		if lo.Contains(path, target) {
 			return fmt.Errorf("根链循环调用：%s -> %s（节点 %s）", strings.Join(path, " -> "), target, n.Id)
@@ -137,11 +137,14 @@ func (s *WorkflowService) walkRootChainCalls(ctx context.Context, project string
 		}
 		sig, targetNodes, err := s.rootChainCallSignature(ctx, project, target)
 		if err != nil {
-			return fmt.Errorf("调用根链节点 %s：%w", n.Id, err)
+			return fmt.Errorf("%s %s：%w", label, n.Id, err)
+		}
+		if label == "循环节点" && lo.Contains(sig.Arguments, common.LoopItemsKey) {
+			return fmt.Errorf("循环节点 %s 的目标根链 %s 有入参 %s，与循环数据参数同名，请修改目标根链的入参名", n.Id, target, common.LoopItemsKey)
 		}
 		if checkArgs {
 			if missing := missingRootChainCallArgs(n, sig.Arguments); len(missing) > 0 {
-				return fmt.Errorf("调用根链节点 %s 缺少目标根链 %s 的入参：%s，请在编排页重新选择该根链后补齐", n.Id, target, strings.Join(missing, ","))
+				return fmt.Errorf("%s %s 缺少目标根链 %s 的入参：%s，请在编排页重新选择该根链后补齐", label, n.Id, target, strings.Join(missing, ","))
 			}
 		}
 		next := append(append(make([]string, 0, len(path)+1), path...), target)
@@ -150,6 +153,38 @@ func (s *WorkflowService) walkRootChainCalls(ctx context.Context, project string
 		}
 	}
 	return nil
+}
+
+// checkLoopNodes 发布前按执行时的规则校验循环节点配置（模式、循环数据、循环体、次数与并发限制等）。
+func checkLoopNodes(nodes []*types.RuleNode) error {
+	for _, n := range nodes {
+		if n == nil || n.Type != common.LoopNodeTypeName {
+			continue
+		}
+		if err := commnode.ValidateLoopNodeConfig(n.Configuration); err != nil {
+			return fmt.Errorf("节点 %s：%w", n.Id, err)
+		}
+	}
+	return nil
+}
+
+// rootChainCallTarget 判断节点是否会调用根链，返回目标根链 ID 与用于提示的节点类型名：
+// 调用根链节点取 configuration.target_chain_id，循环节点在循环体为根链时取 loop.body_id。
+func rootChainCallTarget(n *types.RuleNode) (target, label string, ok bool) {
+	if n == nil {
+		return "", "", false
+	}
+	switch n.Type {
+	case common.RootChainCallNodeTypeName:
+		return strings.TrimSpace(conv.String(n.Configuration[common.RootChainCallConfigKey])), "调用根链节点", true
+	case common.LoopNodeTypeName:
+		bodyType, bodyID := commnode.LoopBodyRef(n.Configuration)
+		if bodyType != common.LoopBodyRootChain {
+			return "", "", false
+		}
+		return bodyID, "循环节点", true
+	}
+	return "", "", false
 }
 
 // missingRootChainCallArgs 返回目标根链所需、但调用根链节点 arguments 中没有配置的入参名。
