@@ -10338,6 +10338,7 @@ function nodeSwitchConditionText(n) {
   const v = (cfg && cfg.node_config && cfg.node_config.switch_condition) || '';
   return String(v).trim();
 }
+// 只显示 🔀 图标（Nodes 列表、编排页节点选择框、已选 Nodes 弹窗共用，省宽度），路由说明在悬停 title 里
 function nodeRouteBadge(n) {
   if (!n) return '';
   const has = (typeof n.has_switch_condition === 'boolean')
@@ -10346,7 +10347,7 @@ function nodeRouteBadge(n) {
   if (!has) return '';
   const expr = nodeSwitchConditionText(n);
   const tip = expr ? ('已配置路由条件（switch_condition）：' + expr) : '已配置路由条件（switch_condition），执行后按返回值路由到不同分支';
-  return ' <span class="route-badge" title="' + esc(tip) + '">🔀路由</span>';
+  return ' <span class="route-badge" title="' + esc(tip) + '">🔀</span>';
 }
 // 编排 Live Preview（Mermaid 节点标签内）的路由标记。
 // 与 nodeRouteBadge 判定逻辑一致，但 Mermaid 标签整体由双引号包裹且 class 对 SVG 内元素不生效，
