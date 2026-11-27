@@ -1337,6 +1337,8 @@ function syncSwitchConfig() {
 function renderCondVarSnippets() {
   const box = document.getElementById('node-cond-var-snippets');
   if (!box) return;
+  // 先绑定监听再渲染：节点还没有参数/返回值时下面会提前 return，监听放在末尾就永远绑不上，新增条目后不刷新
+  bindCondVarSnippetWatch();
   const items = [];
   // 节点参数：来自「参数定义」表单，格式 [arguments.<key>]
   nodeParamDefs().forEach(p => {
@@ -1370,7 +1372,6 @@ function renderCondVarSnippets() {
   }).join('');
   box.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">可用变量（点击复制）：</div>' +
     '<div style="display:flex;flex-wrap:wrap">' + rows + '</div>';
-  bindCondVarSnippetWatch();
 }
 
 // 事件委托：监听参数/返回值容器的输入与增删，实时刷新「可用变量」列表。
@@ -1381,6 +1382,8 @@ function bindCondVarSnippetWatch() {
     if (!box || box.dataset.condVarBound === '1') return;
     box.dataset.condVarBound = '1';
     box.addEventListener('input', renderCondVarSnippets);
+    // 下拉框（类型）改动兜底：部分浏览器 select 只触发 change
+    box.addEventListener('change', renderCondVarSnippets);
     // 增删行不触发 input，用 MutationObserver 覆盖
     const mo = new MutationObserver(() => renderCondVarSnippets());
     mo.observe(box, { childList: true, subtree: false });
@@ -4841,6 +4844,8 @@ function addParamRow(key, label, type, required, defaultValue, description, poli
     <select class="param-policy">${policyHTML}</select>
     <input class="param-default" placeholder="默认值" value="${esc(defaultValue||'')}">
     <input class="param-desc" placeholder="描述" value="${esc(description||'')}">
+    <button class="btn-move-param" type="button" onclick="moveParamRow(this,-1)" title="上移">&uarr;</button>
+    <button class="btn-move-param" type="button" onclick="moveParamRow(this,1)" title="下移">&darr;</button>
     <button class="btn-remove-param" onclick="removeParamRow('param-row-${paramSeq}')" title="删除此参数">&times;</button>
   `;
   container.appendChild(row);
@@ -4856,8 +4861,56 @@ function ensureLoopItemsParamRow(type) {
   addParamRow('loop_items', '循环数据', 'slice', true, '', '要遍历的数组（或对象，按键遍历），每个元素执行一次循环体；条件循环模式下不需要配置', 'frontend+');
 }
 
+// 找出本节点里引用了节点参数 key（{{arguments.key}} 或 {{arguments.key.xxx}}）的 Activity，返回其显示名列表
+function activitiesReferencingNodeParam(key) {
+  if (!key) return [];
+  const reEsc = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('\\{\\{\\s*arguments\\.' + reEsc + '\\s*(\\.|\\}\\})');
+  const names = [];
+  document.querySelectorAll('#node-activity-stages .act-item').forEach(row => {
+    // 参数明细已渲染时取页面上的实时绑定，否则取 data-args 快照
+    let binds = {};
+    if (row.querySelector('.arg-bind-row')) {
+      binds = collectActivityArgBinds(row);
+    } else {
+      try { binds = JSON.parse(row.getAttribute('data-args') || '{}') || {}; } catch (e) { binds = {}; }
+    }
+    const used = Object.keys(binds).some(k => {
+      const b = binds[k] || {};
+      if ((b.source || 'value') === 'value') return false;
+      return re.test(String(b.ref || b.value || ''));
+    });
+    if (!used) return;
+    const titleEl = row.querySelector('.act-item-name');
+    const name = (titleEl && titleEl.textContent.trim()) || ((row.getAttribute('data-ns') || '') + '/' + (row.getAttribute('data-name') || ''));
+    if (!names.includes(name)) names.push(name);
+  });
+  return names;
+}
+
+// 参数定义 / 返回值定义行上移(dir=-1)或下移(dir=1)：保存时按页面顺序收集，顺序即落库顺序。
+// 只在同一容器的 .param-row 之间交换，跳过「暂无…」等占位元素；已在首/尾时不动。
+function moveParamRow(btn, dir) {
+  const row = btn && btn.closest('.param-row');
+  if (!row || !row.parentNode) return;
+  let sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+  while (sib && !sib.classList.contains('param-row')) {
+    sib = dir < 0 ? sib.previousElementSibling : sib.nextElementSibling;
+  }
+  if (!sib) return;
+  row.parentNode.insertBefore(row, dir < 0 ? sib : sib.nextElementSibling);
+  btn.focus();
+}
+
 function removeParamRow(rowId) {
   const row = document.getElementById(rowId);
+  const keyEl = row && row.querySelector('.param-key');
+  const key = keyEl ? keyEl.value.trim() : '';
+  const refs = activitiesReferencingNodeParam(key);
+  if (refs.length) {
+    showToast('参数 ' + key + ' 正被 Activity 引用，不能删除：' + refs.join('、') + '。请先在这些 Activity 的参数配置里改掉对它的引用', 'error');
+    return;
+  }
   if (row) row.remove();
   const container = document.getElementById('node-params-container');
   if (!container.querySelector('.param-row')) {
@@ -5000,6 +5053,8 @@ function addOutputRow(opts) {
   row.id = 'output-row-' + outputSeq;
   row.innerHTML = `
     <span class="output-input-wrap" style="flex:1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0"></span>
+    <button class="btn-move-param" type="button" onclick="moveParamRow(this,-1)" title="上移">&uarr;</button>
+    <button class="btn-move-param" type="button" onclick="moveParamRow(this,1)" title="下移">&darr;</button>
     <button class="btn-remove-param" onclick="removeOutputRow('output-row-${outputSeq}')" title="删除此返回值">&times;</button>
   `;
   container.appendChild(row);
