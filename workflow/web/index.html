@@ -184,10 +184,12 @@
         <div id="act-return-values-container" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:#fafbfc">
           <div id="act-return-values-empty" style="text-align:center;padding:16px;color:var(--text-muted);font-size:.85rem">暂无返回值设置</div>
         </div>
-        <div class="form-row" style="align-items:center;gap:6px;margin-top:8px">
-          <input type="checkbox" id="act-allow-nil-return" style="width:auto;margin:0">
-          <label for="act-allow-nil-return" style="margin:0;font-size:.82rem;cursor:pointer;font-weight:600">允许返回空</label>
-          <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（活动返回 nil 时不报错：对象返回 new 一个空对象并按返回值类型补零值，单值返回取类型零值；仅建议"查不到属正常业务"的活动开启）</span>
+        <div style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;padding:8px 12px;border:1px dashed var(--border);border-radius:var(--radius);background:#fffbeb">
+          <input type="checkbox" id="act-allow-nil-return" style="width:16px;height:16px;padding:0;margin:2px 0 0;flex-shrink:0;cursor:pointer;accent-color:var(--primary)">
+          <label for="act-allow-nil-return" style="display:block;margin:0;cursor:pointer">
+            <span style="font-size:.85rem;font-weight:600;color:var(--text)">允许返回空</span>
+            <span style="display:block;margin-top:2px;font-size:.78rem;font-weight:400;line-height:1.5;color:var(--text-muted)">活动返回 nil 时不报错：对象返回 new 一个空对象并按返回值类型补零值，单值返回取类型零值。仅建议"查不到属正常业务"的活动开启。</span>
+          </label>
         </div>
       </div>
       <div class="form-group" style="display: none;">
