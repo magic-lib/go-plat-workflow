@@ -4701,8 +4701,42 @@ function addParamRow(key, label, type, required, defaultValue, description, poli
   container.appendChild(row);
 }
 
+// 找出本节点里引用了节点参数 key（{{arguments.key}} 或 {{arguments.key.xxx}}）的 Activity，返回其显示名列表
+function activitiesReferencingNodeParam(key) {
+  if (!key) return [];
+  const reEsc = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('\\{\\{\\s*arguments\\.' + reEsc + '\\s*(\\.|\\}\\})');
+  const names = [];
+  document.querySelectorAll('#node-activity-stages .act-item').forEach(row => {
+    // 参数明细已渲染时取页面上的实时绑定，否则取 data-args 快照
+    let binds = {};
+    if (row.querySelector('.arg-bind-row')) {
+      binds = collectActivityArgBinds(row);
+    } else {
+      try { binds = JSON.parse(row.getAttribute('data-args') || '{}') || {}; } catch (e) { binds = {}; }
+    }
+    const used = Object.keys(binds).some(k => {
+      const b = binds[k] || {};
+      if ((b.source || 'value') === 'value') return false;
+      return re.test(String(b.ref || b.value || ''));
+    });
+    if (!used) return;
+    const titleEl = row.querySelector('.act-item-name');
+    const name = (titleEl && titleEl.textContent.trim()) || ((row.getAttribute('data-ns') || '') + '/' + (row.getAttribute('data-name') || ''));
+    if (!names.includes(name)) names.push(name);
+  });
+  return names;
+}
+
 function removeParamRow(rowId) {
   const row = document.getElementById(rowId);
+  const keyEl = row && row.querySelector('.param-key');
+  const key = keyEl ? keyEl.value.trim() : '';
+  const refs = activitiesReferencingNodeParam(key);
+  if (refs.length) {
+    showToast('参数 ' + key + ' 正被 Activity 引用，不能删除：' + refs.join('、') + '。请先在这些 Activity 的参数配置里改掉对它的引用', 'error');
+    return;
+  }
   if (row) row.remove();
   const container = document.getElementById('node-params-container');
   if (!container.querySelector('.param-row')) {
