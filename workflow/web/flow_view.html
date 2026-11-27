@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>流程执行路径</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fff; color: #1a1a2e; overflow: hidden; display: flex; flex-direction: column; }
+  .fv-bar { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 8px; font-size: 12px; border-bottom: 1px solid #f0f0f0; }
+  .fv-bar:empty, .fv-bar.hidden { display: none; }
+  .fv-info { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #4b5563; }
+  .fv-info b { font-weight: 600; color: #1a1a2e; }
+  .fv-zoom { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .fv-info .err { color: #dc2626; }
+  .fv-zoom button { border: 1px solid #d1d5db; background: #fff; border-radius: 4px; padding: 0 8px; font-size: 13px; line-height: 20px; cursor: pointer; }
+  .fv-zoom span { min-width: 40px; text-align: center; }
+  #fv-main { position: relative; flex: 1; min-height: 0; }
+  #fv-stage { position: absolute; inset: 0; overflow: auto; cursor: grab; }
+  #fv-stage.panning { cursor: grabbing; user-select: none; }
+  #fv-graph { display: inline-block; padding: 16px; min-width: 100%; text-align: center; }
+  #fv-graph svg { display: block; margin: 0 auto; max-width: none !important; }
+  .fv-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: #6b7280; font-size: 14px; }
+  .fv-msg a { color: #4f46e5; }
+  /* 节点标签内的路由标记与 switch_condition（与编排页 Live Preview 一致） */
+  .orch-route-mark { display: inline-block; padding: 0 5px; border-radius: 8px; font-size: .62rem; font-weight: 600; background: #dbeafe; }
+  #fv-graph .node span.orch-route-mark { color: #1e40af !important; }
+  .orch-sw-cond { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; word-break: break-all; max-width: 240px; margin-top: 4px; padding: 2px 6px; border-radius: 4px; background: #fff7ed; border: 1px dashed #f59e0b; font-family: monospace; font-size: 11px; line-height: 1.35; text-align: left; }
+  #fv-graph .node span.orch-sw-cond { color: #b45309 !important; }
+  /* 执行路径高亮 */
+  .fv-trace-on g.node:not(.fv-trace-node) { opacity: .35; }
+  .fv-trace-on path.flowchart-link:not(.fv-trace-edge) { opacity: .25; }
+  .fv-trace-on g.edgeLabel:not(.fv-trace-label) { opacity: .3; }
+  .fv-trace-node .label-container { filter: drop-shadow(0 0 6px rgba(239, 68, 68, .75)); }
+  path.fv-trace-edge { stroke: #ef4444 !important; stroke-width: 3.5px !important; stroke-dasharray: 10 5; animation: fvTraceFlow .8s linear infinite; }
+  @keyframes fvTraceFlow { to { stroke-dashoffset: -15; } }
+  .fv-trace-label .labelBkg, .fv-trace-label span, .fv-trace-label p { background: #ef4444 !important; color: #fff !important; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="fv-bar hidden" id="fv-bar">
+  <div class="fv-info" id="fv-info"></div>
+  <div class="fv-zoom" id="fv-zoom" style="display:none">
+    <button type="button" data-zoom="-0.2" title="缩小">−</button>
+    <span id="fv-zoom-label">100%</span>
+    <button type="button" data-zoom="0.2" title="放大">+</button>
+    <button type="button" data-zoom="fit" title="适应窗口">适应</button>
+  </div>
+</div>
+<div id="fv-main">
+  <div id="fv-stage"><div id="fv-graph"></div></div>
+  <div class="fv-msg" id="fv-msg">加载中…</div>
+</div>
+<script src="/assets/flow_view.js"></script>
+</body>
+</html>

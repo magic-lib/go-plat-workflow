@@ -30,7 +30,7 @@ import (
 	"github.com/rulego/rulego/api/types"
 )
 
-//go:embed index.html orch.html assets
+//go:embed index.html orch.html flow_view.html assets
 var webAssets embed.FS
 
 // WebServer 工作流管理 Web 服务。
@@ -146,6 +146,8 @@ func (ws *WebServer) registerRoutes() {
 	ws.mux.HandleFunc("/", ws.serveIndex)
 	// 子链编排独立页面
 	ws.mux.HandleFunc("GET /orch", ws.serveOrch)
+	// 流程执行路径查看页（独立精简页，只显示流程图与 trace 执行路径，便于嵌入其它页面）
+	ws.mux.HandleFunc("GET /flow-view", ws.serveFlowView)
 	// 公共静态资源（CSS / JS）
 	ws.mux.HandleFunc("GET /assets/", ws.serveAssets)
 
@@ -296,6 +298,18 @@ func (ws *WebServer) serveOrch(w http.ResponseWriter, r *http.Request) {
 	data, err := fs.ReadFile(webAssets, "orch.html")
 	if err != nil {
 		http.Error(w, "orch.html not found", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+// serveFlowView 返回流程执行路径查看页（flow_view.html）：/flow-view?project=xx&chain_id=R000012&trace_id=xxx
+// 独立精简页面，只渲染根链流程图并按 trace_id 高亮执行路径，便于嵌入其它页面。
+func (ws *WebServer) serveFlowView(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(webAssets, "flow_view.html")
+	if err != nil {
+		http.Error(w, "flow_view.html not found", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
