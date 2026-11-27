@@ -109,3 +109,23 @@ func TestFlowShareRoutesAuth(t *testing.T) {
 		t.Fatal("only GET of /api/flow-view/shared is public")
 	}
 }
+
+func TestResolveFlowShareTraceID(t *testing.T) {
+	chainLevel := flowSharePayload{Project: "p", ChainID: "R1", ExpiresAt: 1}
+	bound := flowSharePayload{Project: "p", ChainID: "R1", TraceID: "bound-trace", ExpiresAt: 1}
+
+	// 按根链分享：用地址里的 trace_id，可任意替换，也可为空
+	if got, err := resolveFlowShareTraceID(chainLevel, " trace-a "); err != nil || got != "trace-a" {
+		t.Fatalf("chain-level: got %q, %v", got, err)
+	}
+	if got, err := resolveFlowShareTraceID(chainLevel, ""); err != nil || got != "" {
+		t.Fatalf("chain-level empty: got %q, %v", got, err)
+	}
+	if _, err := resolveFlowShareTraceID(chainLevel, strings.Repeat("x", flowShareMaxTraceIDLen+1)); err == nil {
+		t.Fatal("too long trace_id should be rejected")
+	}
+	// 按单次执行分享：只认 token 里绑定的，地址里改了不生效
+	if got, err := resolveFlowShareTraceID(bound, "other-trace"); err != nil || got != "bound-trace" {
+		t.Fatalf("bound: got %q, %v", got, err)
+	}
+}

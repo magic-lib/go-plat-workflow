@@ -24,7 +24,9 @@ import (
 //
 // 用途：把 /flow-view 嵌入到其它系统（跨域名 iframe 拿不到 wf_session Cookie）时免登录查看。
 // 格式：base64url(payload JSON) + "." + base64url(HMAC-SHA256(项目 secret_key, payload 段))。
-//   - payload 绑定 project / chain_id / trace_id / 过期时间，只能查看这一条根链在这个 trace 下的执行路径；
+//   - payload 绑定 project / chain_id / 过期时间，只能查看这一条根链；
+//     trace_id 可选：不绑定时为「按根链分享」，打开时用地址里的 trace_id，可查看该根链下任意一次执行；
+//     绑定时为「按单次执行分享」，只能看这一条，地址里的 trace_id 不生效（兼容早期生成的链接）。
 //   - 签名密钥用项目已配置的 secret_key：平台签发时用最早创建的那个，校验时任一 secret_key 验过即可。
 //     对接方后端持有 secret_key 时可按同样算法自行签发；删除对应 secret_key 即让其签发的 token 全部失效。
 //   - 分享接口不返回节点配置（地址、参数模板等）；该 trace 的节点执行记录会带上入参、返回值、错误与耗时，
@@ -121,7 +123,9 @@ func (ws *WebServer) projectSecretKeys(ctx context.Context, project string) ([]s
 }
 
 // handleCreateFlowShare 生成 /flow-view 只读分享链接（需登录，且对该项目有编辑权限，由中间件按 ?project= 校验）。
-// 请求体：{ chain_id, trace_id, expire_hours }，expire_hours 默认与最大均为 2160（90 天）。
+// 请求体：{ chain_id, trace_id, bind_trace, expire_hours }，expire_hours 默认与最大均为 2160（90 天）。
+// 默认按根链分享：trace_id 只拼进返回的链接地址方便直接打开，不写进 token，换成该根链下其它 trace_id 同样可看；
+// bind_trace=true 时把 trace_id 绑进 token，只能看这一次执行。
 func (ws *WebServer) handleCreateFlowShare(w http.ResponseWriter, r *http.Request) {
 	project := projectParam(r)
 	if project == "" {
@@ -131,6 +135,7 @@ func (ws *WebServer) handleCreateFlowShare(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		ChainID     string `json:"chain_id"`
 		TraceID     string `json:"trace_id"`
+		BindTrace   bool   `json:"bind_trace"`
 		ExpireHours int    `json:"expire_hours"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -168,13 +173,16 @@ func (ws *WebServer) handleCreateFlowShare(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "该项目还没有配置 secret_key，请先在项目管理里添加密钥后再生成分享链接")
 		return
 	}
+	if req.BindTrace && req.TraceID == "" {
+		writeError(w, http.StatusBadRequest, "bind_trace 需要同时提供 trace_id")
+		return
+	}
 	expiresAt := time.Now().Add(ttl)
-	token, err := signFlowShareToken(flowSharePayload{
-		Project:   project,
-		ChainID:   req.ChainID,
-		TraceID:   req.TraceID,
-		ExpiresAt: expiresAt.Unix(),
-	}, secrets[0])
+	payload := flowSharePayload{Project: project, ChainID: req.ChainID, ExpiresAt: expiresAt.Unix()}
+	if req.BindTrace {
+		payload.TraceID = req.TraceID
+	}
+	token, err := signFlowShareToken(payload, secrets[0])
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -191,7 +199,7 @@ func (ws *WebServer) handleCreateFlowShare(w http.ResponseWriter, r *http.Reques
 		username = u.Username
 	}
 	log.Info().Str("project", project).Str("chain_id", req.ChainID).Str("trace_id", req.TraceID).
-		Str("user", username).Time("expires_at", expiresAt).Msg("flow-view share link created")
+		Bool("bind_trace", req.BindTrace).Str("user", username).Time("expires_at", expiresAt).Msg("flow-view share link created")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":      token,
 		"url":        "/flow-view?" + q.Encode(),
@@ -277,6 +285,22 @@ func slimFlowDSL(dslJSON string) string {
 	return string(b)
 }
 
+// flowShareMaxTraceIDLen 地址里 trace_id 的最大长度（与 wf_node_logs.trace_id 列宽一致）。
+const flowShareMaxTraceIDLen = 128
+
+// resolveFlowShareTraceID 确定本次查看的 trace：token 绑定了 trace 时只认 token 里的；
+// 未绑定（按根链分享）时取地址参数 trace_id，可为空（只看流程图）。
+func resolveFlowShareTraceID(p flowSharePayload, queryTraceID string) (string, error) {
+	if p.TraceID != "" {
+		return p.TraceID, nil
+	}
+	t := strings.TrimSpace(queryTraceID)
+	if len(t) > flowShareMaxTraceIDLen {
+		return "", fmt.Errorf("trace_id 过长（最多 %d 个字符）", flowShareMaxTraceIDLen)
+	}
+	return t, nil
+}
+
 // handleGetFlowShare 免登录接口：凭分享 token 一次返回画图所需的根链结构、节点定义与该 trace 的节点执行记录。
 func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.URL.Query().Get("share"))
@@ -296,6 +320,11 @@ func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) 
 	}
 	if p, err = verifyFlowShareToken(token, secrets, time.Now()); err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	traceID, err := resolveFlowShareTraceID(p, r.URL.Query().Get("trace_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -336,11 +365,11 @@ func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) 
 	}
 
 	logs := []flowShareLog{}
-	if p.TraceID != "" {
+	if traceID != "" {
 		const pageSize = 200
 		for offset := 0; offset < flowShareMaxLogs; offset += pageSize {
 			list, total, err := ws.svc.ListNodeLogsGlobal(r.Context(), p.Project, &workflow.NodeLogFilter{
-				TraceID:     p.TraceID,
+				TraceID:     traceID,
 				RootChainID: p.ChainID,
 				Limit:       pageSize,
 				Offset:      offset,
@@ -376,7 +405,9 @@ func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) 
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"project":  p.Project,
-		"trace_id": p.TraceID,
+		"trace_id": traceID,
+		// trace_bound 为 true 表示链接只能看绑定的这一次执行，地址里改 trace_id 不生效
+		"trace_bound": p.TraceID != "",
 		"chain": flowShareChain{
 			ChainID:             chain.ChainID,
 			Name:                chain.Name,

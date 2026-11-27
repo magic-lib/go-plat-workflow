@@ -9240,7 +9240,8 @@ async function queryOrchTracePath() {
   }
 }
 
-// 生成 /flow-view 只读分享链接（免登录，默认 90 天有效）：绑定当前根链与输入框里的 traceId（可为空，只看流程图）
+// 生成 /flow-view 只读分享链接（免登录，默认 90 天有效）：按根链分享，token 只绑定当前根链；
+// 输入框里的 traceId 只拼进链接地址方便直接打开，把地址里的 trace_id 换成该根链下其它执行同样可看
 async function createOrchFlowShare() {
   const chainEl = document.getElementById('orch-chain-id');
   const chainId = ((chainEl && chainEl.value) || '').trim();
@@ -9256,7 +9257,7 @@ async function createOrchFlowShare() {
     });
     const link = location.origin + res.url;
     const expires = new Date(res.expires_at).toLocaleString();
-    const done = () => showToast('分享链接已复制，有效期至 ' + expires, 'success');
+    const done = () => showToast('分享链接已复制（按根链分享，可替换地址中的 trace_id 查看其它执行），有效期至 ' + expires, 'success');
     const fallback = () => window.prompt('分享链接（有效期至 ' + expires + '），请手动复制：', link);
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(link).then(done).catch(fallback);

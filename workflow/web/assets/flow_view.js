@@ -1,6 +1,7 @@
 // 流程执行路径查看页（/flow-view）：只渲染根链流程图，并按 trace_id 高亮执行路径。
 // 用法：/flow-view?project=yangloan&chain_id=R000012&trace_id=xxx
 // 免登录嵌入：在编排页生成分享链接，地址里带 share=<只读分享 token>，此时只走 /api/flow-view/shared 一个接口。
+// 按根链分享的 token 不绑 trace，地址里的 trace_id 可换成该根链下任意一次执行；早期按单次执行分享的 token 仍只看绑定的那条。
 // 独立轻量实现，不依赖 common.js；节点配色、标签、路径高亮规则与编排页 Live Preview 保持一致。
 (function () {
   'use strict';
@@ -439,7 +440,9 @@
   // 取画图数据：带分享 token 时一次取齐（免登录），否则按登录态分别请求
   async function loadData() {
     if (shareToken) {
-      const res = await fetch('/api/flow-view/shared?share=' + encodeURIComponent(shareToken), { credentials: 'omit' });
+      const q = new URLSearchParams({ share: shareToken });
+      if (traceId) q.set('trace_id', traceId);
+      const res = await fetch('/api/flow-view/shared?' + q.toString(), { credentials: 'omit' });
       let data = null;
       try { data = await res.json(); } catch (e) { data = null; }
       if (!res.ok) {
@@ -448,7 +451,7 @@
         err.share = true;
         throw err;
       }
-      // trace_id 以 token 里绑定的为准，防止改地址参数造成误解
+      // 以接口实际查询的 trace 为准：按单次执行分享的 token 绑定了 trace，地址里改了也不生效
       traceId = data.trace_id || '';
       return { chain: data.chain, nodeDefs: data.nodes || [], logsPromise: Promise.resolve(sortTraceLogs(data.logs)) };
     }
