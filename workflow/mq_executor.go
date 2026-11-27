@@ -47,7 +47,7 @@ func (a commnodeActivityStoreAdapter) GetByNamespaceName(ctx context.Context, pr
 	if err != nil {
 		return nil, err
 	}
-	return &commnode.ActivityTemplateDef{ReturnValues: def.ReturnValues}, nil
+	return &commnode.ActivityTemplateDef{ReturnValues: def.ReturnValues, AllowNilReturn: def.AllowNilReturn}, nil
 }
 
 // nodeLogSaverForCommnode commnode 落库适配所需的最小接口（仅 Create 用）。

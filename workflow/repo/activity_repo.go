@@ -128,19 +128,20 @@ func (r *ActivityRepo) Update(ctx context.Context, def *workflow.ActivityDef) er
 		Model(&models.ActivityModel{}).
 		Where("project = ? AND activity_id = ?", def.Project, def.ActivityID).
 		Updates(map[string]interface{}{
-			"name":          def.Name,
-			"act_namespace": def.ActNamespace,
-			"act_name":      def.ActName,
-			"activity_type": def.ActivityType,
-			"kind":          def.Kind,
-			"http_config":   def.HTTPConfig,
-			"arguments":     models.NormalizeJSONRaw(def.Arguments),
-			"arg_template":  def.ArgTemplate,
-			"responses":     models.NormalizeJSONRaw(def.Responses),
-			"return_values": models.NormalizeJSONRaw(def.ReturnValues),
-			"status":        def.Status,
-			"description":   def.Description,
-			"tags":          models.SerializeActivityTags(def.Tags),
+			"name":             def.Name,
+			"act_namespace":    def.ActNamespace,
+			"act_name":         def.ActName,
+			"activity_type":    def.ActivityType,
+			"kind":             def.Kind,
+			"http_config":      def.HTTPConfig,
+			"arguments":        models.NormalizeJSONRaw(def.Arguments),
+			"arg_template":     def.ArgTemplate,
+			"responses":        models.NormalizeJSONRaw(def.Responses),
+			"return_values":    models.NormalizeJSONRaw(def.ReturnValues),
+			"allow_nil_return": def.AllowNilReturn,
+			"status":           def.Status,
+			"description":      def.Description,
+			"tags":             models.SerializeActivityTags(def.Tags),
 		})
 	if result.Error != nil {
 		return result.Error

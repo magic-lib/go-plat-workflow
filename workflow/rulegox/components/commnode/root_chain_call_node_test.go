@@ -161,3 +161,68 @@ func TestRootChainCallNode_InitRequiresTarget(t *testing.T) {
 		t.Fatalf("expected init error without target_chain_id")
 	}
 }
+
+// runRootChainCallDSL 用指定 DSL 跑一次调用根链节点，返回该节点的步骤结果。
+func runRootChainCallDSL(t *testing.T, chainID, dsl string) *paramx.Step {
+	t.Helper()
+	ruleEngine, err := rulego.New(chainID, []byte(dsl))
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer rulego.Del(chainID)
+	flowCtx := paramx.NewFlowContext("R000001", "inst", map[string]any{"uid": 7}, func(key string, val any) (any, bool) {
+		return val, false
+	})
+	md := types.NewMetadata()
+	md.PutValue("project", "p1")
+	md.PutValue("env", "test")
+	md.PutValue("root_chain_id", "R000001")
+	msg := types.NewMsg(0, "TEST", types.JSON, md, conv.String(flowCtx))
+	var data string
+	done := make(chan struct{})
+	ruleEngine.OnMsg(msg, types.WithOnEnd(func(ctx types.RuleContext, m types.RuleMsg, err error, relationType string) {
+		data = m.GetData()
+		close(done)
+	}))
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout")
+	}
+	out := new(paramx.FlowContext)
+	_ = conv.Unmarshal(data, out)
+	return out.GetStep("N000009__call")
+}
+
+func TestRootChainCallNode_ResponsesByDefinition(t *testing.T) {
+	fake := &fakeRootChainInvoker{resp: map[string]any{"score": 99, "inner": "x"}}
+	SetRootChainInvoker(fake)
+	defer SetRootChainInvoker(nil)
+
+	withKeys := strings.Replace(rootChainCallTestDSL, `"target_chain_id": "R000002",`,
+		`"target_chain_id": "R000002", "responses": [{"key": "score"}, {"key": "level"}],`, 1)
+	step := runRootChainCallDSL(t, "root_chain_call_resp_keys", withKeys)
+	if step == nil || conv.String(step.Responses) != `{"level":null,"score":99}` {
+		t.Fatalf("unexpected responses: %+v", step)
+	}
+
+	empty := strings.Replace(rootChainCallTestDSL, `"target_chain_id": "R000002",`,
+		`"target_chain_id": "R000002", "responses": [],`, 1)
+	step = runRootChainCallDSL(t, "root_chain_call_resp_empty", empty)
+	if step == nil || conv.String(step.Responses) != `{}` {
+		t.Fatalf("expected empty object, got %+v", step)
+	}
+}
+
+func TestPickRootChainCallResponses(t *testing.T) {
+	if got := conv.String(PickRootChainCallResponses(map[string]any{"a": 1, "b": 2}, []string{"a"})); got != `{"a":1}` {
+		t.Fatalf("got %s", got)
+	}
+	if got := conv.String(PickRootChainCallResponses(nil, nil)); got != `{}` {
+		t.Fatalf("got %s", got)
+	}
+	keys := RootChainCallResponseKeys([]any{map[string]any{"key": "x"}, map[string]any{"key": " "}})
+	if len(keys) != 1 || keys[0] != "x" {
+		t.Fatalf("keys %v", keys)
+	}
+}

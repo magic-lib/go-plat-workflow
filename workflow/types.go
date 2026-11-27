@@ -47,6 +47,10 @@ var (
 	ErrActivityNotFound = fmt.Errorf("workflow: activity not found")
 	// ErrNodePublishedInRootChain 节点已被发布到根链（生产快照引用），禁止编辑/删除
 	ErrNodePublishedInRootChain = fmt.Errorf("workflow: node already published in root chain, cannot edit or delete")
+	// ErrSubChainReferencedByRootChain 子链被未停用的根链引用（直接或经嵌套子链），禁止删除/停用
+	ErrSubChainReferencedByRootChain = fmt.Errorf("workflow: sub chain referenced by enabled root chain, cannot delete or disable")
+	// ErrSubChainPublishedNeedConfirm 子链被根链的当前发布版本引用（直接或经嵌套子链），修改后需重新保存并发布根链才生效，需调用方确认后再保存
+	ErrSubChainPublishedNeedConfirm = fmt.Errorf("workflow: sub chain referenced by published root chain, confirm required")
 	// ErrActivityPublishedInRootChain activity 已被发布到根链（生产快照引用），禁止编辑/删除
 	ErrActivityPublishedInRootChain = fmt.Errorf("workflow: activity already published in root chain, cannot edit or delete")
 )
@@ -209,6 +213,46 @@ type NodeDef struct {
 	// HasSwitchCondition 节点是否配置了路由条件 switch_condition，为 true 表示该节点带路由分支功能。
 	// 由列表/详情接口按节点配置实时计算填充，不入库。
 	HasSwitchCondition bool `json:"has_switch_condition,omitempty"`
+	// ParamBriefs 参数定义摘要（仅 key + 显示名），节点列表接口裁掉 params 后用它展示参数数与明细，不入库。
+	ParamBriefs []*NodeFieldBrief `json:"param_briefs,omitempty"`
+	// OutputBriefs 返回值定义摘要（仅 key + 显示名），节点列表接口裁掉 outputs 后用它展示返回值数与明细，不入库。
+	OutputBriefs []*NodeFieldBrief `json:"output_briefs,omitempty"`
+}
+
+// NodeFieldBrief 节点参数 / 返回值定义的精简信息，供列表展示。
+type NodeFieldBrief struct {
+	Key   string `json:"key"`
+	Label string `json:"label,omitempty"`
+}
+
+// NodeFieldBriefs 从节点参数定义 / 返回值定义的 JSON（数组，或历史上以字符串存放的数组）中提取 key + 显示名。
+// 解析失败或为空时返回 nil。
+func NodeFieldBriefs(raw json.RawMessage) []*NodeFieldBrief {
+	if len(raw) == 0 {
+		return nil
+	}
+	data := []byte(raw)
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		data = []byte(s)
+	}
+	var items []struct {
+		Key   string `json:"key"`
+		Name  string `json:"name"`
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal(data, &items); err != nil || len(items) == 0 {
+		return nil
+	}
+	briefs := make([]*NodeFieldBrief, 0, len(items))
+	for _, it := range items {
+		key := it.Key
+		if key == "" {
+			key = it.Name
+		}
+		briefs = append(briefs, &NodeFieldBrief{Key: key, Label: it.Label})
+	}
+	return briefs
 }
 
 // HasSwitchConditionExpr 判断节点是否配置了路由条件 switch_condition（非空即表示带路由功能）。
@@ -334,6 +378,18 @@ type RootChainCallSignature struct {
 	Responses []RootResponseItem `json:"responses"`
 }
 
+// SubChainCallSignature 子链的调用签名：编排里把子链实例当作普通节点时，参数取 Arguments，返回值取 Responses。
+type SubChainCallSignature struct {
+	// ChainID 子链 ID
+	ChainID string `json:"chain_id"`
+	// Name 子链名称
+	Name string `json:"name"`
+	// Arguments 子链需要的入参名（子链及与它共用入参的下级子链里所有 {{arguments.xxx}}）
+	Arguments []string `json:"arguments"`
+	// Responses 子链返回值定义（子链 DSL 的 additionalInfo.root_responses）
+	Responses []RootResponseItem `json:"responses"`
+}
+
 // ParamInputDef 参数输入节点的一个参数定义（编排时动态配置，字段与根节点返回值定义一致）。
 type ParamInputDef struct {
 	// Key 字段名
@@ -455,6 +511,23 @@ type RedisConfig struct {
 	DB int `json:"db"`
 	// Username 用户名（Redis 6+ ACL，可选）
 	Username string `json:"username,omitempty"`
+	// WorkerAddr worker 侧使用的 Redis 地址（可选，如内网地址 10.0.0.1:6379）。
+	// 流程服务自身（投递、心跳监听、节点日志、测试连接）始终用 Addr；
+	// 对外 redis-config 接口返回给 worker 时，若 WorkerAddr 非空则用它替换 Addr。
+	// 两个地址必须指向同一个 Redis 实例。
+	WorkerAddr string `json:"worker_addr,omitempty"`
+}
+
+// ForWorker 返回 worker 侧使用的 Redis 配置副本：WorkerAddr 非空时用它替换 Addr，否则原样返回副本。
+func (c *RedisConfig) ForWorker() *RedisConfig {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	if addr := strings.TrimSpace(c.WorkerAddr); addr != "" {
+		cp.Addr = addr
+	}
+	return &cp
 }
 
 // MySQLConfig 不同环境下的 MySQL 连接配置。
@@ -736,6 +809,11 @@ type BuildSubChainRequest struct {
 	NodeNameOverrides map[string]string `json:"node_name_overrides,omitempty"`
 	// NodeCollapseOverrides 每节点实例参数配置区收起状态，key=node 实例 instanceId，value=true 表示收起
 	NodeCollapseOverrides map[string]bool `json:"node_collapse_overrides,omitempty"`
+	// ConfirmPublished 已确认修改被已发布根链引用的子链（保存后线上立即生效）
+	ConfirmPublished bool `json:"confirm_published,omitempty"`
+	// RootResponses 子链返回值定义（与根链同结构）：存在子链 DSL 的 additionalInfo.root_responses，
+	// 子链里返回值节点按此写入返回值，引用该子链的节点把它作为本节点返回值，供下游引用。
+	RootResponses []RootResponseItem `json:"root_responses,omitempty"`
 }
 
 // ============================================================
@@ -875,6 +953,9 @@ type ActivityDef struct {
 	// ReturnValues 返回值设置列表（每一项从活动返回值 map 中提取指定 key 重命名输出）。
 	// 若某一项 Key 为空，表示该返回值项返回活动返回的所有内容。
 	ReturnValues json.RawMessage `json:"return_values,omitempty"`
+	// AllowNilReturn 是否允许活动返回 nil。默认 false：定义了返回值却返回 nil 时按错误处理并告警；
+	// 为 true 时不报错，new 一个空对象（或按返回值类型的零值）继续往下走。
+	AllowNilReturn bool `json:"allow_nil_return,omitempty"`
 	// Status 状态：1=启用，0=禁用
 	Status int8 `json:"status"`
 	// Description 描述
@@ -1238,6 +1319,10 @@ type NodeLogDef struct {
 	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），用于追溯当时执行的是哪个发布版本。
 	RootChainReleaseID string `json:"root_chain_release_id"`
 	SpanID             string `json:"span_id"`
+	// ChainID 节点实际所在的链：主链节点为根链 ID，子链（经调用子链节点执行）里的节点为子链 ID（如 F000001）。
+	ChainID string `json:"chain_id"`
+	// CallPath 子链调用路径：调用该子链的子链节点实例 ID，多层嵌套用 "/" 拼接（如 F000001__2p0mg/F000003__abcde）；主链节点为空。
+	CallPath string `json:"call_path"`
 	// RelationType 该 node 执行完成后往下传递的连接类型（relationType），
 	// 对应 rulego 的 TellSuccess/TellFailure/TellNext 等，取值如 Success/Failure/True/False 或自定义字符串。
 	// 用于回查本次 node 走了哪条分支链路。
@@ -1259,6 +1344,8 @@ type NodeLogFilter struct {
 	TraceID string `json:"trace_id,omitempty"`
 	// RootChainID 根链 ID 精确匹配（用于按根链过滤 node 运行日志）
 	RootChainID string `json:"root_chain_id,omitempty"`
+	// ChainID 节点所在链 ID 精确匹配（用于只看某条子链里节点的运行日志）
+	ChainID string `json:"chain_id,omitempty"`
 	// Keyword 关键词模糊匹配 payload/result/error_msg
 	Keyword string `json:"keyword,omitempty"`
 	// Limit 每页条数

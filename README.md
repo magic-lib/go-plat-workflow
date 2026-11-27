@@ -174,3 +174,24 @@ type InvokeMetadata struct {
   否则该任务无人消费、超时。
 - **超时**：默认 60s（`config.DefaultTimeout`）。Activity 执行超过该时长、或 worker 侧未消费，都会超时返回错误。
 - **TraceId**：建议传入，配合 node_log 可查询整条流程（含每个节点、以及 `flow_total` 汇总）的执行耗时。
+
+## 测试环境同步到正式环境的数据表
+
+在测试环境配置好流程后，**只同步以下 7 张表**到正式环境：
+
+| 表名 | 说明 |
+| --- | --- |
+| `wf_activities` | Activity 定义 |
+| `wf_nodes` | 节点定义 |
+| `wf_projects` | 项目 |
+| `wf_root_chains` | 根链（草稿） |
+| `wf_root_chain_releases` | 根链发布版本 |
+| `wf_sub_chains` | 子链（根链中的子流程节点直接读取） |
+| `wf_project_secrets` | 项目密钥（与测试环境保持一致，调用方代码无需变更） |
+
+**其余表一律不要从测试环境同步到正式环境**，包括但不限于：
+
+- 环境配置：`wf_env_configs`（各环境 Redis/MySQL 连接信息），正式环境需单独配置；
+- 账号、会话与权限：`wf_users`、`wf_user_sessions`、`wf_user_projects`（依赖 `wf_users` 的用户 ID，正式环境需单独授权）；
+- 运行日志：`wf_activity_logs`、`wf_node_logs`；
+- 测试数据：`wf_test_cases`、`wf_activity_test_records`、`wf_node_test_records`。

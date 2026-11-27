@@ -17,6 +17,7 @@ import (
 	"github.com/magic-lib/go-plat-workflow/workflow"
 	"github.com/magic-lib/go-plat-workflow/workflow/common"
 	confPackage "github.com/magic-lib/go-plat-workflow/workflow/config"
+	"github.com/magic-lib/go-plat-workflow/workflow/engine"
 )
 
 // DSLBuilder 规则链 DSL 组装器，实现 workflow.DSLBuilder 接口。
@@ -60,8 +61,8 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 		return nil, fmt.Errorf("%w: query nodes: %v", workflow.ErrDSLBuildFailed, err)
 	}
 
-	// 2. 查询子链（仅当前项目，避免加载其他项目的子链）
-	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, req.SubChainIDs)
+	// 2. 查询子链（仅当前项目，避免加载其他项目的子链）；循环节点的循环体子链也一并查询，用于嵌入
+	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, withLoopBodySubChainIDs(dedupBaseIDs(req.SubChainIDs), req.NodeParamOverrides))
 	if err != nil {
 		return nil, fmt.Errorf("%w: query sub chains: %v", workflow.ErrDSLBuildFailed, err)
 	}
@@ -103,7 +104,10 @@ func (b *DSLBuilder) Build(ctx context.Context, req *workflow.BuildRequest) (*wo
 	// 序列化前先裁剪：删除已被删除节点残留的覆盖配置，避免数据冗余/对应错误；
 	// 再按节点定义同步每个实例的参数覆盖：节点已无的参数删除、节点新增的参数补充（以默认值），
 	// 使 node_param_overrides 与节点实时变化保持一致。
-	nodeParamOverrides := reconcileNodeParamOverrides(pruneOverrides(req.NodeParamOverrides, validInstances), nodes)
+	prunedParamOverrides := pruneOverrides(req.NodeParamOverrides, validInstances)
+	nodeParamOverrides := reconcileNodeParamOverrides(prunedParamOverrides, nodes)
+	// 子链实例的参数配置（子链入参来源）没有节点定义可对照，原样保留
+	keepSubChainOverrides(nodeParamOverrides, prunedParamOverrides, req.SubChainIDs)
 
 	nodeSwitchOverrides := pruneOverrides(req.NodeSwitchOverrides, validInstances)
 	nodeNameOverrides := pruneOverrides(req.NodeNameOverrides, validInstances)
@@ -204,8 +208,8 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 		return nil, fmt.Errorf("%w: query nodes: %v", workflow.ErrDSLBuildFailed, err)
 	}
 
-	// 查询嵌套子链（仅当前项目）
-	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, req.SubChainIDs)
+	// 查询嵌套子链（仅当前项目）；循环节点的循环体子链也一并查询，用于嵌入
+	subChains, err := b.subChainStore.ListByIDs(ctx, req.Project, withLoopBodySubChainIDs(dedupBaseIDs(req.SubChainIDs), req.NodeParamOverrides))
 	if err != nil {
 		return nil, fmt.Errorf("%w: query sub chains: %v", workflow.ErrDSLBuildFailed, err)
 	}
@@ -229,6 +233,8 @@ func (b *DSLBuilder) AssembleSubChain(ctx context.Context, req *workflow.BuildSu
 	ruleChain := b.buildRuleChain(fullReq, nodes, subChains)
 	// 子链标记为非 Root
 	ruleChain.RuleChain.Root = false
+	// 子链返回值定义与根链一样写入 DSL（additionalInfo.root_responses），随子链内容嵌入引用它的链
+	injectRootResponses(ruleChain, req.RootResponses)
 
 	dslJSON, err := json.Marshal(ruleChain)
 	if err != nil {
@@ -396,7 +402,11 @@ func pruneOverrides[V any](m map[string]V, valid map[string]bool) map[string]V {
 func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, nodes []*workflow.NodeDef) map[string]map[string]interface{} {
 	// baseId -> 参数默认值（key -> 节点 DB 默认值），用于补充缺失参数
 	paramDefaults := make(map[string]map[string]*confPackage.NodeConfigOverrideArgument, len(nodes))
+	condSwitchNodes := make(map[string]bool) // 条件判断节点：编排时可在本链定义参数，这些参数不在节点定义里，需保留
 	for _, nd := range nodes {
+		if nd.Type == common.CondSwitchNodeTypeName {
+			condSwitchNodes[nd.NodeID] = true
+		}
 		defs := make(map[string]*confPackage.NodeConfigOverrideArgument)
 		if len(nd.Params) > 0 {
 			var args []*confPackage.NodeConfigArgument
@@ -425,6 +435,21 @@ func reconcileNodeParamOverrides(overrides map[string]map[string]interface{}, no
 		defaults, ok := paramDefaults[baseId]
 		if !ok {
 			// 节点已不存在：丢弃该覆盖项（避免引用过期节点参数）
+			continue
+		}
+		// 条件判断节点：编排里定义过参数时以编排为准，只保留本链参数定义及其来源配置，
+		// 不再按节点定义补回参数（节点定义参数在拉入时已带入，用户在编排里删掉的不应再出现）
+		if raw, ok := entry[common.ParamInputDefsKey]; ok && condSwitchNodes[baseId] {
+			newEntry := map[string]interface{}{common.ParamInputDefsKey: raw}
+			if m, ok := raw.(map[string]any); ok {
+				raw = m["value"]
+			}
+			for _, d := range parseParamInputDefs(raw) {
+				if v, has := entry[d.Key]; has {
+					newEntry[d.Key] = v
+				}
+			}
+			out[instId] = newEntry
 			continue
 		}
 		// 若节点定义中解析不出任何参数 key（如 Params 为空或非标准格式），
@@ -530,6 +555,12 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 		// 调用根链节点：选中的目标根链 ID 以保留 key 存在参数覆盖里，移到 configuration.target_chain_id，
 		// 不作为入参传给目标根链。
 		if node.Type == common.RootChainCallNodeTypeName {
+			// 节点定义固定了目标根链：返回值以节点定义为准，没定义返回值时写空数组，运行时输出 {}
+			if strings.TrimSpace(conv.String(config[common.RootChainCallConfigKey])) != "" {
+				if _, ok := config[activity.Responses]; !ok {
+					config[activity.Responses] = []any{}
+				}
+			}
 			if v, ok := frontendMap[common.RootChainCallTargetKey].(string); ok && strings.TrimSpace(v) != "" {
 				config[common.RootChainCallConfigKey] = strings.TrimSpace(v)
 			}
@@ -545,13 +576,33 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			privateKeys = keptKeys
 		}
 
-		// 参数输入节点：参数定义（参数名/类型/说明）以保留 key 存在参数覆盖里，移到 configuration.input_params，
-		// 不作为参数解析；参数说明同时写入 additionalInfo.node_param_labels 供执行页展示。
+		// 参数输入节点 / 条件判断节点：编排时在本链定义的参数（参数名/类型/说明/默认值）以保留 key 存在参数覆盖里，
+		// 移到 configuration.input_params，不作为参数解析；参数说明同时写入 additionalInfo.node_param_labels 供执行页展示。
+		// 条件判断节点拉入编排时已带入节点定义参数，编排里定义过参数后以编排为准，各参数的来源仍按普通参数写入 arguments。
 		var inputParamLabels map[string]string
-		if node.Type == common.ParamInputNodeTypeName {
+		if node.Type == common.ParamInputNodeTypeName || node.Type == common.CondSwitchNodeTypeName {
 			if raw, ok := frontendMap[common.ParamInputDefsKey]; ok {
 				defs := parseParamInputDefs(raw)
 				config[common.ParamInputConfigKey] = defs
+				// 条件判断节点：编排里定义过参数时以编排为准，节点定义里有、编排里删掉的参数不再写入 arguments
+				if node.Type == common.CondSwitchNodeTypeName {
+					defKeys := make(map[string]bool, len(defs))
+					for _, d := range defs {
+						defKeys[d.Key] = true
+					}
+					keptBinds := make([]*param.BindConfig, 0, len(bindConfigs))
+					for _, bc := range bindConfigs {
+						if bc != nil && defKeys[bc.Key] {
+							keptBinds = append(keptBinds, bc)
+						}
+					}
+					bindConfigs = keptBinds
+					for k := range frontendMap {
+						if k != common.ParamInputDefsKey && !defKeys[k] {
+							delete(frontendMap, k)
+						}
+					}
+				}
 				inputParamLabels = make(map[string]string, len(defs))
 				for _, d := range defs {
 					inputParamLabels[d.Key] = d.Label
@@ -563,6 +614,26 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 			keptKeys := privateKeys[:0]
 			for _, k := range privateKeys {
 				if k != common.ParamInputDefsKey {
+					keptKeys = append(keptKeys, k)
+				}
+			}
+			privateKeys = keptKeys
+		}
+
+		// 循环节点：循环配置（模式、数据来源、循环体等，JSON 对象）以保留 key 存在参数覆盖里，移到 configuration.loop，
+		// 不作为入参；其余覆盖参数是循环体为根链时传给目标根链的入参映射。
+		if node.Type == common.LoopNodeTypeName {
+			if raw, ok := frontendMap[common.LoopConfigKey]; ok {
+				if loopCfg := parseLoopConfigOverride(raw); loopCfg != nil {
+					config[common.LoopConfigField] = loopCfg
+				}
+			}
+			delete(frontendMap, common.LoopConfigKey)
+			delete(frontendSrc, common.LoopConfigKey)
+			delete(frontendType, common.LoopConfigKey)
+			keptKeys := privateKeys[:0]
+			for _, k := range privateKeys {
+				if k != common.LoopConfigKey {
 					keptKeys = append(keptKeys, k)
 				}
 			}
@@ -620,6 +691,16 @@ func (b *DSLBuilder) buildRuleNodes(instances []instanceRef, defById map[string]
 						continue
 					}
 					args = append(args, bc)
+				}
+			}
+			// 循环节点：参数定义里只有 loop_items，循环体为根链时传给目标根链的入参映射不在定义里，同样保留；
+			// 条件判断节点：本链定义的参数不在节点定义里，同样写入 arguments
+			if node.Type == common.LoopNodeTypeName || node.Type == common.CondSwitchNodeTypeName {
+				for k, v := range frontendMap {
+					if k == "" || usedKeys[k] {
+						continue
+					}
+					args = append(args, &param.BindConfig{Key: k, Value: v, Type: frontendType[k], Policy: resolvePolicy(frontendSrc[k], v, param.KeyPolicyFrontendPriority)})
 				}
 			}
 			// 按 key 自动排序，保证 DSL 稳定可读、与节点参数定义实时一致
@@ -735,33 +816,80 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 	}
 	ruleNodes = append(ruleNodes, mainNodes...)
 
-	// 3b. 处理子链：为每个子链创建一个 Flow Node 节点
-	// Flow Node 使用 type="flow" + configuration.ruleChainId 引用子链，
-	// 替代已废弃的 RuleChainConnections 机制。
+	// 3b. 处理子链：为每个子链实例创建一个调用子链节点（custom/SubChainCall），
+	// configuration.ruleChainId 为 project:子链ID，targetId 为引擎池里的子链 ID。
+	// 旧数据里的 type="flow" 节点仍由 rulego 原生 flow 组件执行。
 	// 子链 DSL 需提前加载到 rulego pool 中。
+	// 同一子链可添加多次：sub_chain_ids 里是实例 ID（形如 F000001__ab12c），每个实例生成一个 flow 节点，
+	// 节点 ID 即实例 ID（连线、参数覆盖都按实例 ID 对应），引用的子链仍是 project:子链ID。
+	// 不带后缀的旧数据（F000001）实例 ID 与子链 ID 相同，照常可用。
+	subByID := make(map[string]*workflow.SubChainDef, len(subChains))
 	for _, sc := range subChains {
-		// Flow Node 的 ID 直接使用子链自身 ChainID，不再加 flow_ 前缀。
-		// 子链 ID 前缀为 S，普通节点前缀为 N，与 idMap 冲突检测配合不会撞。
-		flowNodeID := sc.ChainID
-		// 冲突检测（极端情况下子链 ID 与真实节点 ID 冲突）
+		subByID[sc.ChainID] = sc
+	}
+	// 与节点一样，子链内容在保存时嵌入本链 DSL（additionalInfo.embedded_sub_chains），flow 节点 targetId 指向嵌入的子链，
+	// 执行时用保存时的子链内容；子链修改后需重新编辑保存本链才会用上最新内容。子链 DSL 无效时退回按子链 ID 实时加载。
+	embedHolder := &types.RuleChain{}
+	embeddedIDs := make(map[string]string, len(subChains))
+	for _, sc := range subChains {
+		if eid, err := engine.EmbedSubChain(embedHolder, sc.ChainID, sc.DSLJSON); err == nil {
+			embeddedIDs[sc.ChainID] = eid
+		} else {
+			log.Ctx(context.Background()).Warn().Str("sub_chain_id", sc.ChainID).Err(err).Msg("embed sub chain failed, fallback to live sub chain")
+		}
+	}
+	// 循环节点的循环体子链同样嵌入，loop.body_target 指向嵌入的子链 ID；未能嵌入时清掉，执行时按子链 ID 实时加载
+	for _, n := range mainNodes {
+		if n.Type != common.LoopNodeTypeName {
+			continue
+		}
+		loop, ok := n.Configuration[common.LoopConfigField].(map[string]any)
+		if !ok || conv.String(loop["body_type"]) != common.LoopBodySubChain {
+			continue
+		}
+		if eid, ok := embeddedIDs[strings.TrimSpace(conv.String(loop["body_id"]))]; ok {
+			loop["body_target"] = eid
+		} else {
+			delete(loop, "body_target")
+		}
+	}
+	for _, inst := range parseInstanceRefs(req.SubChainIDs) {
+		sc, ok := subByID[inst.baseId]
+		if !ok {
+			continue
+		}
+		flowNodeID := inst.instanceId
+		// 冲突检测（极端情况下子链实例 ID 与节点实例 ID 冲突，或同一实例 ID 重复传入）
 		if idMap[flowNodeID] {
-			flowNodeID = sc.ChainID + "_dup"
+			flowNodeID = inst.instanceId + "_dup"
 		}
 		idMap[flowNodeID] = true
 
 		// 子链引用必须与 engine 加载子链时用的 pool key 一致：project:chainID。
-		// rulego 的 flow 组件只认 targetId；ruleChainId 保留给发布检查、前端解析使用。
-		// extend=true：子链输出原样转发给下游（合并模式会把输出包成数组，下游无法按 FlowContext 解析）。
+		// 执行只认 targetId；ruleChainId 保留给发布检查、前端解析使用。
 		poolKey := req.Project + ":" + sc.ChainID
+		targetKey := poolKey
+		if eid, ok := embeddedIDs[sc.ChainID]; ok {
+			targetKey = req.Project + ":" + eid
+		}
+		// 子链实例按普通节点处理（custom/SubChainCall）：入参按本实例的参数配置解析后作为子链内的 arguments，
+		// 子链返回值写入本节点 steps.<实例ID>.responses，供下游引用。
 		flowNode := &types.RuleNode{
 			Id:   flowNodeID,
-			Type: "flow",
+			Type: common.SubChainCallNodeTypeName,
 			Name: sc.Name,
 			Configuration: types.Configuration{
-				"ruleChainId": poolKey,
-				"targetId":    poolKey,
-				"extend":      true,
+				"ruleChainId":      poolKey,
+				"targetId":         targetKey,
+				activity.Arguments: subChainCallArguments(req.NodeParamOverrides[inst.instanceId]),
 			},
+		}
+		if nm, ok := req.NodeNameOverrides[inst.instanceId]; ok && strings.TrimSpace(nm) != "" {
+			flowNode.Name = strings.TrimSpace(nm)
+		}
+		// 本实例的路由条件（与 Activity/CondSwitch 节点同一位置）：按子链入参与返回值求值后分流
+		if sw, ok := req.NodeSwitchOverrides[inst.instanceId]; ok && strings.TrimSpace(sw) != "" {
+			flowNode.Configuration["node_config"] = map[string]any{"switch_condition": strings.TrimSpace(sw)}
 		}
 		ruleNodes = append(ruleNodes, flowNode)
 	}
@@ -769,7 +897,7 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 	// 4. 构建连接关系
 	connections := make([]types.NodeConnection, 0, len(req.Connections))
 	for _, conn := range req.Connections {
-		// 子链 Flow Node 的 ID 即子链自身 ChainID，无需再加 flow_ 前缀转换。
+		// 子链 Flow Node 的 ID 即子链实例 ID，无需再加 flow_ 前缀转换。
 		fromID := conn.FromID
 		toID := conn.ToID
 		connections = append(connections, types.NodeConnection{
@@ -790,12 +918,13 @@ func (b *DSLBuilder) buildRuleChain(req *workflow.BuildRequest, nodeDefs []*work
 
 	return &types.RuleChain{
 		RuleChain: types.RuleChainBaseInfo{
-			ID:            req.ChainID,
-			Name:          req.ChainName,
-			DebugMode:     debugMode,
-			Root:          true,
-			Disabled:      false,
-			Configuration: config,
+			ID:             req.ChainID,
+			Name:           req.ChainName,
+			DebugMode:      debugMode,
+			Root:           true,
+			Disabled:       false,
+			Configuration:  config,
+			AdditionalInfo: embedHolder.RuleChain.AdditionalInfo,
 		},
 		Metadata: types.RuleMetadata{
 			FirstNodeIndex: firstNodeIndex,
@@ -837,4 +966,95 @@ func parseParamInputDefs(raw any) []*workflow.ParamInputDef {
 		out = append(out, d)
 	}
 	return out
+}
+
+// parseLoopConfigOverride 解析编排时保存的循环配置：可以是 JSON 字符串或对象（返回副本），解析失败返回 nil。
+func parseLoopConfigOverride(raw any) map[string]any {
+	var b []byte
+	switch v := raw.(type) {
+	case string:
+		b = []byte(strings.TrimSpace(v))
+	default:
+		// 对象也走一次序列化，复制出新 map，后续写入 body_target 不会改到请求里的参数覆盖
+		b, _ = json.Marshal(v)
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	out := make(map[string]any)
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// subChainCallArguments 把子链实例的参数配置（node_param_overrides[实例ID]，与普通节点同结构）转成
+// 调用子链节点的 arguments：每个入参的取值表达式（固定值 / {{steps.x...}} / {{arguments.x}}）。
+// 没有配置任何入参时返回空数组。
+func subChainCallArguments(overrides map[string]interface{}) []*param.BindConfig {
+	args := make([]*param.BindConfig, 0, len(overrides))
+	for k, v := range overrides {
+		if k == "" {
+			continue
+		}
+		bc := &param.BindConfig{Key: k, Policy: param.KeyPolicyBackendOnly}
+		if m, ok := v.(map[string]any); ok {
+			bc.Value = m["value"]
+			if t, ok := m["type"].(string); ok {
+				bc.Type = t
+			}
+		} else {
+			bc.Value = v
+		}
+		args = append(args, bc)
+	}
+	sortBindConfigsByKey(args)
+	return args
+}
+
+// keepSubChainOverrides 把子链实例的参数配置从裁剪后的覆盖项补回 out：reconcileNodeParamOverrides 只按节点定义
+// 保留覆盖项，子链实例没有节点定义会被丢弃，这里按 sub_chain_ids 里的实例 ID 原样保留。
+func keepSubChainOverrides(out, pruned map[string]map[string]interface{}, subChainIDs []string) {
+	if out == nil {
+		return
+	}
+	for _, id := range subChainIDs {
+		if entry, ok := pruned[id]; ok {
+			out[id] = entry
+		}
+	}
+}
+
+// withLoopBodySubChainIDs 在子链 ID 列表后追加循环节点（循环体为子链）引用的子链 ID，去重。
+// 循环配置以保留 key 存在 node_param_overrides 里（{src, value} 或直接是配置），只有循环节点会有。
+func withLoopBodySubChainIDs(ids []string, overrides map[string]map[string]interface{}) []string {
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+	instIDs := make([]string, 0, len(overrides))
+	for instID := range overrides {
+		instIDs = append(instIDs, instID)
+	}
+	sort.Strings(instIDs)
+	for _, instID := range instIDs {
+		raw, ok := overrides[instID][common.LoopConfigKey]
+		if !ok {
+			continue
+		}
+		if m, ok := raw.(map[string]any); ok {
+			if v, ok := m["value"]; ok {
+				raw = v
+			}
+		}
+		cfg := parseLoopConfigOverride(raw)
+		if conv.String(cfg["body_type"]) != common.LoopBodySubChain {
+			continue
+		}
+		if id := strings.TrimSpace(conv.String(cfg["body_id"])); id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

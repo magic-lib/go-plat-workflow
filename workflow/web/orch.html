@@ -61,9 +61,11 @@
 <div class="tabs">
   <button class="tab-btn" data-tab="activities" onclick="location.href='/?tab=activities'">Activities</button>
   <button class="tab-btn" data-tab="nodes" onclick="location.href='/?tab=nodes'">Nodes</button>
-  <button class="tab-btn" data-tab="sub-chains" onclick="location.href='/?tab=sub-chains'" style="display:none;">Sub Chains</button>
+  <button class="tab-btn" data-tab="sub-chains" onclick="location.href='/?tab=sub-chains'">Sub Chains</button>
   <button class="tab-btn" data-tab="root-chains" onclick="location.href='/?tab=root-chains'">Root Chains</button>
   <button class="tab-btn active" data-tab="orchestrate">Orchestrate</button>
+  <!-- 日志：带上当前项目跳回首页日志 tab，便于编排时直接查执行日志 -->
+  <button class="tab-btn" data-tab="logs" onclick="location.href='/?tab=logs&project='+encodeURIComponent(getProject())">日志</button>
 </div>
   <div id="tab-orchestrate" class="tab-content active">
     <div class="orch-layout">
@@ -112,6 +114,9 @@
           <select id="orch-node-tag-filter" class="search-box" onchange="filterOrchNodes()" style="width:100%;margin-bottom:8px;padding:7px 10px;font-size:.8rem">
             <option value="">全部标签</option>
           </select>
+          <select id="orch-node-type-filter" class="search-box" onchange="filterOrchNodes()" style="width:100%;margin-bottom:8px;padding:7px 10px;font-size:.8rem">
+            <option value="">全部类型</option>
+          </select>
           <div class="orch-select-list" id="orch-node-list">
             <div class="orch-select-empty">加载中...</div>
           </div>
@@ -120,7 +125,7 @@
         </div>
 
         <!-- Sub-Chains Selection -->
-        <div class="orch-section" id="orch-sub-section" style="display:none;">
+        <div class="orch-section" id="orch-sub-section">
           <h3>Sub Chains <span class="count" id="orch-sub-count">0 selected</span></h3>
           <input class="search-box" placeholder="搜索子链..." oninput="filterOrchSubChains()" style="width:100%;margin-bottom:6px;padding:7px 10px;font-size:.8rem">
           <div class="orch-select-list" id="orch-sub-list">
@@ -132,7 +137,10 @@
         <div class="orch-section">
           <h3 style="display:flex;justify-content:space-between;align-items:center">
             Connections
-            <button class="btn btn-sm btn-outline" onclick="addOrchConnRow()" type="button">+ 添加连接</button>
+            <span style="display:flex;gap:6px">
+              <button class="btn btn-sm btn-outline" onclick="addOrchConnRow()" type="button">+ 添加连接</button>
+              <button class="btn btn-sm btn-outline" onclick="refreshOrchConnSort()" type="button" title="按 from 节点 ID、relationType、to 节点 ID 重新排序连接列表">⟳ 刷新排序</button>
+            </span>
           </h3>
           <div id="orch-conn-cond-summary" class="orch-cond-summary" style="display:none"></div>
           <div class="orch-conn-rows" id="orch-conn-container">
@@ -154,10 +162,10 @@
           </div>
         </div>
 
-        <!-- 根节点返回值定义（仅 Root Chain） -->
-        <div class="orch-section root-only" id="orch-rr-section" style="margin-top:12px">
+        <!-- 返回值定义：Root Chain 为根节点返回值，Sub Chain 为子链返回值（引用该子链的节点把它作为本节点返回值） -->
+        <div class="orch-section" id="orch-rr-section" style="margin-top:12px">
           <h3 style="display:flex;justify-content:space-between;align-items:center">
-            根节点返回值定义
+            <span id="orch-rr-title">根节点返回值定义</span>
             <span style="display:flex;align-items:center;gap:6px">
               <span class="count" id="orch-rr-count" style="font-weight:400;color:var(--text-muted);font-size:.78rem">0 个字段</span>
               <button class="btn btn-sm btn-outline" onclick="addOrchRootResponseRow()" type="button">+ 添加字段</button>
@@ -175,8 +183,16 @@
       <!-- Right: Preview Panel -->
       <div class="orch-panel orch-right">
         <div class="orch-section">
-          <h3 style="display:flex;justify-content:space-between;align-items:center">
-            Live Preview
+          <h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+            <span class="orch-preview-title">
+              Live Preview
+              <span class="orch-trace-box">
+                <input id="orch-trace-input" class="orch-trace-input" type="text" placeholder="输入 traceId 查看执行路径" onkeydown="if(event.key==='Enter')queryOrchTracePath()">
+                <button id="orch-trace-btn" class="btn btn-sm btn-primary" type="button" onclick="queryOrchTracePath()">查询</button>
+                <button id="orch-trace-clear" class="btn btn-sm btn-outline" type="button" onclick="clearOrchTrace()" style="display:none">清除</button>
+                <button id="orch-trace-share" class="btn btn-sm btn-outline edit-only" type="button" onclick="createOrchFlowShare()" title="生成免登录的只读查看链接（按根链分享，90 天有效）：可替换地址中的 trace_id 查看本根链的任意一次执行，可嵌入其它系统">分享</button>
+              </span>
+            </span>
             <span class="orch-zoom">
               <button class="btn btn-sm btn-outline" type="button" onclick="zoomOrchPreview(-0.2)" title="缩小">−</button>
               <span id="orch-zoom-label" class="orch-zoom-label">100%</span>
@@ -223,9 +239,20 @@
           <option value="custom/Activity">custom/Activity（活动编排）</option>
           <option value="custom/CondSwitch">custom/CondSwitch（条件判断，仅做语法条件判断）</option>
           <option value="custom/ReturnValue">custom/ReturnValue（返回值节点）</option>
+          <option value="custom/RootChainCall">custom/RootChainCall（调用根链节点）</option>
+          <option value="custom/ParamInput">custom/ParamInput（参数输入节点）</option>
+          <option value="custom/Loop">custom/Loop（循环节点）</option>
           <option value="end">end（结束节点）</option>
         </select>
       </div>
+    </div>
+    <div class="form-group" id="node-chaincall-section" style="display:none">
+      <label style="display:block">目标根链 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（只列出已发布的根链；选择后自动加载该根链当前发布版本所需的全部参数和返回值定义）</span></label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="node-chaincall-target" style="flex:1" onchange="onNodeChainCallTargetChange()"></select>
+        <button type="button" class="btn btn-sm btn-outline" onclick="reloadNodeChainCallSignature()" title="按目标根链当前发布版本重新加载参数与返回值定义">重新加载参数</button>
+      </div>
+      <div id="node-chaincall-hint" style="font-size:.75rem;color:var(--text-muted);margin-top:6px">不选择时，在根链编排里添加该节点时再选择目标根链。</div>
     </div>
     <div class="form-group" id="node-activity-section" style="display:none">
       <label style="display:block">
@@ -259,6 +286,10 @@
         <select id="node-kind">
           <option value="condition">查询获取</option>
           <option value="action" selected>策略执行</option>
+          <option value="return">返回值</option>
+          <option value="call">调用根链</option>
+          <option value="input">参数输入</option>
+          <option value="loop">循环</option>
         </select>
       </div>
       <div class="form-group">
@@ -599,7 +630,7 @@
 <div class="modal-overlay" id="orch-switch-modal" style="display:none">
   <div class="modal" style="width:720px;max-width:96vw">
     <h2>编辑节点<button class="modal-close" onclick="document.getElementById('orch-switch-modal').style.display='none';_orchSwitchEditId='';" title="关闭">&times;</button></h2>
-    <p style="margin:0 0 8px;color:var(--text-muted);font-size:.82rem">该设置<b>仅对当前链生效</b>，只修改本 DSL 中该节点实例的<b>名称</b>与 <code>node_config.switch_condition</code>，不会修改节点定义本身，也不影响其它节点。</p>
+    <p style="margin:0 0 8px;color:var(--text-muted);font-size:.82rem">该设置<b>仅对当前链生效</b>，只修改本 DSL 中该节点实例的<b>名称</b>、<b>参数</b>与 <code>node_config.switch_condition</code>，不会修改节点定义本身，也不影响其它节点。条件判断节点可在下方定义参数，保存后到「节点参数配置」里为每个参数选来源，路由条件里用 <code>[arguments.参数名]</code> 判断。</p>
     <div style="margin:-4px 0 10px;color:var(--primary);font-size:.92rem;font-weight:600" id="orch-switch-node-name"></div>
     <div style="margin:0 0 8px;font-size:.78rem;color:#92400e" id="orch-switch-override-flag"></div>
     <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">节点名称（仅本链实例生效，不影响节点定义）</label>
@@ -612,7 +643,7 @@
       <div id="orch-switch-input-rows" data-count="orch-switch-input-count" style="max-height:40vh;overflow-y:auto"></div>
     </div>
     <div id="orch-switch-cond-wrap">
-      <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">路由条件（switch_condition，仅 Activity / CondSwitch 适用）</label>
+      <label style="display:block;font-size:.72rem;color:var(--text-muted);margin:0 0 4px">路由条件（switch_condition，Activity / CondSwitch / 子链实例适用）</label>
       <textarea id="orch-switch-text" rows="5" style="width:100%;font-family:var(--font-mono);font-size:.82rem;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical" placeholder="例如：In('K1', [responses.tag_list])"></textarea>
       <div style="margin-top:12px;border-top:1px dashed var(--border);padding-top:10px">
         <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">输入参数（点击复制）：</div>
@@ -622,6 +653,7 @@
       </div>
     </div>
     <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px">
+      <button id="orch-switch-open-sub" class="btn btn-sm btn-outline" style="display:none" onclick="orchOpenSubChainInNewTab(_orchSwitchEditId)">打开子链编排</button>
       <button class="btn btn-sm btn-primary" onclick="saveOrchSwitchOverride()">保存</button>
     </div>
   </div>
@@ -733,6 +765,9 @@
           <div class="form-row">
             <div class="form-group"><label>DB</label><input id="env-redis-db" type="number" value="0"></div>
             <div class="form-group"><label>Username</label><input id="env-redis-user" placeholder="可选"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>Worker Addr（内网，可选）</label><input id="env-redis-worker-addr" placeholder="如 10.0.0.1:6379，不填则 worker 与服务端共用 Addr"></div>
           </div>
           <div class="form-row" style="align-items:center;gap:8px;margin-top:2px">
             <button type="button" class="btn btn-sm btn-outline" id="env-redis-test-btn" onclick="testEnvRedisConn()">🔌 测试连接</button>

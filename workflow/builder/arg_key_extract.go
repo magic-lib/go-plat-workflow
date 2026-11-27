@@ -64,6 +64,10 @@ func collectInputArguments(nodes []*types.RuleNode, onlyRequired bool) []string 
 			return
 		}
 		for _, k := range ExtractArgumentKeys(s) {
+			// 循环变量 {{arguments._loop.xxx}} 由循环节点每轮写入，不是调用方入参
+			if k == common.LoopVarKey || strings.HasPrefix(k, common.LoopVarKey+".") {
+				continue
+			}
 			if !seen[k] {
 				seen[k] = true
 				keys = append(keys, k)
@@ -92,7 +96,8 @@ func collectInputArguments(nodes []*types.RuleNode, onlyRequired bool) []string 
 			continue
 		}
 		var skipKeys map[string]bool
-		if onlyRequired && node.Type == common.ParamInputNodeTypeName {
+		// 参数输入节点、条件判断节点：配置了默认值的参数调用方可不传
+		if onlyRequired && (node.Type == common.ParamInputNodeTypeName || node.Type == common.CondSwitchNodeTypeName) {
 			skipKeys = paramInputDefaultKeys(node.Configuration[common.ParamInputConfigKey])
 		}
 		scanArray(node.Configuration["arguments"], skipKeys)

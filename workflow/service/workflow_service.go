@@ -420,11 +420,16 @@ func (s *WorkflowService) GetProjectConfig(ctx context.Context, project string) 
 
 // GetProjectRedisConfig 对外配置查询：校验项目密钥后，按项目 + 环境名返回该环境的 Redis 配置。
 // 与 GetProjectConfig 共用 secret_key 鉴权；环境未配置或无 Redis 时返回明确错误。
+// 该接口供 worker 拉取配置，配置了 WorkerAddr 时返回的 addr 为 WorkerAddr（见 RedisConfig.ForWorker）。
 func (s *WorkflowService) GetProjectRedisConfig(ctx context.Context, project, envName string) (*workflow.RedisConfig, error) {
 	if envName == "" {
 		return nil, fmt.Errorf("env_name is required")
 	}
-	return s.getRedisConfig(ctx, project, envName)
+	cfg, err := s.getRedisConfig(ctx, project, envName)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.ForWorker(), nil
 }
 
 // ============================================================
@@ -497,6 +502,33 @@ func (s *WorkflowService) ensureBuiltinParamInputNode(ctx context.Context, proje
 	return s.nodeRepo.Create(ctx, def)
 }
 
+// ensureBuiltinLoopNode 幂等确保项目下存在内置「循环节点」（custom/Loop）定义，
+// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由 NextNodeID 生成。
+func (s *WorkflowService) ensureBuiltinLoopNode(ctx context.Context, project string) error {
+	exists, err := s.nodeRepo.ExistsByType(ctx, project, common.LoopNodeTypeName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	nodeID, err := s.nodeRepo.NextNodeID(ctx)
+	if err != nil {
+		return err
+	}
+	def := &workflow.NodeDef{
+		Project: project,
+		NodeID:  nodeID,
+		Name:    "循环节点",
+		Type:    common.LoopNodeTypeName,
+		Kind:    "loop",
+		Status:  models.NodeStatusEnabled,
+		// 参数定义自带循环数据 loop_items，编排时为它配置来源
+		Params: json.RawMessage(`[{"key":"` + common.LoopItemsKey + `","label":"循环数据","type":"slice","required":true,"policy":"frontend+","value":"","description":"要遍历的数组（或对象，按键遍历），每个元素执行一次循环体；条件循环模式下不需要配置"}]`),
+	}
+	return s.nodeRepo.Create(ctx, def)
+}
+
 // BatchRegisterNodes 批量注册节点（upsert：project+node_id 冲突则更新，否则插入）。
 func (s *WorkflowService) BatchRegisterNodes(ctx context.Context, defs []*workflow.NodeDef) error {
 	return s.nodeRepo.BatchUpsert(ctx, defs)
@@ -528,6 +560,9 @@ func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag
 	}
 	if err := s.ensureBuiltinParamInputNode(ctx, project); err != nil {
 		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin param input node failed")
+	}
+	if err := s.ensureBuiltinLoopNode(ctx, project); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin loop node failed")
 	}
 	all, err := s.nodeRepo.List(ctx, project, namespace, onlyEnabled)
 	if err != nil {
@@ -733,8 +768,13 @@ func (s *WorkflowService) ListSubChains(ctx context.Context, project string, onl
 	return s.subChainRepo.List(ctx, project, onlyEnabled)
 }
 
-// UpdateSubChain 更新子链配置。
+// UpdateSubChain 更新子链配置。被未停用的根链引用时不允许停用。
 func (s *WorkflowService) UpdateSubChain(ctx context.Context, def *workflow.SubChainDef) error {
+	if def.Status != models.NodeStatusEnabled {
+		if err := s.checkSubChainNotReferenced(ctx, def.Project, def.ChainID); err != nil {
+			return err
+		}
+	}
 	// 同 RegisterSubChain：DSL 中 ruleChain.id 固定为子链 ID，name 同步为当前名称。
 	normalizeSubChainDSL(def)
 	return s.subChainRepo.Update(ctx, def)
@@ -767,8 +807,11 @@ func normalizeSubChainDSL(def *workflow.SubChainDef) {
 	}
 }
 
-// DeleteSubChain 软删除子链。
+// DeleteSubChain 软删除子链。被未停用的根链引用时不允许删除。
 func (s *WorkflowService) DeleteSubChain(ctx context.Context, project, chainID string) error {
+	if err := s.checkSubChainNotReferenced(ctx, project, chainID); err != nil {
+		return err
+	}
 	return s.subChainRepo.Delete(ctx, project, chainID)
 }
 
@@ -1018,8 +1061,12 @@ func (s *WorkflowService) PublishRootChain(ctx context.Context, project, chainID
 		if err := json.Unmarshal([]byte(draft.DSLJSON), draftChain); err != nil {
 			return nil, fmt.Errorf("parse root chain dsl failed: %w", err)
 		}
-		_, subNodes, err := s.collectSubChains(ctx, project, draftChain.Metadata.Nodes)
+		_, subNodes, err := s.collectSubChains(ctx, project, draftChain)
 		if err != nil {
+			return nil, err
+		}
+		// 循环节点：配置必须能通过执行时的校验（如遍历模式要配置 loop_items）
+		if err := checkLoopNodes(append(draftChain.Metadata.Nodes, subNodes...)); err != nil {
 			return nil, err
 		}
 		// 调用根链节点：目标根链必须已发布、入参配置齐全，且不能形成循环调用
@@ -1241,7 +1288,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	}
 
 	// 1-2. 从 flow 节点提取子链 ID 并查询完整 DSL（含嵌套子链），同时校验子链不能并行扇出
-	subChains, subChainNodes, err := s.collectSubChains(execCtx, project, ruleChain.Metadata.Nodes)
+	subChains, _, subChainArgNodes, err := s.collectSubChainsWithArgNodes(execCtx, project, ruleChain)
 	if err != nil {
 		return nil, err
 	}
@@ -1250,7 +1297,7 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	// 过滤多余入参：仅保留链实际需要的入参，避免恶意传入无关参数造成变量名污染。
 	// originalPayload 保留原始入参，子链加载后再按根链+子链所需参数重新过滤一次。
 	originalPayload := jsonPayload
-	jsonPayload = s.filterPayloadArguments(originalPayload, ruleChain.Metadata.Nodes, subChainNodes)
+	jsonPayload = s.filterPayloadArguments(originalPayload, ruleChain.Metadata.Nodes, subChainArgNodes)
 
 	// 2.1 根据项目+环境解析 Redis 配置（按环境将运行数据打入对应 Redis）
 	redisCfg, err := s.GetRedisConnect(execCtx, project, envName)
@@ -1318,40 +1365,113 @@ func (s *WorkflowService) ExecuteRootChainByID(ctx context.Context, ruleChain *t
 	}
 }
 
-// collectSubChains 从 flow 节点（configuration.ruleChainId = "project:subChainID"）收集引用的子链完整 DSL，
-// 子链里再引用的子链也一并收集（按 ID 去重，限制层数防止循环引用）。返回子链列表及其全部节点（用于提取入参）。
-// 每条子链都必须满足 checkSubChainSingleExit。
-func (s *WorkflowService) collectSubChains(ctx context.Context, project string, nodes []*types.RuleNode) ([]*types.RuleChain, []*types.RuleNode, error) {
+// collectSubChains 收集链里子链节点引用的子链完整 DSL（含子链里再引用的子链，按 ID 去重，限制层数防止循环引用），
+// 返回子链列表及其全部节点。每条子链都必须满足 checkSubChainSingleExit。
+// 子链内容优先取链 DSL 里嵌入的（保存链时的子链内容，ID 形如 F000001#hash）；未嵌入的旧数据按子链 ID 从库里实时读取。
+func (s *WorkflowService) collectSubChains(ctx context.Context, project string, chain *types.RuleChain) ([]*types.RuleChain, []*types.RuleNode, error) {
+	subChains, subChainNodes, _, err := s.collectSubChainsWithArgNodes(ctx, project, chain)
+	return subChains, subChainNodes, err
+}
+
+// collectSubChainsWithArgNodes 同 collectSubChains，另外返回与本链共用入参的子链节点（argNodes），用于提取本链入参：
+// 只有一路经旧的 flow 节点引用的子链与本链共用 arguments；经调用子链节点（custom/SubChainCall）引用的子链，
+// 其 {{arguments.x}} 取的是该节点按参数配置传入的值，本链需要的入参已体现在该节点的 arguments 里，不再重复收集。
+func (s *WorkflowService) collectSubChainsWithArgNodes(ctx context.Context, project string, chain *types.RuleChain) ([]*types.RuleChain, []*types.RuleNode, []*types.RuleNode, error) {
 	const maxSubChainDepth = 10
+	if chain == nil {
+		return nil, nil, nil, nil
+	}
+	type pendingNodes struct {
+		nodes  []*types.RuleNode
+		shared bool // 这些节点是否与本链共用入参
+	}
+	embedded := embeddedSubChainsOf(chain)
 	var subChains []*types.RuleChain
 	var subChainNodes []*types.RuleNode
-	seen := make(map[string]bool)
-	pending := nodes
+	var argNodes []*types.RuleNode
+	loaded := make(map[string]*types.RuleChain) // TargetID -> 已收集的子链
+	shared := make(map[string]bool)             // TargetID -> 已按共用入参收集
+	pending := []pendingNodes{{nodes: chain.Metadata.Nodes, shared: true}}
 	for depth := 0; len(pending) > 0 && depth < maxSubChainDepth; depth++ {
-		var next []*types.RuleNode
-		for _, subID := range flowSubChainIDs(pending) {
-			if seen[subID] {
-				continue
+		var next []pendingNodes
+		for _, group := range pending {
+			for _, ft := range engine.FlowTargets(group.nodes) {
+				isShared := group.shared && !ft.Scoped
+				subChain, ok := loaded[ft.TargetID]
+				if !ok {
+					var err error
+					if subChain, err = s.loadCollectedSubChain(ctx, project, ft, embedded); err != nil {
+						return nil, nil, nil, err
+					}
+					loaded[ft.TargetID] = subChain
+					subChains = append(subChains, subChain)
+					subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
+				} else if !isShared || shared[ft.TargetID] {
+					continue
+				}
+				// 首次收集，或此前只以独立入参收集过、这次一路经 flow 节点引用（需补记为共用入参并继续向下）
+				if isShared {
+					shared[ft.TargetID] = true
+					argNodes = append(argNodes, subChain.Metadata.Nodes...)
+				}
+				next = append(next, pendingNodes{nodes: subChain.Metadata.Nodes, shared: isShared})
 			}
-			seen[subID] = true
-			subDef, err := s.subChainRepo.GetByID(ctx, project, subID)
-			if err != nil {
-				return nil, nil, fmt.Errorf("get sub chain %s failed: %w", subID, err)
-			}
-			subChain := &types.RuleChain{}
-			if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
-				return nil, nil, fmt.Errorf("parse sub chain %s dsl failed: %w", subID, err)
-			}
-			if err := checkSubChainSingleExit(subID, subChain); err != nil {
-				return nil, nil, err
-			}
-			subChains = append(subChains, subChain)
-			subChainNodes = append(subChainNodes, subChain.Metadata.Nodes...)
-			next = append(next, subChain.Metadata.Nodes...)
 		}
 		pending = next
 	}
-	return subChains, subChainNodes, nil
+	return subChains, subChainNodes, argNodes, nil
+}
+
+// loadCollectedSubChain 读取一个子链节点引用的子链 DSL：优先取嵌入内容，否则按子链 ID 从库里实时读取
+// （实时读取的子链里若嵌入了下级子链，一并并入 embedded），并校验子链单出口。
+func (s *WorkflowService) loadCollectedSubChain(ctx context.Context, project string, ft engine.FlowTarget, embedded map[string][]byte) (*types.RuleChain, error) {
+	subChain := &types.RuleChain{}
+	if dsl, ok := embedded[ft.TargetID]; ok {
+		if err := json.Unmarshal(dsl, subChain); err != nil {
+			return nil, fmt.Errorf("parse embedded sub chain %s dsl failed: %w", ft.TargetID, err)
+		}
+	} else {
+		subDef, err := s.subChainRepo.GetByID(ctx, project, ft.SubChainID)
+		if err != nil {
+			return nil, fmt.Errorf("get sub chain %s failed: %w", ft.SubChainID, err)
+		}
+		if err := json.Unmarshal([]byte(subDef.DSLJSON), subChain); err != nil {
+			return nil, fmt.Errorf("parse sub chain %s dsl failed: %w", ft.SubChainID, err)
+		}
+		// 实时读取的子链里若嵌入了下级子链，一并纳入
+		if more, ok := engine.ExtractEmbeddedSubChains([]byte(subDef.DSLJSON)); ok {
+			for k, v := range more {
+				if _, exists := embedded[k]; !exists {
+					embedded[k] = v
+				}
+			}
+		}
+	}
+	if err := checkSubChainSingleExit(ft.SubChainID, subChain); err != nil {
+		return nil, err
+	}
+	return subChain, nil
+}
+
+// embeddedSubChainsOf 取出链 DSL 里嵌入的全部子链（含多级嵌入），key 为嵌入子链 ID。
+func embeddedSubChainsOf(chain *types.RuleChain) map[string][]byte {
+	out := make(map[string][]byte)
+	if chain == nil || chain.RuleChain.AdditionalInfo == nil {
+		return out
+	}
+	if _, ok := chain.RuleChain.AdditionalInfo[engine.EmbeddedSubChainsKey]; !ok {
+		return out
+	}
+	raw, err := json.Marshal(map[string]interface{}{"ruleChain": map[string]interface{}{
+		"additionalInfo": map[string]interface{}{engine.EmbeddedSubChainsKey: chain.RuleChain.AdditionalInfo[engine.EmbeddedSubChainsKey]},
+	}})
+	if err != nil {
+		return out
+	}
+	if m, ok := engine.ExtractEmbeddedSubChains(raw); ok {
+		out = m
+	}
+	return out
 }
 
 // checkSubChainSingleExit 子链一次执行只能走到一个出口：不允许某个节点用同一种关系连到多个下游（并行扇出）。
@@ -1368,26 +1488,6 @@ func checkSubChainSingleExit(subID string, chain *types.RuleChain) error {
 		seen[k] = true
 	}
 	return nil
-}
-
-// flowSubChainIDs 从 flow 节点的 configuration.ruleChainId（"project:subChainID"）提取子链 ID，按出现顺序去重。
-func flowSubChainIDs(nodes []*types.RuleNode) []string {
-	var ids []string
-	seen := make(map[string]bool)
-	for _, node := range nodes {
-		if node == nil || node.Type != "flow" {
-			continue
-		}
-		ref, _ := node.Configuration["ruleChainId"].(string)
-		if idx := strings.LastIndex(ref, ":"); idx >= 0 {
-			ref = ref[idx+1:]
-		}
-		if ref != "" && !seen[ref] {
-			seen[ref] = true
-			ids = append(ids, ref)
-		}
-	}
-	return ids
 }
 
 // 根链返回值（root_responses）的静态占位符解析已于 2026-10 废弃：
@@ -1991,6 +2091,16 @@ func (s *WorkflowService) TestNode(ctx context.Context, req *TestNodeRequest) (*
 	// 2. 校验必传参数（frontend / frontend+ 策略）
 	if err := validateRequiredParams(nodeDef, req.InputParams); err != nil {
 		return nil, err
+	}
+
+	// 循环节点的循环体、数据来源都在编排时配置，单独测试没有意义
+	if nodeDef.Type == common.LoopNodeTypeName {
+		return nil, fmt.Errorf("循环节点不支持单独测试，请在根链编排中执行测试")
+	}
+
+	// 调用根链节点：不走 MQ worker，直接把测试参数传给目标根链当前发布版本执行，并记录节点日志
+	if nodeDef.Type == common.RootChainCallNodeTypeName {
+		return s.testRootChainCallNode(ctx, req, nodeDef)
 	}
 
 	// 4. 构建环境变量（可选）
