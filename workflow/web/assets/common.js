@@ -4302,6 +4302,7 @@ async function loadAllLogs() {
   params.set('page_size', String(_allLogPageSize));
 
   box.innerHTML = '<div class="log-empty">加载中…</div>';
+  setAllLogFlowTarget(null);
   try {
     const endpoint = _allLogType === 'activity' ? '/api/activity-logs' : '/api/node-logs';
     const resp = await api(endpoint + '?' + params.toString());
@@ -4314,9 +4315,49 @@ async function loadAllLogs() {
     }
     box.innerHTML = data.map(_allLogType === 'activity' ? renderLogItem : renderNodeLogItemWithActs).join('');
     renderAllLogPager(total);
+    // 选了根链且按 trace_id 查到结果时，提供「查看流程图」入口（按本次搜索条件，而非输入框里后来改动的值）
+    if (rootChainId && trace) setAllLogFlowTarget({ chainId: rootChainId, traceId: trace });
   } catch (e) {
     box.innerHTML = '<div class="log-empty">加载日志失败: ' + esc(e.message) + '</div>';
   }
+}
+
+// 日志页「查看流程图」：记录本次搜索的根链与 trace，并控制按钮显示
+let _allLogFlowTarget = null;
+function setAllLogFlowTarget(target) {
+  _allLogFlowTarget = target;
+  const btn = document.getElementById('all-log-flow-btn');
+  if (btn) btn.style.display = target ? '' : 'none';
+}
+
+// 新页面打开 /flow-view，显示该根链流程图并标出这次 trace 的执行路径。
+//   - 管理员 / 项目管理角色：先生成按根链分享的 token，地址带 share，复制给未登录的人也能看；
+//   - 只读用户：不能生成分享，地址不带 share，别人打开需要登录。
+// 生成 token 是异步的，先同步打开空白页再跳转，避免被浏览器当作弹窗拦截。
+async function openAllLogFlowView() {
+  const t = _allLogFlowTarget;
+  if (!t) return;
+  const project = getProject();
+  const q = new URLSearchParams({ project: project, chain_id: t.chainId, trace_id: t.traceId });
+  const loginUrl = '/flow-view?' + q.toString();
+  if (!document.body.classList.contains('is-project-editor')) {
+    window.open(loginUrl, '_blank', 'noopener');
+    return;
+  }
+  const win = window.open('', '_blank');
+  if (win) win.opener = null;
+  let url = loginUrl;
+  try {
+    const res = await api('/api/flow-view/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chain_id: t.chainId, trace_id: t.traceId }),
+    });
+    if (res && res.url) url = res.url;
+  } catch (e) {
+    showToast('生成分享链接失败，已按登录方式打开: ' + e.message, 'error');
+  }
+  if (win) win.location.href = url;
+  else window.open(url, '_blank', 'noopener');
 }
 
 // 渲染日志页分页器
@@ -9532,6 +9573,38 @@ async function queryOrchTracePath() {
     showToast('查询日志失败: ' + e.message, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '查询'; }
+  }
+}
+
+// 生成 /flow-view 只读分享链接（免登录，默认 90 天有效）：按根链分享，token 只绑定当前根链；
+// 输入框里的 traceId 只拼进链接地址方便直接打开，把地址里的 trace_id 换成该根链下其它执行同样可看
+async function createOrchFlowShare() {
+  const chainEl = document.getElementById('orch-chain-id');
+  const chainId = ((chainEl && chainEl.value) || '').trim();
+  if (!chainId) { showToast('当前没有加载根链，无法生成分享链接', 'error'); return; }
+  if (document.body.classList.contains('is-project-viewer')) { showToast('只读权限不能生成分享链接', 'error'); return; }
+  const input = document.getElementById('orch-trace-input');
+  const traceId = ((input && input.value) || '').trim();
+  const btn = document.getElementById('orch-trace-share');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/api/flow-view/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chain_id: chainId, trace_id: traceId }),
+    });
+    const link = location.origin + res.url;
+    const expires = new Date(res.expires_at).toLocaleString();
+    const done = () => showToast('分享链接已复制（按根链分享，可替换地址中的 trace_id 查看其它执行），有效期至 ' + expires, 'success');
+    const fallback = () => window.prompt('分享链接（有效期至 ' + expires + '），请手动复制：', link);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done).catch(fallback);
+    } else {
+      fallback();
+    }
+  } catch (e) {
+    showToast('生成分享链接失败: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

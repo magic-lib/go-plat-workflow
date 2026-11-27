@@ -146,6 +146,8 @@ var publicAPIMux = func() *http.ServeMux {
 		// 对外 Redis 配置查询与工作流调用（secret_key 签名校验）
 		"POST " + workflow.ProjectRedisCfgPath,
 		"POST " + workflow.ProjectWorkflowInvoke,
+		// 流程执行路径查看页只读分享（handler 内按分享 token 签名与有效期校验）
+		"GET /api/flow-view/shared",
 	} {
 		m.HandleFunc(pattern, noop)
 	}
