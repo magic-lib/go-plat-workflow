@@ -64,6 +64,8 @@
   <button class="tab-btn" data-tab="sub-chains" onclick="location.href='/?tab=sub-chains'" style="display:none;">Sub Chains</button>
   <button class="tab-btn" data-tab="root-chains" onclick="location.href='/?tab=root-chains'">Root Chains</button>
   <button class="tab-btn active" data-tab="orchestrate">Orchestrate</button>
+  <!-- 日志：带上当前项目跳回首页日志 tab，便于编排时直接查执行日志 -->
+  <button class="tab-btn" data-tab="logs" onclick="location.href='/?tab=logs&project='+encodeURIComponent(getProject())">日志</button>
 </div>
   <div id="tab-orchestrate" class="tab-content active">
     <div class="orch-layout">
