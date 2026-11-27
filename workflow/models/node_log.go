@@ -10,8 +10,8 @@ import (
 // 由管理端收集器从 redis（workflow:node:log:<namespace>）消费 node 上报的入参/返回值后写入，
 // 供前端按 node 查看与检索执行情况。
 type NodeLogModel struct {
-	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	Project     string `gorm:"column:project;type:varchar(128);not null;index:idx_node_proj" json:"project"`
+	ID          uint   `gorm:"primaryKey;autoIncrement;index:idx_nl_proj_id,priority:2" json:"id"`
+	Project     string `gorm:"column:project;type:varchar(128);not null;index:idx_node_proj;index:idx_nl_proj_created,priority:1;index:idx_nl_proj_id,priority:1" json:"project"`
 	Env         string `gorm:"column:env;type:varchar(128);not null" json:"env"`
 	NodeID      string `gorm:"column:node_id;type:varchar(255);not null;index:idx_node_proj" json:"node_id"`
 	NodeName    string `gorm:"column:node_name;type:varchar(255);not null" json:"node_name"`
@@ -32,8 +32,12 @@ type NodeLogModel struct {
 	// ChainID 节点实际所在的链：主链节点为根链 ID，子链里的节点为子链 ID。
 	ChainID string `gorm:"column:chain_id;type:varchar(128);index;default:''" json:"chain_id"`
 	// CallPath 子链调用路径（调用子链的子链节点实例 ID，嵌套用 "/" 拼接）；主链节点为空。
-	CallPath  string    `gorm:"column:call_path;type:varchar(500);default:''" json:"call_path"`
-	CreatedAt time.Time `json:"created_at"`
+	CallPath string `gorm:"column:call_path;type:varchar(500);default:''" json:"call_path"`
+	// 索引说明（日志量大时的主要查询）：
+	//   idx_nl_created      每日按 created_at 清理过期日志
+	//   idx_nl_proj_created 按项目 + 日期统计访问量/错误量
+	//   idx_nl_proj_id      日志列表按项目查看最新记录（按 id 倒序分页）
+	CreatedAt time.Time `gorm:"index:idx_nl_created;index:idx_nl_proj_created,priority:2" json:"created_at"`
 }
 
 // TableName 返回表名。
