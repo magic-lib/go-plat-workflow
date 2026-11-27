@@ -1288,6 +1288,8 @@ function syncSwitchConfig() {
 function renderCondVarSnippets() {
   const box = document.getElementById('node-cond-var-snippets');
   if (!box) return;
+  // 先绑定监听再渲染：节点还没有参数/返回值时下面会提前 return，监听放在末尾就永远绑不上，新增条目后不刷新
+  bindCondVarSnippetWatch();
   const items = [];
   // 节点参数：来自「参数定义」表单，格式 [arguments.<key>]
   nodeParamDefs().forEach(p => {
@@ -1321,7 +1323,6 @@ function renderCondVarSnippets() {
   }).join('');
   box.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">可用变量（点击复制）：</div>' +
     '<div style="display:flex;flex-wrap:wrap">' + rows + '</div>';
-  bindCondVarSnippetWatch();
 }
 
 // 事件委托：监听参数/返回值容器的输入与增删，实时刷新「可用变量」列表。
@@ -1332,6 +1333,8 @@ function bindCondVarSnippetWatch() {
     if (!box || box.dataset.condVarBound === '1') return;
     box.dataset.condVarBound = '1';
     box.addEventListener('input', renderCondVarSnippets);
+    // 下拉框（类型）改动兜底：部分浏览器 select 只触发 change
+    box.addEventListener('change', renderCondVarSnippets);
     // 增删行不触发 input，用 MutationObserver 覆盖
     const mo = new MutationObserver(() => renderCondVarSnippets());
     mo.observe(box, { childList: true, subtree: false });
