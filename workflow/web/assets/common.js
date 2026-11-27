@@ -4608,16 +4608,36 @@ function renderTestActivityParams() {
     const required = (bc.required === true || bc.required === 'true');
     const reqMark = required ? ' <span style="color:#dc2626">*</span>' : '';
     const policyTag = bc.policy ? ' <span style="font-weight:400;color:#6b7280;font-size:.7rem">[' + esc(bc.policy) + ']</span>' : '';
-    const ph = bc.value !== undefined && bc.value !== null ? String(bc.value) : '';
+    // 参数中文名、字段类型、描述：与 Activity 参数定义保持一致，避免测试时输错类型或含义
+    const labelText = (bc.label && bc.label !== key) ? ' <span style="font-weight:400;color:var(--text)">' + esc(bc.label) + '</span>' : '';
+    const typeText = String(bc.type || bc.value_type || '').trim();
+    const typeTag = ' <span title="字段类型" style="display:inline-block;padding:0 6px;border-radius:4px;background:#eef2ff;color:#4338ca;font-weight:500;font-size:.7rem;font-family:monospace">' + esc(typeText || '未声明类型') + '</span>';
+    const descHtml = bc.description ? '<div style="margin-top:4px;font-size:.75rem;line-height:1.5;color:var(--text-muted);white-space:pre-wrap">' + esc(bc.description) + '</div>' : '';
+    const val = bc.value !== undefined && bc.value !== null ? String(bc.value) : '';
+    const ph = val || testActivityTypePlaceholder(typeText);
     const inputId = 'test-act-param-' + key.replace(/[^\w]/g, '_');
     return `
       <div class="form-row" style="margin-bottom:8px;align-items:flex-end">
         <div class="form-group" style="flex:1">
-          <label>${esc(key)}${reqMark}${policyTag}</label>
-          <input id="${inputId}" data-key="${esc(key)}" placeholder="${esc(ph)}" value="${esc(ph)}">
+          <label>${esc(key)}${labelText}${typeTag}${reqMark}${policyTag}</label>
+          <input id="${inputId}" data-key="${esc(key)}" placeholder="${esc(ph)}" value="${esc(val)}">
+          ${descHtml}
         </div>
       </div>`;
   }).join('');
+}
+
+// 按字段类型给出输入示例占位符，提示测试时应填写的格式
+function testActivityTypePlaceholder(t) {
+  switch (String(t || '').trim().toLowerCase()) {
+    case 'int': case 'int32': case 'int64': case 'integer': return '整数，如 123';
+    case 'float': case 'float32': case 'float64': case 'double': case 'number': return '数字，如 1.5';
+    case 'bool': case 'boolean': return 'true / false';
+    case 'slice': return 'JSON 数组，如 ["a","b"]';
+    case 'map': case 'json': case 'object': return 'JSON 对象，如 {"k":"v"}';
+    case 'string': return '字符串';
+    default: return '';
+  }
 }
 
 function resetTestActivityParams() {
