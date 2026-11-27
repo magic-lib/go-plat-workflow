@@ -4699,6 +4699,8 @@ function addParamRow(key, label, type, required, defaultValue, description, poli
     <select class="param-policy">${policyHTML}</select>
     <input class="param-default" placeholder="默认值" value="${esc(defaultValue||'')}">
     <input class="param-desc" placeholder="描述" value="${esc(description||'')}">
+    <button class="btn-move-param" type="button" onclick="moveParamRow(this,-1)" title="上移">&uarr;</button>
+    <button class="btn-move-param" type="button" onclick="moveParamRow(this,1)" title="下移">&darr;</button>
     <button class="btn-remove-param" onclick="removeParamRow('param-row-${paramSeq}')" title="删除此参数">&times;</button>
   `;
   container.appendChild(row);
@@ -4729,6 +4731,20 @@ function activitiesReferencingNodeParam(key) {
     if (!names.includes(name)) names.push(name);
   });
   return names;
+}
+
+// 参数定义 / 返回值定义行上移(dir=-1)或下移(dir=1)：保存时按页面顺序收集，顺序即落库顺序。
+// 只在同一容器的 .param-row 之间交换，跳过「暂无…」等占位元素；已在首/尾时不动。
+function moveParamRow(btn, dir) {
+  const row = btn && btn.closest('.param-row');
+  if (!row || !row.parentNode) return;
+  let sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+  while (sib && !sib.classList.contains('param-row')) {
+    sib = dir < 0 ? sib.previousElementSibling : sib.nextElementSibling;
+  }
+  if (!sib) return;
+  row.parentNode.insertBefore(row, dir < 0 ? sib : sib.nextElementSibling);
+  btn.focus();
 }
 
 function removeParamRow(rowId) {
@@ -4882,6 +4898,8 @@ function addOutputRow(opts) {
   row.id = 'output-row-' + outputSeq;
   row.innerHTML = `
     <span class="output-input-wrap" style="flex:1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0"></span>
+    <button class="btn-move-param" type="button" onclick="moveParamRow(this,-1)" title="上移">&uarr;</button>
+    <button class="btn-move-param" type="button" onclick="moveParamRow(this,1)" title="下移">&darr;</button>
     <button class="btn-remove-param" onclick="removeOutputRow('output-row-${outputSeq}')" title="删除此返回值">&times;</button>
   `;
   container.appendChild(row);
