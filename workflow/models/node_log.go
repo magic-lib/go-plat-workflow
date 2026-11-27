@@ -10,8 +10,8 @@ import (
 // 由管理端收集器从 redis（workflow:node:log:<namespace>）消费 node 上报的入参/返回值后写入，
 // 供前端按 node 查看与检索执行情况。
 type NodeLogModel struct {
-	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	Project     string `gorm:"column:project;type:varchar(128);not null;index:idx_node_proj" json:"project"`
+	ID          uint   `gorm:"primaryKey;autoIncrement;index:idx_nl_proj_id,priority:2" json:"id"`
+	Project     string `gorm:"column:project;type:varchar(128);not null;index:idx_node_proj;index:idx_nl_proj_created,priority:1;index:idx_nl_proj_id,priority:1" json:"project"`
 	Env         string `gorm:"column:env;type:varchar(128);not null" json:"env"`
 	NodeID      string `gorm:"column:node_id;type:varchar(255);not null;index:idx_node_proj" json:"node_id"`
 	NodeName    string `gorm:"column:node_name;type:varchar(255);not null" json:"node_name"`
@@ -26,10 +26,14 @@ type NodeLogModel struct {
 	TraceID     string `gorm:"column:trace_id;type:varchar(128);index;default:''" json:"trace_id"`
 	RootChainID string `gorm:"column:root_chain_id;type:varchar(128);index;default:''" json:"root_chain_id"`
 	// RootChainReleaseID 本次执行对应的根链发布版本标识（形如 R000005@3），用于追溯当时执行的是哪个发布版本。
-	RootChainReleaseID string    `gorm:"column:root_chain_release_id;type:varchar(128);index;default:''" json:"root_chain_release_id"`
-	SpanID             string    `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
-	RelationType       string    `gorm:"column:relation_type;type:varchar(500);default:''" json:"relation_type"`
-	CreatedAt          time.Time `json:"created_at"`
+	RootChainReleaseID string `gorm:"column:root_chain_release_id;type:varchar(128);index;default:''" json:"root_chain_release_id"`
+	SpanID             string `gorm:"column:span_id;type:varchar(128);index;default:''" json:"span_id"`
+	RelationType       string `gorm:"column:relation_type;type:varchar(500);default:''" json:"relation_type"`
+	// 索引说明（日志量大时的主要查询）：
+	//   idx_nl_created      每日按 created_at 清理过期日志
+	//   idx_nl_proj_created 按项目 + 日期统计访问量/错误量
+	//   idx_nl_proj_id      日志列表按项目查看最新记录（按 id 倒序分页）
+	CreatedAt time.Time `gorm:"index:idx_nl_created;index:idx_nl_proj_created,priority:2" json:"created_at"`
 }
 
 // TableName 返回表名。
