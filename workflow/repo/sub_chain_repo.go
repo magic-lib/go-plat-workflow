@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -22,7 +23,8 @@ func NewSubChainRepo(db *gorm.DB) *SubChainRepo {
 	return &SubChainRepo{db: db}
 }
 
-// NextSubChainID 生成下一个子链的自动 ID（如 F000012），基于 max(id)+1。
+// NextSubChainID 预估下一个子链的自动 ID（如 F000012），基于 max(id)+1，仅供展示参考。
+// 实际创建时编号由 Create 按自增主键生成，不要用它的结果去创建子链。
 func (r *SubChainRepo) NextSubChainID(ctx context.Context) (string, error) {
 	var next uint
 	err := r.db.WithContext(ctx).Raw("SELECT COALESCE(MAX(id), 0) + 1 FROM wf_sub_chains").Scan(&next).Error
@@ -32,11 +34,38 @@ func (r *SubChainRepo) NextSubChainID(ctx context.Context) (string, error) {
 	return fmt.Sprintf("F%06d", next), nil
 }
 
-// Create 创建子链。
+// Create 创建子链。ChainID 为空（或为临时编号）时先插入再按自增主键回写 F000012 格式的编号，
+// 并把 DSL 里的临时编号（组装 DSL 时写入的 ruleChain.id）一并替换为正式编号，回填到 def。
 func (r *SubChainRepo) Create(ctx context.Context, def *workflow.SubChainDef) error {
 	var m models.SubChainModel
 	m.FromDef(def)
-	return r.db.WithContext(ctx).Create(&m).Error
+	if !needAutoBizID(def.ChainID) {
+		return r.db.WithContext(ctx).Create(&m).Error
+	}
+	tempID := def.ChainID
+	if tempID == "" {
+		tempID = workflow.NewTempBizID()
+	}
+	m.ChainID = tempID
+	dsl := m.DSLJSON
+	finalDSL := dsl
+	finalID, err := createWithAutoBizID(ctx, r.db, bizIDCreate{
+		model: &m, column: "chain_id", prefix: "F", tempID: tempID,
+		id: func() uint { return m.ID },
+		extra: func(finalID string) map[string]any {
+			if !strings.Contains(dsl, tempID) {
+				return nil
+			}
+			finalDSL = strings.ReplaceAll(dsl, tempID, finalID)
+			return map[string]any{"dsl_json": finalDSL}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	def.ChainID = finalID
+	def.DSLJSON = finalDSL
+	return nil
 }
 
 // BatchUpsert 批量 upsert 子链：project + chain_id 冲突时更新全部字段，否则插入。

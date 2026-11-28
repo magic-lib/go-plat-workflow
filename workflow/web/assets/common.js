@@ -6931,8 +6931,6 @@ function loadToExecute(c, isSubChain) {
 
   rebuildConnDatalist();
   refreshConnSuggestions();
-  window._currentTestCase = null;
-  refreshTestCases();
   showToast((isSubChain ? '已加载子链: ' : '已加载根链: ') + esc(c.chain_id), 'success');
 }
 
@@ -6971,30 +6969,6 @@ async function executeWorkflow() {
     const resultStr = JSON.stringify(data, null, 2);
     resultBox.textContent = resultStr;
     showToast('执行成功', 'success');
-    // 若当前已选中某测试用例，将执行结果回写其 last_result，便于下次直接查看
-    // （viewer 只读，不能保存测试用例，跳过回写）
-    if (window._currentTestCase && !document.body.classList.contains('is-project-viewer')) {
-      const c = window._currentTestCase;
-      try {
-        await api('/api/test-cases', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
-          project: getProject(),
-          case_id: c.case_id,
-          owner_id: c.owner_id,
-          owner_type: c.owner_type,
-          name: c.name,
-          chain_id: c.chain_id,
-          chain_name: c.chain_name,
-          node_ids: c.node_ids,
-          sub_chain_ids: c.sub_chain_ids,
-          connections_data: c.connections_data,
-          payload: c.payload,
-          debug_mode: c.debug_mode,
-          use_release: c.use_release,
-          node_param_overrides: c.node_param_overrides,
-          last_result: resultStr,
-        }) });
-      } catch (e) { /* 回写失败不影响主流程 */ }
-    }
   } catch (e) {
     resultBox.textContent = 'ERROR: ' + e.message;
     showToast('执行失败: ' + e.message, 'error');
@@ -7074,150 +7048,6 @@ async function refreshExecEnvs() {
     sel.appendChild(frag);
     if (cur && Array.prototype.some.call(sel.options, o => o.value === cur)) sel.value = cur;
   } catch (e) { /* 忽略环境加载失败 */ }
-}
-
-// ============================================================
-// TestCase 管理
-// ============================================================
-
-// 全局：当前选中的测试用例
-let _currentTestCase = null;
-
-// owner 类型由 Chain ID 前缀推断：F 开头视为 sub，其余走 root
-function inferOwnerType(chainId) {
-  if (!chainId) return 'root';
-  // 子链 ID 形如 F000012，root 链常为自定义 ID；这里约定：以 F 开头视为 sub
-  if (/^F/i.test(chainId)) return 'sub';
-  return 'root';
-}
-
-// 收集当前 Execute 表单输入，返回测试用例所需字段
-function collectTestCaseFields() {
-  const nodeIdsStr = document.getElementById('exec-node-ids').value.trim();
-  const subIdsStr = document.getElementById('exec-sub-ids').value.trim();
-  const connections = collectConnections();
-  return {
-    chain_id: document.getElementById('exec-chain-id').value.trim(),
-    chain_name: document.getElementById('exec-chain-name').value.trim(),
-    node_ids: nodeIdsStr ? nodeIdsStr : '',
-    sub_chain_ids: subIdsStr ? subIdsStr : '',
-    connections_data: JSON.stringify(connections),
-    payload: safeVal('exec-payload', '{}'),
-    debug_mode: safeChecked('exec-debug'),
-    use_release: safeChecked('exec-use-release'),
-  };
-}
-
-// 把测试用例字段填充回 Execute 表单
-function applyTestCaseToForm(c) {
-  document.getElementById('exec-chain-id').value = c.chain_id || '';
-  document.getElementById('exec-chain-name').value = c.chain_name || '';
-  document.getElementById('exec-node-ids').value = c.node_ids || '';
-  document.getElementById('exec-sub-ids').value = c.sub_chain_ids || '';
-  const payloadEl = document.getElementById('exec-payload'); if (payloadEl) payloadEl.value = c.payload || '{}';
-  const debugEl = document.getElementById('exec-debug'); if (debugEl) debugEl.checked = !!c.debug_mode;
-  const releaseEl = document.getElementById('exec-use-release'); if (releaseEl) releaseEl.checked = !!c.use_release;
-
-  // 填充连接
-  clearAllConnRows();
-  try {
-    const conns = JSON.parse(c.connections_data || '[]');
-    conns.forEach(conn => addConnRow(conn.from_id, conn.to_id, conn.type));
-  } catch (e) {}
-  if (!document.querySelector('#exec-connections-container .conn-row')) {
-    addConnRow('', '', 'True');
-  }
-  rebuildConnDatalist();
-}
-
-async function refreshTestCases() {
-  const chainId = document.getElementById('exec-chain-id').value.trim();
-  const listEl = document.getElementById('test-case-list');
-  if (!chainId) {
-    listEl.innerHTML = '<div id="test-case-empty" style="text-align:center;padding:12px;color:var(--text-muted);font-size:.85rem">请先填写 Chain ID</div>';
-    return;
-  }
-  try {
-    const cases = await api('/api/test-cases?owner_id=' + encodeURIComponent(chainId));
-    if (!cases || cases.length === 0) {
-      listEl.innerHTML = '<div id="test-case-empty" style="text-align:center;padding:12px;color:var(--text-muted);font-size:.85rem">暂无测试用例，测试后可点击"保存测试用例"</div>';
-      return;
-    }
-    listEl.innerHTML = '';
-    cases.forEach(c => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid #eee';
-      row.innerHTML = `
-        <button class="btn btn-sm btn-outline" onclick="loadTestCase('${esc(c.case_id)}')" title="加载此用例到表单并执行">▸ ${esc(c.name)}</button>
-        <button class="btn btn-sm btn-danger edit-only" onclick="deleteTestCase('${esc(c.case_id)}')" title="删除用例">✕</button>
-      `;
-      listEl.appendChild(row);
-    });
-  } catch (e) {
-    listEl.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-muted);font-size:.85rem">加载失败: ' + esc(e.message) + '</div>';
-  }
-}
-
-async function saveTestCase() {
-  const chainId = document.getElementById('exec-chain-id').value.trim();
-  const name = document.getElementById('test-case-name').value.trim();
-  if (!chainId) { showToast('请先填写 Chain ID', 'error'); return; }
-  if (!name) { showToast('请填写用例名称', 'error'); return; }
-
-  const f = collectTestCaseFields();
-  const body = {
-    project: getProject(),
-    owner_id: chainId,
-    owner_type: inferOwnerType(chainId),
-    name: name,
-    chain_id: f.chain_id,
-    chain_name: f.chain_name,
-    node_ids: f.node_ids,
-    sub_chain_ids: f.sub_chain_ids,
-    connections_data: f.connections_data,
-    payload: f.payload,
-    debug_mode: f.debug_mode,
-    use_release: f.use_release,
-  };
-  try {
-    const saved = await api('/api/test-cases', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-    showToast('测试用例已保存: ' + esc(saved.case_id), 'success');
-    document.getElementById('test-case-name').value = '';
-    await refreshTestCases();
-  } catch (e) {
-    showToast('保存失败: ' + e.message, 'error');
-  }
-}
-
-async function loadTestCase(caseId) {
-  try {
-    const c = await api('/api/test-cases/' + encodeURIComponent(caseId));
-    window._currentTestCase = c;
-    applyTestCaseToForm(c);
-    // 若有历史结果，直接展示
-    if (c.last_result) {
-      document.getElementById('exec-result').textContent = c.last_result;
-    } else {
-      document.getElementById('exec-result').textContent = '（该用例暂无历史执行结果，点击执行开始测试）';
-    }
-    showToast('已加载用例: ' + esc(c.name), 'success');
-  } catch (e) {
-    showToast('加载失败: ' + e.message, 'error');
-  }
-}
-
-async function deleteTestCase(caseId) {
-  if (!confirm('确认删除该测试用例？')) return;
-  try {
-    await api('/api/test-cases/' + encodeURIComponent(caseId), { method: 'DELETE' });
-    if (window._currentTestCase && window._currentTestCase.case_id === caseId) {
-      window._currentTestCase = null;
-    }
-    showToast('已删除', 'success');
-    await refreshTestCases();
-  } catch (e) {
-    showToast('删除失败: ' + e.message, 'error');
-  }
 }
 
 // ============================================================

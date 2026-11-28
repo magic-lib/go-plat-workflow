@@ -21,7 +21,8 @@ func NewActivityTestRecordRepo(db *gorm.DB) *ActivityTestRecordRepo {
 	return &ActivityTestRecordRepo{db: db}
 }
 
-// NextRecordID 生成下一个测试记录自动 ID（如 T000001），基于 max(id)+1。
+// NextRecordID 预估下一个测试记录自动 ID（如 T000001），基于 max(id)+1，仅供展示参考。
+// 实际创建时编号由 Create 按自增主键生成，不要用它的结果去创建测试记录。
 func (r *ActivityTestRecordRepo) NextRecordID(ctx context.Context, project string) (string, error) {
 	var next uint
 	err := r.db.WithContext(ctx).Raw("SELECT COALESCE(MAX(id), 0) + 1 FROM wf_activity_test_records").Scan(&next).Error
@@ -31,11 +32,24 @@ func (r *ActivityTestRecordRepo) NextRecordID(ctx context.Context, project strin
 	return fmt.Sprintf("T%06d", next), nil
 }
 
-// Create 创建测试记录。
+// Create 创建测试记录。RecordID 为空（或为临时编号）时先插入再按自增主键回写 T000012 格式的编号，并回填到 def。
 func (r *ActivityTestRecordRepo) Create(ctx context.Context, def *workflow.ActivityTestRecordDef) error {
 	var m models.ActivityTestRecordModel
 	m.FromDef(def)
-	return r.db.WithContext(ctx).Create(&m).Error
+	if !needAutoBizID(def.RecordID) {
+		return r.db.WithContext(ctx).Create(&m).Error
+	}
+	tempID := workflow.NewTempBizID()
+	m.RecordID = tempID
+	finalID, err := createWithAutoBizID(ctx, r.db, bizIDCreate{
+		model: &m, column: "record_id", prefix: "T", tempID: tempID,
+		id: func() uint { return m.ID },
+	})
+	if err != nil {
+		return err
+	}
+	def.RecordID = finalID
+	return nil
 }
 
 // GetByID 按项目 + 测试记录 ID 查询。

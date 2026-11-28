@@ -236,12 +236,6 @@ func (ws *WebServer) registerRoutes() {
 	// 对外 Redis 配置查询（需传入项目密钥 + 环境名，返回该环境 Redis 配置）
 	ws.mux.HandleFunc("POST "+workflow.ProjectRedisCfgPath, ws.handleGetProjectRedisConfig)
 
-	// TestCase API（测试用例：保存/加载/删除执行配置，挂载在 root/sub 上）
-	ws.mux.HandleFunc("GET /api/test-cases", ws.handleListTestCases)
-	ws.mux.HandleFunc("POST /api/test-cases", ws.handleSaveTestCase)
-	ws.mux.HandleFunc("GET /api/test-cases/{case_id}", ws.handleGetTestCase)
-	ws.mux.HandleFunc("DELETE /api/test-cases/{case_id}", ws.handleDeleteTestCase)
-
 	// EnvConfig API（项目级环境配置：环境变量 / Redis / MySQL）
 	ws.mux.HandleFunc("GET /api/env-configs", ws.handleListEnvConfigs)
 	ws.mux.HandleFunc("POST /api/env-configs", ws.handleSaveEnvConfig)
@@ -789,15 +783,8 @@ func (ws *WebServer) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
+	// NodeID 为空时由仓储层先插入再按自增主键回写编号（RegisterNode 后回填到 def）
 	def.Project = project
-	if def.NodeID == "" {
-		id, err := ws.svc.GenerateNodeID(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "generate node_id: "+err.Error())
-			return
-		}
-		def.NodeID = id
-	}
 	if def.Status == 0 {
 		def.Status = 1
 	}
@@ -903,15 +890,8 @@ func (ws *WebServer) handleCreateSubChain(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
+	// ChainID 为空时由仓储层先插入再按自增主键回写编号（RegisterSubChain 后回填到 def）
 	def.Project = project
-	if def.ChainID == "" {
-		id, err := ws.svc.GenerateSubChainID(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "generate chain_id: "+err.Error())
-			return
-		}
-		def.ChainID = id
-	}
 	if def.Status == 0 {
 		def.Status = 1
 	}
@@ -1881,132 +1861,6 @@ func (ws *WebServer) handleInvokeWorkflow(w http.ResponseWriter, r *http.Request
 	}, resp, logData)
 
 	writeJSON(w, http.StatusOK, resp)
-}
-
-// ============================================================
-// TestCase API
-// ============================================================
-
-type testCaseRequest struct {
-	Project            string `json:"project"`
-	CaseID             string `json:"case_id,omitempty"`
-	OwnerID            string `json:"owner_id"`
-	OwnerType          string `json:"owner_type"` // root / sub
-	Name               string `json:"name"`
-	ChainID            string `json:"chain_id"`
-	ChainName          string `json:"chain_name,omitempty"`
-	NodeIDs            string `json:"node_ids,omitempty"`
-	SubChainIDs        string `json:"sub_chain_ids,omitempty"`
-	ConnectionsData    string `json:"connections_data,omitempty"`
-	Payload            string `json:"payload,omitempty"`
-	DebugMode          bool   `json:"debug_mode,omitempty"`
-	UseRelease         bool   `json:"use_release,omitempty"`
-	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
-	LastResult         string `json:"last_result,omitempty"`
-}
-
-func (r *testCaseRequest) toDef(project string) *workflow.TestCaseDef {
-	return &workflow.TestCaseDef{
-		Project:            project,
-		CaseID:             r.CaseID,
-		OwnerID:            r.OwnerID,
-		OwnerType:          r.OwnerType,
-		Name:               r.Name,
-		ChainID:            r.ChainID,
-		ChainName:          r.ChainName,
-		NodeIDs:            r.NodeIDs,
-		SubChainIDs:        r.SubChainIDs,
-		ConnectionsData:    r.ConnectionsData,
-		Payload:            r.Payload,
-		DebugMode:          r.DebugMode,
-		UseRelease:         r.UseRelease,
-		NodeParamOverrides: r.NodeParamOverrides,
-		LastResult:         r.LastResult,
-	}
-}
-
-func (ws *WebServer) handleListTestCases(w http.ResponseWriter, r *http.Request) {
-	project := projectParam(r)
-	ownerID := strings.TrimSpace(r.URL.Query().Get("owner_id"))
-	if project == "" {
-		writeError(w, http.StatusBadRequest, "project query parameter is required")
-		return
-	}
-	if ownerID == "" {
-		writeError(w, http.StatusBadRequest, "owner_id query parameter is required")
-		return
-	}
-	cases, err := ws.svc.ListTestCases(r.Context(), project, ownerID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if cases == nil {
-		cases = []*workflow.TestCaseDef{}
-	}
-	writeJSON(w, http.StatusOK, cases)
-}
-
-func (ws *WebServer) handleGetTestCase(w http.ResponseWriter, r *http.Request) {
-	project := projectParam(r)
-	caseID := r.PathValue("case_id")
-	if project == "" {
-		writeError(w, http.StatusBadRequest, "project query parameter is required")
-		return
-	}
-	c, err := ws.svc.GetTestCase(r.Context(), project, caseID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, c)
-}
-
-func (ws *WebServer) handleSaveTestCase(w http.ResponseWriter, r *http.Request) {
-	var req testCaseRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
-		return
-	}
-	project, ok := ws.resolveProject(w, r, req.Project)
-	if !ok {
-		return
-	}
-	req.Project = project
-	if req.Project == "" {
-		writeError(w, http.StatusBadRequest, "project is required")
-		return
-	}
-	if req.OwnerID == "" || req.OwnerType == "" || req.ChainID == "" {
-		writeError(w, http.StatusBadRequest, "owner_id, owner_type and chain_id are required")
-		return
-	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	def, err := ws.svc.SaveTestCase(r.Context(), req.toDef(req.Project))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	log.Info().Str("project", def.Project).Str("case_id", def.CaseID).Str("owner_id", def.OwnerID).Msg("test case saved via web")
-	writeJSON(w, http.StatusOK, def)
-}
-
-func (ws *WebServer) handleDeleteTestCase(w http.ResponseWriter, r *http.Request) {
-	project := projectParam(r)
-	caseID := r.PathValue("case_id")
-	if project == "" {
-		writeError(w, http.StatusBadRequest, "project query parameter is required")
-		return
-	}
-	if err := ws.svc.DeleteTestCase(r.Context(), project, caseID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	log.Info().Str("project", project).Str("case_id", caseID).Msg("test case deleted via web")
-	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
 }
 
 // ============================================================

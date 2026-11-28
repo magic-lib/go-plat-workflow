@@ -492,23 +492,9 @@
         <div class="exec-panel">
           <div class="exec-card" style="grid-column:1/-1">
             <h3>执行工作流</h3>
-            <!-- 测试用例管理（已隐藏，保留 DOM 供 JS 逻辑兼容） -->
-            <div class="form-group" style="display:none">
-              <label style="display:flex;justify-content:space-between;align-items:center">
-                <span>测试用例 <span style="font-weight:400;color:var(--text-muted);font-size:.8rem">（挂载在当前 Chain ID 上，可复用/删除）</span></span>
-                <button class="btn btn-sm btn-outline" onclick="refreshTestCases()" type="button" title="刷新用例列表">&#8634; 刷新</button>
-              </label>
-              <div id="test-case-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px;background:#fafbfc;margin-bottom:8px">
-                <div id="test-case-empty" style="text-align:center;padding:12px;color:var(--text-muted);font-size:.85rem">暂无测试用例，测试后可点击"保存测试用例"</div>
-              </div>
-              <div class="edit-only" style="display:flex;gap:8px">
-                <input id="test-case-name" placeholder="用例名称，如：测试账号A" style="flex:1">
-                <button class="btn btn-sm btn-primary" onclick="saveTestCase()" type="button">&#128190; 保存测试用例</button>
-              </div>
-            </div>
             <div class="form-group">
               <label>Chain ID</label>
-              <input id="exec-chain-id" placeholder="my_flow" value="web-test-flow" oninput="refreshTestCases()" readonly>
+              <input id="exec-chain-id" placeholder="my_flow" value="web-test-flow" readonly>
             </div>
 
             <div class="form-group">
