@@ -488,6 +488,16 @@
     return { chain: chain, nodeDefs: nodeDefs, logsPromise: null };
   }
 
+  // 「显示图片」：图片接口凭分享 token 鉴权，只在分享模式下显示；trace 以接口实际查询的为准
+  function showImageLink() {
+    const btn = $('fv-img-btn');
+    if (!btn || !shareToken) return;
+    const q = new URLSearchParams({ share: shareToken });
+    if (traceId) q.set('trace_id', traceId);
+    btn.href = '/api/flow-view/image?' + q.toString();
+    btn.style.display = '';
+  }
+
   async function main() {
     if (!shareToken && (!project || !chainId)) {
       showMsg('缺少参数：请在地址中带上 project 和 chain_id，例如 /flow-view?project=xxx&chain_id=R000001&trace_id=xxx');
@@ -518,6 +528,7 @@
       showMsg('');
       applyTraceHighlight(trace);
       renderInfo(chain, trace, logs.length);
+      showImageLink();
     } catch (e) {
       if (e.share) {
         showMsg('无法查看：' + esc(e.message) + '，请联系分享人重新生成链接');
