@@ -5443,9 +5443,20 @@ function outputRefSnippetHTML() {
     rows + '</div>';
 }
 
-// 「activity选择」行的「填充全部返回值」按钮：把所选 Activity 定义的全部返回值一次性填进返回值定义
-function outputFillAllBtnHTML() {
-  return '<button type="button" class="btn btn-sm btn-outline output-fill-all" onclick="fillOutputsFromActivity(this)" title="把所选 Activity 定义的全部返回值填充为本节点返回值（类型与 Activity 一致），之后可再逐条修改" style="flex:0 0 auto;padding:3px 8px;font-size:.74rem">填充全部返回值</button>';
+// 「activity选择」行的「填充全部返回值」按钮：把所选 Activity 定义的全部返回值一次性填进返回值定义。
+// 只有选到「返回值.字段」这一层才显示（show=false 时先隐藏，由 syncOutputFillAllBtn 按当前选择切换）。
+function outputFillAllBtnHTML(show) {
+  return '<button type="button" class="btn btn-sm btn-outline output-fill-all" onclick="fillOutputsFromActivity(this)" title="把所选 Activity 定义的全部返回值填充为本节点返回值（类型与 Activity 一致），之后可再逐条修改" style="flex:0 0 auto;padding:3px 8px;font-size:.74rem' + (show ? '' : ';display:none') + '">填充全部返回值</button>';
+}
+
+// 按当前选择切换「填充全部返回值」按钮：已选 Activity 且取值类型为「返回值.字段」时显示，否则隐藏
+function syncOutputFillAllBtn(wrap) {
+  const btn = wrap && wrap.querySelector('.output-fill-all');
+  if (!btn) return;
+  const pSel = wrap.querySelector('.arg-ref');
+  const tSel = wrap.querySelector('.arg-reftype');
+  const show = !!(pSel && pSel.value && tSel && tSel.value === 'responses_field');
+  btn.style.display = show ? '' : 'none';
 }
 
 // Activity 返回值类型 → 节点返回值类型下拉的取值；不认识的类型不转换
@@ -5540,7 +5551,7 @@ function outputRenderInput(bind) {
         outputRenderRefTypeSel(curPrev, parsed) +
       '</span>' +
       '<span class="arg-ref-field-slot" style="flex:1 1 120px;display:flex;gap:4px;align-items:center;min-width:0">' + outputRenderRefFieldSlot(prevs, refId, parsed.refType, parsed.refField) + '</span>' +
-      outputFillAllBtnHTML();
+      outputFillAllBtnHTML(!!(curPrev && parsed.refType === 'responses_field' && Array.isArray(curPrev.returnValues) && curPrev.returnValues.length));
     html += '<input type="hidden" class="output-ref-final" value="' + escAttr(bind.ref || '') + '">';
     return html;
   }
@@ -5678,7 +5689,7 @@ function onOutputRefChange(sel) {
         typeSelHTML +
       '</span>';
     html += '<span class="arg-ref-field-slot" style="flex:1 1 120px;display:flex;gap:4px;align-items:center;min-width:0">' + outputRenderRefFieldSlot(prevs, refId, (curPrev && parsed.refType) || 'responses', parsed.refField || '') + '</span>';
-    html += outputFillAllBtnHTML();
+    html += outputFillAllBtnHTML(false);
     html += '<input type="hidden" class="output-ref-final" value="' + escAttr(finalInput.value) + '">';
     wrap.innerHTML = html;
     const newPrevSel = wrap.querySelector('.arg-ref');
@@ -5692,6 +5703,7 @@ function onOutputRefChange(sel) {
   if (pSel && tSel) {
     finalInput.value = outputBuildRefPath(pSel.value, tSel.value, fInput ? fInput.value : '');
   }
+  syncOutputFillAllBtn(wrap);
   // 自动补全 key/label（仅当为空）：选择 Activity 或具体返回值字段后，用对应字段名/中文名填充
   const autoPrevSel = wrap.querySelector('.arg-ref');
   if (autoPrevSel && autoPrevSel.value) {
