@@ -6324,7 +6324,7 @@ function renderReleaseRows() {
           <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('查看 DSL')} onclick="viewReleaseDsl(${r.version})">${actionIconSvg('code')}</button>
           <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="executeRelease(${r.version})">${actionIconSvg('test')}</button>
           ${stableBtn}
-          ${r.is_current ? '' : `<button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('设为生效')} onclick="setCurrentRelease(${r.version})">${actionIconSvg('check')}</button>`}
+          ${r.is_current ? '' : `<button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('设为生效')} onclick="setCurrentRelease(${r.version})">${actionIconSvg('publish')}</button>`}
           ${canDelete ? `<button class="btn btn-sm btn-danger btn-icon" ${actionIconAttrs('删除')} onclick="deleteReleaseVersion(${r.version}, ${r.is_current ? 'true' : 'false'})">${actionIconSvg('delete')}</button>` : ''}
         </div></td>
       </tr>`;
@@ -10695,7 +10695,6 @@ const ACTION_ICON_PATHS = {
   history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
   flow:    '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
   star:    '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
-  check:   '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
   copy:    '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
 };
 function actionIconSvg(name) {
