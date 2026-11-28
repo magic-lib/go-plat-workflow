@@ -6048,9 +6048,9 @@ function subChainRowHtml(c, i) {
         <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
         <td class="code-cell">${dslSize}</td>
         <td class="actions">
-          <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('Execute')} onclick="executeSubChain('${esc(c.chain_id)}')">${actionIconSvg('test')}</button>
-          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编排')} onclick="orchOpenInPage('${esc(c.chain_id)}')">${actionIconSvg('orch')}</button>
-          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑')} onclick="editSubChainByIndex(${i})">${actionIconSvg('edit')}</button>
+          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑')} onclick="orchOpenInPage('${esc(c.chain_id)}')">${actionIconSvg('edit')}</button>
+          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑 DSL')} onclick="editSubChainByIndex(${i})">${actionIconSvg('code')}</button>
+          <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="executeSubChain('${esc(c.chain_id)}')">${actionIconSvg('test')}</button>
           <button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除')} onclick="deleteSubChain('${esc(c.chain_id)}')">${actionIconSvg('delete')}</button>
         </td>
       </tr>`;
