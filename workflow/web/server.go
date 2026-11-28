@@ -151,6 +151,8 @@ func (ws *WebServer) registerRoutes() {
 	// 流程执行路径查看页的只读分享：登录后生成分享链接；凭分享 token 免登录取数
 	ws.mux.HandleFunc("POST /api/flow-view/share", ws.handleCreateFlowShare)
 	ws.mux.HandleFunc("GET /api/flow-view/shared", ws.handleGetFlowShare)
+	// 凭分享 token 生成流程执行路径图片（PNG/SVG），供业务后台调用后保存
+	ws.mux.HandleFunc("GET /api/flow-view/image", ws.handleFlowShareImage)
 	// 公共静态资源（CSS / JS）
 	ws.mux.HandleFunc("GET /assets/", ws.serveAssets)
 

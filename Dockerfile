@@ -45,7 +45,8 @@ RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
 # ============================================================
 FROM ${ALPINE_IMAGE}
 
-RUN apk add --no-cache ca-certificates tzdata && \
+# graphviz + 中文字体：/api/flow-view/image 用 dot 命令生成流程执行路径图片
+RUN apk add --no-cache ca-certificates tzdata graphviz font-wqy-zenhei && \
     adduser -D -u 10001 appuser
 
 WORKDIR /app
