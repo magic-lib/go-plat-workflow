@@ -21,7 +21,8 @@ func NewTestCaseRepo(db *gorm.DB) *TestCaseRepo {
 	return &TestCaseRepo{db: db}
 }
 
-// NextCaseID 生成下一个测试用例自动 ID（如 T000001），基于 max(id)+1。
+// NextCaseID 预估下一个测试用例自动 ID（如 T000001），基于 max(id)+1，仅供展示参考。
+// 实际创建时编号由 Create 按自增主键生成，不要用它的结果去创建测试用例。
 func (r *TestCaseRepo) NextCaseID(ctx context.Context, project string) (string, error) {
 	var next uint
 	err := r.db.WithContext(ctx).Raw("SELECT COALESCE(MAX(id), 0) + 1 FROM wf_test_cases").Scan(&next).Error
@@ -31,11 +32,24 @@ func (r *TestCaseRepo) NextCaseID(ctx context.Context, project string) (string, 
 	return fmt.Sprintf("T%06d", next), nil
 }
 
-// Create 创建测试用例。
+// Create 创建测试用例。CaseID 为空（或为临时编号）时先插入再按自增主键回写 T000012 格式的编号，并回填到 def。
 func (r *TestCaseRepo) Create(ctx context.Context, def *workflow.TestCaseDef) error {
 	var m models.TestCaseModel
 	m.FromDef(def)
-	return r.db.WithContext(ctx).Create(&m).Error
+	if !needAutoBizID(def.CaseID) {
+		return r.db.WithContext(ctx).Create(&m).Error
+	}
+	tempID := workflow.NewTempBizID()
+	m.CaseID = tempID
+	finalID, err := createWithAutoBizID(ctx, r.db, bizIDCreate{
+		model: &m, column: "case_id", prefix: "T", tempID: tempID,
+		id: func() uint { return m.ID },
+	})
+	if err != nil {
+		return err
+	}
+	def.CaseID = finalID
+	return nil
 }
 
 // Update 更新测试用例（按 project + case_id）。

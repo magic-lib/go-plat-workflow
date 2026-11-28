@@ -22,7 +22,8 @@ func NewNodeRepo(db *gorm.DB) *NodeRepo {
 	return &NodeRepo{db: db}
 }
 
-// NextNodeID 生成下一个节点的自动 ID（如 N000005），基于 max(id)+1。
+// NextNodeID 预估下一个节点的自动 ID（如 N000005），基于 max(id)+1，仅供展示参考。
+// 实际创建时编号由 Create 按自增主键生成（并发或有空号时与预估值可能不同），不要用它的结果去创建节点。
 func (r *NodeRepo) NextNodeID(ctx context.Context) (string, error) {
 	var next uint
 	err := r.db.WithContext(ctx).Raw("SELECT COALESCE(MAX(id), 0) + 1 FROM wf_nodes").Scan(&next).Error
@@ -32,11 +33,24 @@ func (r *NodeRepo) NextNodeID(ctx context.Context) (string, error) {
 	return fmt.Sprintf("N%06d", next), nil
 }
 
-// Create 创建节点。
+// Create 创建节点。NodeID 为空（或为临时编号）时先插入再按自增主键回写 N000012 格式的编号，并回填到 def。
 func (r *NodeRepo) Create(ctx context.Context, def *workflow.NodeDef) error {
 	var m models.NodeModel
 	m.FromNodeDef(def)
-	return r.db.WithContext(ctx).Create(&m).Error
+	if !needAutoBizID(def.NodeID) {
+		return r.db.WithContext(ctx).Create(&m).Error
+	}
+	tempID := workflow.NewTempBizID()
+	m.NodeID = tempID
+	finalID, err := createWithAutoBizID(ctx, r.db, bizIDCreate{
+		model: &m, column: "node_id", prefix: "N", tempID: tempID,
+		id: func() uint { return m.ID },
+	})
+	if err != nil {
+		return err
+	}
+	def.NodeID = finalID
+	return nil
 }
 
 // BatchUpsert 批量 upsert 节点：project + node_id 冲突时更新全部字段，否则插入。

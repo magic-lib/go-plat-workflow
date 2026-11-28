@@ -40,7 +40,7 @@ func (a rootChainCallInvoker) InvokeRootChainForNode(ctx context.Context, req *c
 }
 
 // ensureBuiltinRootChainCallNode 幂等确保项目下存在内置「调用根链节点」（custom/RootChainCall）定义，
-// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由 NextNodeID 生成。
+// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由仓储层按自增主键生成。
 func (s *WorkflowService) ensureBuiltinRootChainCallNode(ctx context.Context, project string) error {
 	exists, err := s.nodeRepo.ExistsByType(ctx, project, common.RootChainCallNodeTypeName)
 	if err != nil {
@@ -49,13 +49,9 @@ func (s *WorkflowService) ensureBuiltinRootChainCallNode(ctx context.Context, pr
 	if exists {
 		return nil
 	}
-	nodeID, err := s.nodeRepo.NextNodeID(ctx)
-	if err != nil {
-		return err
-	}
+	// NodeID 留空：由仓储层先插入再按自增主键回写编号
 	def := &workflow.NodeDef{
 		Project: project,
-		NodeID:  nodeID,
 		Name:    "调用根链节点",
 		Type:    common.RootChainCallNodeTypeName,
 		Kind:    "call",

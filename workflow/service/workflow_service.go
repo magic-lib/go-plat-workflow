@@ -445,14 +445,15 @@ func (s *WorkflowService) RegisterNode(ctx context.Context, def *workflow.NodeDe
 	return s.nodeRepo.Create(ctx, def)
 }
 
-// GenerateNodeID 生成下一个节点的自动 ID（如 N000005）。
+// GenerateNodeID 预估下一个节点的自动 ID（如 N000005），仅供展示参考；
+// 创建节点时 NodeID 留空即可，由仓储层按自增主键生成，不要用本方法的结果去创建。
 func (s *WorkflowService) GenerateNodeID(ctx context.Context) (string, error) {
 	return s.nodeRepo.NextNodeID(ctx)
 }
 
 // ensureBuiltinReturnNode 幂等确保项目下存在内置「返回值节点」（custom/ReturnValue）定义。
 // 该节点是内置类型，无对应节点配置（行为由 rulego 注册的实现决定），
-// 但作为一条普通 NodeDef 入库后，其 node_id 与普通节点一样由 NextNodeID 生成（N0000xx 形式），
+// 但作为一条普通 NodeDef 入库后，其 node_id 与普通节点一样由仓储层按自增主键生成（N0000xx 形式），
 // 编排页添加时与其它类型完全一致（instanceId = node_id__rand），避免显示成类型名。
 func (s *WorkflowService) ensureBuiltinReturnNode(ctx context.Context, project string) error {
 	exists, err := s.nodeRepo.ExistsByType(ctx, project, common.ReturnValueNodeTypeName)
@@ -462,13 +463,9 @@ func (s *WorkflowService) ensureBuiltinReturnNode(ctx context.Context, project s
 	if exists {
 		return nil
 	}
-	nodeID, err := s.nodeRepo.NextNodeID(ctx)
-	if err != nil {
-		return err
-	}
+	// NodeID 留空：由仓储层先插入再按自增主键回写编号
 	def := &workflow.NodeDef{
 		Project: project,
-		NodeID:  nodeID,
 		Name:    "返回值节点",
 		Type:    common.ReturnValueNodeTypeName,
 		Kind:    "return",
@@ -478,7 +475,7 @@ func (s *WorkflowService) ensureBuiltinReturnNode(ctx context.Context, project s
 }
 
 // ensureBuiltinParamInputNode 幂等确保项目下存在内置「参数输入节点」（custom/ParamInput）定义，
-// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由 NextNodeID 生成。
+// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由仓储层按自增主键生成。
 func (s *WorkflowService) ensureBuiltinParamInputNode(ctx context.Context, project string) error {
 	exists, err := s.nodeRepo.ExistsByType(ctx, project, common.ParamInputNodeTypeName)
 	if err != nil {
@@ -487,13 +484,9 @@ func (s *WorkflowService) ensureBuiltinParamInputNode(ctx context.Context, proje
 	if exists {
 		return nil
 	}
-	nodeID, err := s.nodeRepo.NextNodeID(ctx)
-	if err != nil {
-		return err
-	}
+	// NodeID 留空：由仓储层先插入再按自增主键回写编号
 	def := &workflow.NodeDef{
 		Project: project,
-		NodeID:  nodeID,
 		Name:    "参数输入节点",
 		Type:    common.ParamInputNodeTypeName,
 		Kind:    "input",
@@ -503,7 +496,7 @@ func (s *WorkflowService) ensureBuiltinParamInputNode(ctx context.Context, proje
 }
 
 // ensureBuiltinLoopNode 幂等确保项目下存在内置「循环节点」（custom/Loop）定义，
-// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由 NextNodeID 生成。
+// 做法与 ensureBuiltinReturnNode 一致：入库为普通 NodeDef，node_id 由仓储层按自增主键生成。
 func (s *WorkflowService) ensureBuiltinLoopNode(ctx context.Context, project string) error {
 	exists, err := s.nodeRepo.ExistsByType(ctx, project, common.LoopNodeTypeName)
 	if err != nil {
@@ -512,13 +505,9 @@ func (s *WorkflowService) ensureBuiltinLoopNode(ctx context.Context, project str
 	if exists {
 		return nil
 	}
-	nodeID, err := s.nodeRepo.NextNodeID(ctx)
-	if err != nil {
-		return err
-	}
+	// NodeID 留空：由仓储层先插入再按自增主键回写编号
 	def := &workflow.NodeDef{
 		Project: project,
-		NodeID:  nodeID,
 		Name:    "循环节点",
 		Type:    common.LoopNodeTypeName,
 		Kind:    "loop",
@@ -550,7 +539,7 @@ func (s *WorkflowService) GetNode(ctx context.Context, project, nodeID string) (
 // ListNodes 列出指定项目下的节点，可按命名空间与 tag 过滤（为空表示不过滤）。
 // onlyEnabled=true 时仅返回启用状态（用于编排选择），false 时返回全部（含禁用，用于管理列表）。
 func (s *WorkflowService) ListNodes(ctx context.Context, project, namespace, tag string, onlyEnabled, isAdmin bool) ([]*workflow.NodeDef, error) {
-	// 确保内置节点（custom/ReturnValue 返回值节点）存在：其 node_id 与其它节点同样由 NextNodeID 生成（N0000xx 形式），
+	// 确保内置节点（custom/ReturnValue 返回值节点）存在：其 node_id 与其它节点同样由仓储层按自增主键生成（N0000xx 形式），
 	// 这样编排页添加时 instanceId = node_id__rand，与其它类型生成方式完全一致。
 	if err := s.ensureBuiltinReturnNode(ctx, project); err != nil {
 		log.Ctx(ctx).Warn().Err(err).Str("project", project).Msg("ensure builtin return node failed")
@@ -743,11 +732,16 @@ func (s *WorkflowService) DeleteNode(ctx context.Context, project, nodeID string
 func (s *WorkflowService) RegisterSubChain(ctx context.Context, def *workflow.SubChainDef) error {
 	// 强制将 DSL 中的 ruleChain.id 还原为子链 ID，name 同步为子链名称，
 	// 防止用户手动修改 DSL 导致 id 与子链不一致（id 始终固定为 ChainID）。
+	// ChainID 为空时先用临时编号写进 DSL，入库时由仓储层替换为按自增主键生成的正式编号
+	if def.ChainID == "" {
+		def.ChainID = workflow.NewTempBizID()
+	}
 	normalizeSubChainDSL(def)
 	return s.subChainRepo.Create(ctx, def)
 }
 
-// GenerateSubChainID 生成下一个子链的自动 ID（如 F000012）。
+// GenerateSubChainID 预估下一个子链的自动 ID（如 F000012），仅供展示参考；
+// 创建子链时 ChainID 留空即可，由仓储层按自增主键生成，不要用本方法的结果去创建。
 func (s *WorkflowService) GenerateSubChainID(ctx context.Context) (string, error) {
 	return s.subChainRepo.NextSubChainID(ctx)
 }
@@ -818,11 +812,8 @@ func (s *WorkflowService) DeleteSubChain(ctx context.Context, project, chainID s
 // CreateSubChainBuild 编排方式创建子链：ChainID 为空时自动生成（如 F000012）。
 func (s *WorkflowService) CreateSubChainBuild(ctx context.Context, req *workflow.BuildSubChainRequest) (*workflow.SubChainDef, error) {
 	if req.ChainID == "" {
-		nextID, err := s.subChainRepo.NextSubChainID(ctx)
-		if err != nil {
-			return nil, err
-		}
-		req.ChainID = nextID
+		// 组装 DSL 需要 ruleChain.id，先用临时编号，入库时由仓储层替换为按自增主键生成的正式编号
+		req.ChainID = workflow.NewTempBizID()
 	}
 	def, err := s.dslBuilder.BuildSubChain(ctx, req)
 	if err != nil {
@@ -966,11 +957,7 @@ func (s *WorkflowService) DeleteRootChain(ctx context.Context, project, chainID 
 // 执行后的结果快照通过 def.LastResult 写入（可选）。
 func (s *WorkflowService) SaveTestCase(ctx context.Context, def *workflow.TestCaseDef) (*workflow.TestCaseDef, error) {
 	if def.CaseID == "" {
-		caseID, err := s.testCaseRepo.NextCaseID(ctx, def.Project)
-		if err != nil {
-			return nil, err
-		}
-		def.CaseID = caseID
+		// CaseID 留空：由仓储层先插入再按自增主键回写编号
 		if err := s.testCaseRepo.Create(ctx, def); err != nil {
 			return nil, err
 		}
@@ -2268,13 +2255,7 @@ func mustJSON(v interface{}) string {
 
 // CreateNodeTestRecord 创建单节点测试记录（自动生成 RecordID）。
 func (s *WorkflowService) CreateNodeTestRecord(ctx context.Context, def *workflow.NodeTestRecordDef) error {
-	if def.RecordID == "" {
-		id, err := s.nodeTestRecordRepo.NextRecordID(ctx, def.Project)
-		if err != nil {
-			return err
-		}
-		def.RecordID = id
-	}
+	// RecordID 为空时由仓储层先插入再按自增主键回写编号
 	return s.nodeTestRecordRepo.Create(ctx, def)
 }
 
@@ -2569,13 +2550,7 @@ func validateRequiredActivityParams(actDef *workflow.ActivityDef, input map[stri
 
 // CreateActivityTestRecord 创建 activity 测试记录（自动生成 RecordID）。
 func (s *WorkflowService) CreateActivityTestRecord(ctx context.Context, def *workflow.ActivityTestRecordDef) error {
-	if def.RecordID == "" {
-		id, err := s.activityTestRecordRepo.NextRecordID(ctx, def.Project)
-		if err != nil {
-			return err
-		}
-		def.RecordID = id
-	}
+	// RecordID 为空时由仓储层先插入再按自增主键回写编号
 	return s.activityTestRecordRepo.Create(ctx, def)
 }
 

@@ -789,15 +789,8 @@ func (ws *WebServer) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
+	// NodeID 为空时由仓储层先插入再按自增主键回写编号（RegisterNode 后回填到 def）
 	def.Project = project
-	if def.NodeID == "" {
-		id, err := ws.svc.GenerateNodeID(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "generate node_id: "+err.Error())
-			return
-		}
-		def.NodeID = id
-	}
 	if def.Status == 0 {
 		def.Status = 1
 	}
@@ -903,15 +896,8 @@ func (ws *WebServer) handleCreateSubChain(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
+	// ChainID 为空时由仓储层先插入再按自增主键回写编号（RegisterSubChain 后回填到 def）
 	def.Project = project
-	if def.ChainID == "" {
-		id, err := ws.svc.GenerateSubChainID(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "generate chain_id: "+err.Error())
-			return
-		}
-		def.ChainID = id
-	}
 	if def.Status == 0 {
 		def.Status = 1
 	}
