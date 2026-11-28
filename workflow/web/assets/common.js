@@ -5443,6 +5443,111 @@ function outputRefSnippetHTML() {
     rows + '</div>';
 }
 
+// 「activity选择」行的「填充全部返回值」/「填充全部参数」按钮：把所选 Activity 定义的全部返回值（或全部参数）一次性填进返回值定义。
+// 「填充全部返回值」只在选到「返回值.字段」、「填充全部参数」只在选到「参数值.字段」，且都还没选具体字段时显示
+// （show=false 时先隐藏，由 syncOutputFillAllBtn 按当前选择切换）。
+function outputFillAllBtnHTML(show) {
+  return '<button type="button" class="btn btn-sm btn-outline output-fill-all" onclick="fillOutputsFromActivity(this)" title="把所选 Activity 定义的全部返回值填充为本节点返回值（类型与 Activity 一致），之后可再逐条修改" style="flex:0 0 auto;padding:3px 8px;font-size:.74rem' + (show ? '' : ';display:none') + '">填充全部返回值</button>';
+}
+function outputFillParamsBtnHTML(show) {
+  return '<button type="button" class="btn btn-sm btn-outline output-fill-params" onclick="fillOutputParamsFromActivity(this)" title="把所选 Activity 定义的全部参数填充为本节点返回值（类型与 Activity 一致），之后可再逐条修改" style="flex:0 0 auto;padding:3px 8px;font-size:.74rem' + (show ? '' : ';display:none') + '">填充全部参数</button>';
+}
+
+// 按当前选择切换两个填充按钮：已选 Activity 且还没选具体字段时，取值类型为「返回值.字段」显示「填充全部返回值」，
+// 为「参数值.字段」显示「填充全部参数」，其余情况都隐藏
+function syncOutputFillAllBtn(wrap) {
+  if (!wrap) return;
+  const pSel = wrap.querySelector('.arg-ref');
+  const tSel = wrap.querySelector('.arg-reftype');
+  const fSel = wrap.querySelector('.arg-refield');
+  const ready = !!(pSel && pSel.value && tSel && !(fSel && fSel.value));
+  const allBtn = wrap.querySelector('.output-fill-all');
+  if (allBtn) allBtn.style.display = (ready && tSel.value === 'responses_field') ? '' : 'none';
+  const paramsBtn = wrap.querySelector('.output-fill-params');
+  if (paramsBtn) paramsBtn.style.display = (ready && tSel.value === 'arguments') ? '' : 'none';
+}
+
+// Activity 返回值类型 → 节点返回值类型下拉的取值；不认识的类型不转换
+function outputTypeFromActivity(t) {
+  const v = String(t || '').trim().toLowerCase();
+  if (OUTPUT_TYPE_OPTIONS.includes(v)) return v;
+  const alias = Object.assign({}, ARG_TYPE_ALIASES, { object: 'map', array: 'slice', list: 'slice', number: 'float64' });
+  return alias[v] || '';
+}
+
+// 按所选 Activity 的返回值定义批量填充本节点返回值：
+//   - 每个返回值一行，来源为 activity选择，引用 {{steps.<实例ID>.responses.<字段>}}；
+//   - 字段名取 name（Activity 返回结果里的实际字段名），name 为空时取 key；显示名取 label；类型与 Activity 定义一致；
+//   - 当前行填为第一个返回值，其余按顺序插在当前行后面；本节点已有同名 key 的返回值跳过，不覆盖已有配置。
+function fillOutputsFromActivity(btn) {
+  fillOutputRowsFromActivity(btn, 'responses');
+}
+
+// 按所选 Activity 的参数定义批量填充本节点返回值，规则同 fillOutputsFromActivity：
+// 每个参数一行，引用 {{steps.<实例ID>.arguments.<参数 key>}}，显示名取 label，类型与 Activity 参数定义一致。
+function fillOutputParamsFromActivity(btn) {
+  fillOutputRowsFromActivity(btn, 'arguments');
+}
+
+// kind=responses 用 Activity 的返回值定义填充，kind=arguments 用参数定义填充
+function fillOutputRowsFromActivity(btn, kind) {
+  const isArgs = kind === 'arguments';
+  const row = btn.closest('.param-row');
+  const wrap = btn.closest('.output-input-wrap');
+  const prevSel = wrap && wrap.querySelector('.arg-ref');
+  const actId = prevSel ? prevSel.value : '';
+  if (!actId) { showToast('请先选择 Activity', 'error'); return; }
+  const act = outputAllActivities().find(p => p.id === actId);
+  const fieldOf = it => ((it && (isArgs ? it.key : (it.name || it.key))) || '').trim();
+  const rvs = ((act && (isArgs ? act.params : act.returnValues)) || []).filter(it => fieldOf(it));
+  if (!rvs.length) { showToast(isArgs ? '该 Activity 没有定义参数' : '该 Activity 没有定义返回值', 'error'); return; }
+
+  const curKeyEl = row.querySelector('.output-key');
+  const curKey = curKeyEl ? curKeyEl.value.trim() : '';
+  const existing = new Set(curKey ? [curKey] : []);
+  document.querySelectorAll('#node-outputs-container .param-row').forEach(r => {
+    if (r === row) return;
+    const k = r.querySelector('.output-key');
+    if (k && k.value.trim()) existing.add(k.value.trim());
+  });
+
+  let anchor = row;
+  let added = 0;
+  let replacedCurrent = false;
+  const skipped = [];
+  rvs.forEach(rv => {
+    const field = fieldOf(rv);
+    if (existing.has(field)) { skipped.push(field); return; }
+    existing.add(field);
+    const opts = {
+      key: field,
+      label: rv.label || field,
+      type: outputTypeFromActivity(rv.type),
+      source: 'ref_act',
+      ref: '{{steps.' + actId + '.' + (isArgs ? 'arguments' : 'responses') + '.' + field + '}}',
+    };
+    // 当前行没填 key 时直接用第一个返回值替换掉当前行，避免留下一条空行
+    if (!replacedCurrent && !curKey) {
+      replacedCurrent = true;
+      addOutputRow(opts);
+      const newRow = document.getElementById('output-row-' + outputSeq);
+      row.parentNode.insertBefore(newRow, row);
+      row.remove();
+      anchor = newRow;
+      added++;
+      return;
+    }
+    addOutputRow(opts);
+    const newRow = document.getElementById('output-row-' + outputSeq);
+    anchor.parentNode.insertBefore(newRow, anchor.nextSibling);
+    anchor = newRow;
+    added++;
+  });
+  let msg = '已填充 ' + added + ' 个' + (isArgs ? '参数' : '返回值');
+  if (skipped.length) msg += '，本节点已存在同名返回值未覆盖：' + skipped.join('、');
+  showToast(msg, added ? 'success' : 'error');
+}
+
 // 渲染单行输入控件（按来源）
 function outputRenderInput(bind) {
   bind = bind || {};
@@ -5466,7 +5571,9 @@ function outputRenderInput(bind) {
         '<select class="arg-ref" onchange="onOutputRefChange(this)" style="flex:1 1 120px;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;font-family:monospace">' + prevOpts + '</select>' +
         outputRenderRefTypeSel(curPrev, parsed) +
       '</span>' +
-      '<span class="arg-ref-field-slot" style="flex:1 1 120px;display:flex;gap:4px;align-items:center;min-width:0">' + outputRenderRefFieldSlot(prevs, refId, parsed.refType, parsed.refField) + '</span>';
+      '<span class="arg-ref-field-slot" style="flex:1 1 120px;display:flex;gap:4px;align-items:center;min-width:0">' + outputRenderRefFieldSlot(prevs, refId, parsed.refType, parsed.refField) + '</span>' +
+      outputFillAllBtnHTML(!!(curPrev && parsed.refType === 'responses_field' && !parsed.refField && Array.isArray(curPrev.returnValues) && curPrev.returnValues.length)) +
+      outputFillParamsBtnHTML(!!(curPrev && parsed.refType === 'arguments' && !parsed.refField && Array.isArray(curPrev.params) && curPrev.params.length));
     html += '<input type="hidden" class="output-ref-final" value="' + escAttr(bind.ref || '') + '">';
     return html;
   }
@@ -5604,6 +5711,7 @@ function onOutputRefChange(sel) {
         typeSelHTML +
       '</span>';
     html += '<span class="arg-ref-field-slot" style="flex:1 1 120px;display:flex;gap:4px;align-items:center;min-width:0">' + outputRenderRefFieldSlot(prevs, refId, (curPrev && parsed.refType) || 'responses', parsed.refField || '') + '</span>';
+    html += outputFillAllBtnHTML(false) + outputFillParamsBtnHTML(false);
     html += '<input type="hidden" class="output-ref-final" value="' + escAttr(finalInput.value) + '">';
     wrap.innerHTML = html;
     const newPrevSel = wrap.querySelector('.arg-ref');
@@ -5617,6 +5725,7 @@ function onOutputRefChange(sel) {
   if (pSel && tSel) {
     finalInput.value = outputBuildRefPath(pSel.value, tSel.value, fInput ? fInput.value : '');
   }
+  syncOutputFillAllBtn(wrap);
   // 自动补全 key/label（仅当为空）：选择 Activity 或具体返回值字段后，用对应字段名/中文名填充
   const autoPrevSel = wrap.querySelector('.arg-ref');
   if (autoPrevSel && autoPrevSel.value) {
