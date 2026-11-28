@@ -139,7 +139,9 @@ func (r *RootChainReleaseRepo) MaxVersion(ctx context.Context, project, chainID 
 	return maxVer, err
 }
 
-// DeleteByVersion 删除指定发布版本（当前生产版本不允许删除）。
+// DeleteByVersion 删除指定发布版本。
+// 当前生效版本只有在它是该链仅剩的一条发布记录时才允许删除（删除后该链线上不再有生效版本）；
+// 还有其他发布记录时返回 ErrReleaseInUse。稳定版本需先取消稳定标记。
 func (r *RootChainReleaseRepo) DeleteByVersion(ctx context.Context, project, chainID string, version int) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var m models.RootChainReleaseModel
@@ -151,7 +153,15 @@ func (r *RootChainReleaseRepo) DeleteByVersion(ctx context.Context, project, cha
 			return err
 		}
 		if m.IsCurrent {
-			return workflow.ErrReleaseInUse
+			var others int64
+			if err := tx.Model(&models.RootChainReleaseModel{}).
+				Where("project = ? AND chain_id = ? AND version <> ?", project, chainID, version).
+				Count(&others).Error; err != nil {
+				return err
+			}
+			if others > 0 {
+				return workflow.ErrReleaseInUse
+			}
 		}
 		if m.IsStable {
 			return workflow.ErrReleaseStable

@@ -6303,7 +6303,10 @@ function renderReleaseRows() {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">暂无稳定版本，可在版本行点击"标记稳定"</td></tr>';
     return;
   }
+  // 当前生效版本只有在它是仅剩的一条发布记录时才可删除（删除后该链下线，后台同时清空该链缓存）
+  const onlyOneLeft = all.length === 1;
   tbody.innerHTML = releases.map(r => {
+    const canDelete = !r.is_stable && (!r.is_current || onlyOneLeft);
     const statusHtml = (r.is_current ? '<span class="badge badge-on">当前生效</span>' : '<span class="badge badge-off">历史</span>') +
       (r.is_stable ? ' <span class="badge badge-stable" title="线上稳定版本">稳定</span>' : '') +
       (r.is_stable && r.stable_note ? '<div style="margin-top:4px;font-size:.74rem;color:var(--text-muted);max-width:220px;white-space:normal" title="' + esc(r.stable_note) + '">' + esc(r.stable_note) + '</div>' : '');
@@ -6322,7 +6325,7 @@ function renderReleaseRows() {
           <button class="btn btn-sm btn-primary" onclick="executeRelease(${r.version})">Execute</button>
           ${stableBtn}
           ${r.is_current ? '' : `<button class="btn btn-sm btn-primary" onclick="setCurrentRelease(${r.version})">设为生效</button>`}
-          ${r.is_current || r.is_stable ? '' : `<button class="btn btn-sm btn-danger" onclick="deleteReleaseVersion(${r.version})">删除</button>`}
+          ${canDelete ? `<button class="btn btn-sm btn-danger" onclick="deleteReleaseVersion(${r.version}, ${r.is_current ? 'true' : 'false'})">删除</button>` : ''}
         </div></td>
       </tr>`;
   }).join('');
@@ -6506,8 +6509,11 @@ async function applyCurrentRelease(version) {
   } catch (e) { showToast('操作失败: ' + e.message, 'error'); }
 }
 
-async function deleteReleaseVersion(version) {
-  if (!confirm('确定删除发布版本 v' + version + ' 吗？\n该操作为逻辑删除：前端不再显示，但数据仍保留在数据库中（可恢复），当前生效版本不允许删除。')) return;
+async function deleteReleaseVersion(version, isCurrent) {
+  const msg = isCurrent
+    ? '确定删除当前生效版本 v' + version + ' 吗？\n这是该链仅剩的发布版本，删除后该链线上不再有生效版本、外部调用将失败，服务端会同时清空该链的缓存。\n删除后可在根链列表里删除整条链。'
+    : '确定删除发布版本 v' + version + ' 吗？\n该操作为逻辑删除：前端不再显示，但数据仍保留在数据库中（可恢复）。';
+  if (!confirm(msg)) return;
   try {
     await api('/api/root-chains/' + encodeURIComponent(_releaseChainId) + '/releases/' + version, {
       method: 'DELETE',
