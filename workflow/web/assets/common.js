@@ -2699,7 +2699,7 @@ function renderActivityTable(list) {
   const tbody = document.getElementById('act-table');
   const all = list || [];
   if (all.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><div class="icon">📋</div>暂无 activity 记录</td></tr>';
     renderActivityPager(0);
     return;
   }
@@ -2722,6 +2722,12 @@ function renderActivityTable(list) {
       }
     } catch(e) {}
     const argJson = escAttr(JSON.stringify(argData));
+    // 返回值数：与 Nodes 列表「返回值数」同款（td.arg-count.output-count），悬停弹出返回值明细
+    let outData = [];
+    try {
+      const rvs = typeof a.return_values === 'string' ? JSON.parse(a.return_values || '[]') : a.return_values;
+      if (Array.isArray(rvs)) outData = rvs.map(r => ({ key: (r && (r.name || r.key)) || '-', label: (r && r.label && r.label !== r.name) ? r.label : '' }));
+    } catch(e) {}
     // 标签每个一行，最多显示 4 个汉字宽，超出用省略号，悬停看全名
     const tagsHtml = (a.tags || []).map(t => '<span class="badge act-tag-badge ' + tagColorClass(t) + '" title="' + escAttr(t) + '">' + escHtml(t) + '</span>').join('') || '<span style="color:var(--text-muted)">-</span>';
     // 测试状态图标：success=绿色勾，failed=红色叉，none/无=灰色图标。
@@ -2742,6 +2748,7 @@ function renderActivityTable(list) {
       <td class="act-col-tag">${tagsHtml}</td>
       <td class="act-ns-name"><div class="code-cell act-ns" title="命名空间：${escAttr(a.act_namespace)}">${escHtml(a.act_namespace)}</div><div class="code-cell" title="活动名称：${escAttr(a.act_name)}">${escHtml(a.act_name)}</div></td>
       <td class="arg-count" data-args="${argJson}" ${argCount ? '' : 'data-empty="1"'}>${argCount || '0'}</td>
+      <td class="arg-count output-count" data-outputs="${escAttr(JSON.stringify(outData))}" ${outData.length ? '' : 'data-empty="1"'}>${outData.length}</td>
       <td class="pubref-count" data-chains="${publishedRefsJsonAttr(a)}" data-empty="${(a.published_root_chains && a.published_root_chains.length) ? '' : '1'}">${publishedRefsCountHtml(a)}</td>
       <td class="noderef-count" data-nodes="${refNodesJsonAttr(a)}" data-empty="${activityRefNodes(a).length ? '' : '1'}">${refNodesCountHtml(a)}</td>
       <td class="act-col-time">${escHtml(a.created_at ? a.created_at.substring(0,10) : '-')}</td>
@@ -6150,9 +6157,9 @@ function subChainRowHtml(c, i) {
         <td><span class="badge ${c.status==1?'badge-on':'badge-off'}">${c.status==1?'启用':'禁用'}</span></td>
         <td class="code-cell">${dslSize}</td>
         <td class="actions">
-          <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('Execute')} onclick="executeSubChain('${esc(c.chain_id)}')">${actionIconSvg('test')}</button>
-          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编排')} onclick="orchOpenInPage('${esc(c.chain_id)}')">${actionIconSvg('orch')}</button>
-          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑')} onclick="editSubChainByIndex(${i})">${actionIconSvg('edit')}</button>
+          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑')} onclick="orchOpenInPage('${esc(c.chain_id)}')">${actionIconSvg('edit')}</button>
+          <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑 DSL')} onclick="editSubChainByIndex(${i})">${actionIconSvg('code')}</button>
+          <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="executeSubChain('${esc(c.chain_id)}')">${actionIconSvg('test')}</button>
           <button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除')} onclick="deleteSubChain('${esc(c.chain_id)}')">${actionIconSvg('delete')}</button>
         </td>
       </tr>`;
@@ -6279,11 +6286,11 @@ function rootChainRowHtml(c, i) {
     <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
     <td>${paramsHtml}</td>
     <td><div class="actions">
-      <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编排')} onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">${actionIconSvg('orch')}</button>
+      <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑')} onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">${actionIconSvg('edit')}</button>
       <button class="btn btn-sm btn-primary btn-icon edit-only" ${actionIconAttrs('发布')} onclick="publishRootChain('${esc(c.chain_id)}')">${actionIconSvg('publish')}</button>
       <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('记录')} onclick="openReleaseModal('${esc(c.chain_id)}')">${actionIconSvg('history')}</button>
       <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('流程图')} onclick="showFlowchartByIndex(${i})">${actionIconSvg('flow')}</button>
-      <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('Execute')} onclick="loadToExecuteByIndex(${i})">${actionIconSvg('test')}</button>
+      <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="loadToExecuteByIndex(${i})">${actionIconSvg('test')}</button>
       <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('复制')} onclick="copyRootChain('${esc(c.chain_id)}')">${actionIconSvg('copy')}</button>
       ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除')} onclick="deleteRootChain('${esc(c.chain_id)}')">${actionIconSvg('delete')}</button>`}
     </div></td>
@@ -6376,7 +6383,7 @@ function closeReleaseModal() {
 
 async function loadReleaseTable() {
   const tbody = document.querySelector('#release-table tbody');
-  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">加载中...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">加载中...</td></tr>';
   window._releaseList = [];
   try {
     const releases = await api('/api/root-chains/' + encodeURIComponent(_releaseChainId) + '/releases');
@@ -6386,7 +6393,7 @@ async function loadReleaseTable() {
     window._releaseList.forEach(r => { window._releasesCache[r.version] = r; });
     renderReleaseRows();
   } catch (e) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color:#ef4444">加载失败: ' + esc(e.message) + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="color:#ef4444">加载失败: ' + esc(e.message) + '</td></tr>';
   }
 }
 
@@ -6396,35 +6403,38 @@ function renderReleaseRows() {
   if (!tbody) return;
   const all = window._releaseList || [];
   if (!all.length) {
-    tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="icon">🚀</div><p>暂无发布记录，点击行内"发布"按钮创建第一个版本</p></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><div class="icon">🚀</div><p>暂无发布记录，点击行内"发布"按钮创建第一个版本</p></div></td></tr>';
     return;
   }
   const onlyStable = !!(document.getElementById('release-only-stable') || {}).checked;
   const releases = onlyStable ? all.filter(r => r.is_stable || r.is_current) : all;
   if (!releases.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">暂无稳定版本，可在版本行点击"标记稳定"</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">暂无稳定版本，可在版本行点击"标记稳定"</td></tr>';
     return;
   }
+  // 当前生效版本只有在它是仅剩的一条发布记录时才可删除（删除后该链下线，后台同时清空该链缓存）
+  const onlyOneLeft = all.length === 1;
   tbody.innerHTML = releases.map(r => {
+    const canDelete = !r.is_stable && (!r.is_current || onlyOneLeft);
     const statusHtml = (r.is_current ? '<span class="badge badge-on">当前生效</span>' : '<span class="badge badge-off">历史</span>') +
       (r.is_stable ? ' <span class="badge badge-stable" title="线上稳定版本">稳定</span>' : '') +
       (r.is_stable && r.stable_note ? '<div style="margin-top:4px;font-size:.74rem;color:var(--text-muted);max-width:220px;white-space:normal" title="' + esc(r.stable_note) + '">' + esc(r.stable_note) + '</div>' : '');
+    // 操作列与其它列表统一用图标按钮，悬停显示文字；已稳定的版本星标填充为黄色，点击取消稳定
     const stableBtn = r.is_stable
-      ? `<button class="btn btn-sm btn-outline edit-only" onclick="setReleaseStable(${r.version}, false)">取消稳定</button>`
-      : `<button class="btn btn-sm btn-outline edit-only" onclick="setReleaseStable(${r.version}, true)">标记稳定</button>`;
+      ? `<button class="btn btn-sm btn-outline btn-icon btn-stable-on edit-only" ${actionIconAttrs('取消稳定')} onclick="setReleaseStable(${r.version}, false)">${actionIconSvg('star')}</button>`
+      : `<button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('标记稳定')} onclick="setReleaseStable(${r.version}, true)">${actionIconSvg('star')}</button>`;
     return `
       <tr${r.is_stable ? ' style="background:#f0fdf4"' : ''}>
         <td><b>v${r.version}</b></td>
         <td>${esc(r.name)}</td>
         <td style="white-space:nowrap">${esc(fmtTime(r.published_at))}</td>
-        <td>${(r.dsl_json||'').length} chars</td>
         <td>${statusHtml}</td>
         <td><div class="actions">
-          <button class="btn btn-sm btn-outline" onclick="viewReleaseDsl(${r.version})">查看 DSL</button>
-          <button class="btn btn-sm btn-primary" onclick="executeRelease(${r.version})">Execute</button>
+          <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('查看 DSL')} onclick="viewReleaseDsl(${r.version})">${actionIconSvg('code')}</button>
+          <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="executeRelease(${r.version})">${actionIconSvg('test')}</button>
           ${stableBtn}
-          ${r.is_current ? '' : `<button class="btn btn-sm btn-primary" onclick="setCurrentRelease(${r.version})">设为生效</button>`}
-          ${r.is_current || r.is_stable ? '' : `<button class="btn btn-sm btn-danger" onclick="deleteReleaseVersion(${r.version})">删除</button>`}
+          ${r.is_current ? '' : `<button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('设为生效')} onclick="setCurrentRelease(${r.version})">${actionIconSvg('publish')}</button>`}
+          ${canDelete ? `<button class="btn btn-sm btn-danger btn-icon" ${actionIconAttrs('删除')} onclick="deleteReleaseVersion(${r.version}, ${r.is_current ? 'true' : 'false'})">${actionIconSvg('delete')}</button>` : ''}
         </div></td>
       </tr>`;
   }).join('');
@@ -6608,8 +6618,11 @@ async function applyCurrentRelease(version) {
   } catch (e) { showToast('操作失败: ' + e.message, 'error'); }
 }
 
-async function deleteReleaseVersion(version) {
-  if (!confirm('确定删除发布版本 v' + version + ' 吗？\n该操作为逻辑删除：前端不再显示，但数据仍保留在数据库中（可恢复），当前生效版本不允许删除。')) return;
+async function deleteReleaseVersion(version, isCurrent) {
+  const msg = isCurrent
+    ? '确定删除当前生效版本 v' + version + ' 吗？\n这是该链仅剩的发布版本，删除后该链线上不再有生效版本、外部调用将失败，服务端会同时清空该链的缓存。\n删除后可在根链列表里删除整条链。'
+    : '确定删除发布版本 v' + version + ' 吗？\n该操作为逻辑删除：前端不再显示，但数据仍保留在数据库中（可恢复）。';
+  if (!confirm(msg)) return;
   try {
     await api('/api/root-chains/' + encodeURIComponent(_releaseChainId) + '/releases/' + version, {
       method: 'DELETE',
@@ -10620,6 +10633,7 @@ const ACTION_ICON_PATHS = {
   publish: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
   history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
   flow:    '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
+  star:    '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
   copy:    '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
 };
 function actionIconSvg(name) {

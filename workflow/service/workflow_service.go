@@ -1145,6 +1145,10 @@ func (s *WorkflowService) SetRootChainReleaseStable(ctx context.Context, project
 
 // DeleteRootChainRelease 删除指定发布版本（当前生效版本、稳定版本不允许删除）。
 func (s *WorkflowService) DeleteRootChainRelease(ctx context.Context, project, chainID string, version int) error {
+	release, err := s.releaseRepo.GetByVersion(ctx, project, chainID, version)
+	if err != nil {
+		return err
+	}
 	if err := s.releaseRepo.DeleteByVersion(ctx, project, chainID, version); err != nil {
 		return err
 	}
@@ -1152,8 +1156,28 @@ func (s *WorkflowService) DeleteRootChainRelease(ctx context.Context, project, c
 		Str("project", project).
 		Str("chain_id", chainID).
 		Int("version", version).
+		Bool("was_current", release.IsCurrent).
 		Msg("root chain release deleted")
+	if release.IsCurrent {
+		// 删掉的是仅剩的生效版本：该链线上已无可执行版本，清掉 DSL 缓存与引擎池实例，并广播让其他副本同步清理
+		s.clearOfflineRootChain(ctx, project, chainID)
+	}
 	return nil
+}
+
+// clearOfflineRootChain 根链已没有生效的发布版本时，清理本进程的 DSL 缓存、引擎池实例与引擎加载的 chain，
+// 并广播给其他副本同步清理，避免之后的调用继续命中缓存里的旧版本。
+func (s *WorkflowService) clearOfflineRootChain(ctx context.Context, project, chainID string) {
+	_ = s.engine.UnloadChain(ctx, project, chainID)
+	rc, err := s.rootChainRepo.GetByProjectID(ctx, project, chainID)
+	if err != nil || rc.ChainKey == "" {
+		log.Ctx(ctx).Warn().Err(err).Str("project", project).Str("chain_id", chainID).
+			Msg("last current release deleted, but chain_key not found, skip cache invalidation")
+		return
+	}
+	s.ClearChainRootByKey(project, rc.ChainKey)
+	s.invalidateChainPoolEntry(cacheKeyOf(project, rc.ChainKey))
+	s.NotifyRootChainChanged(project, rc.ChainKey, reasonDeleteRelease)
 }
 
 // executeRootChainByIDTimeout 流程同步执行的超时时间，避免长时间取不到结果导致调用方永久阻塞。

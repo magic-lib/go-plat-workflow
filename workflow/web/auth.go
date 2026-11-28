@@ -148,6 +148,8 @@ var publicAPIMux = func() *http.ServeMux {
 		"POST " + workflow.ProjectWorkflowInvoke,
 		// 流程执行路径查看页只读分享（handler 内按分享 token 签名与有效期校验）
 		"GET /api/flow-view/shared",
+		// 凭同一个分享 token 生成流程执行路径图片
+		"GET /api/flow-view/image",
 	} {
 		m.HandleFunc(pattern, noop)
 	}

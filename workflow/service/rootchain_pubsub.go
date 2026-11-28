@@ -48,6 +48,8 @@ const (
 	reasonRollback   = "rollback"
 	reasonSetCurrent = "set_current"
 	reasonDelete     = "delete"
+	// reasonDeleteRelease 删除了仅剩的生效发布版本，链已下线
+	reasonDeleteRelease = "delete_release"
 )
 
 // rootChainInvalidateEvent 广播事件内容。
@@ -56,7 +58,7 @@ type rootChainInvalidateEvent struct {
 	Project string `json:"project"`
 	// ChainKey 根链 key。
 	ChainKey string `json:"chain_key"`
-	// Reason 变更原因：publish / rollback / set_current / delete。
+	// Reason 变更原因：publish / rollback / set_current / delete / delete_release。
 	Reason string `json:"reason"`
 	// SenderID 发送方实例标识，订阅端据此忽略自己发出的消息
 	// （Redis pub/sub 会把消息回发给所有订阅者，包括发送方自己）。
@@ -281,8 +283,8 @@ func (m *invalidatePubSub) handleMessage(payload string) {
 	// 下次调用会重新解析到新版本，从而全副本立即切到新版本。
 	m.svc.ClearChainRootByKey(ev.Project, ev.ChainKey)
 
-	// 根链已被删除：连同该链在引擎池中的各版本实例一并清理，避免残留。
-	if ev.Reason == reasonDelete {
+	// 根链已被删除或已无生效版本：连同该链在引擎池中的各版本实例一并清理，避免残留。
+	if ev.Reason == reasonDelete || ev.Reason == reasonDeleteRelease {
 		m.svc.invalidateChainPoolEntry(cacheKeyOf(ev.Project, ev.ChainKey))
 	}
 

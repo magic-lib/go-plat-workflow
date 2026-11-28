@@ -302,6 +302,9 @@
 
   // ---------- 节点悬停：显示该节点本次执行的参数与返回值 ----------
   let tipHideTimer = null;
+  const TIP_PAGE_SIZE = 10;
+  // 当前浮层展示的节点及页码，翻页时据此重绘
+  let tipState = { info: null, page: 1 };
   function prettyVal(v) {
     if (v === null || v === undefined || v === '') return '';
     let obj = v;
@@ -316,10 +319,20 @@
     return '<div class="fv-tip-sec">' + title + '</div>' +
       (text ? '<pre>' + esc(text) + '</pre>' : '<div class="fv-tip-empty">（无）</div>');
   }
-  function tipHTML(info) {
+  function tipPagerHTML(page, pages, total) {
+    if (pages <= 1) return '';
+    return '<div class="fv-tip-pager">' +
+      '<button type="button" data-tip-page="' + (page - 1) + '"' + (page <= 1 ? ' disabled' : '') + '>上一页</button>' +
+      '<span>第 ' + page + ' / ' + pages + ' 页 · 共执行 ' + total + ' 次</span>' +
+      '<button type="button" data-tip-page="' + (page + 1) + '"' + (page >= pages ? ' disabled' : '') + '>下一页</button>' +
+      '</div>';
+  }
+  function tipHTML(info, page) {
     const runs = info.runs || [];
-    const MAX = 10;
-    const parts = runs.slice(0, MAX).map(run => {
+    const pages = Math.max(1, Math.ceil(runs.length / TIP_PAGE_SIZE));
+    const cur = Math.min(Math.max(1, page || 1), pages);
+    const start = (cur - 1) * TIP_PAGE_SIZE;
+    const parts = runs.slice(start, start + TIP_PAGE_SIZE).map(run => {
       const r = run.log;
       const head = ['第 ' + run.order + ' 步'];
       const d = fmtMs(r.duration_ms);
@@ -332,8 +345,15 @@
         tipSection('参数', r.arguments) + tipSection('返回值', r.result) +
         '</div>';
     });
-    if (runs.length > MAX) parts.push('<div class="fv-tip-empty">共执行 ' + runs.length + ' 次，只显示前 ' + MAX + ' 次</div>');
-    return parts.join('');
+    return tipPagerHTML(cur, pages, runs.length) + parts.join('');
+  }
+  function renderTipPage(page) {
+    const tip = $('fv-tip');
+    if (!tip || !tipState.info) return;
+    const pages = Math.max(1, Math.ceil((tipState.info.runs || []).length / TIP_PAGE_SIZE));
+    tipState.page = Math.min(Math.max(1, page), pages);
+    tip.innerHTML = tipHTML(tipState.info, tipState.page);
+    tip.scrollTop = 0;
   }
   function placeTip(tip, g) {
     const rect = g.getBoundingClientRect();
@@ -361,8 +381,8 @@
     g.style.cursor = 'help';
     g.addEventListener('mouseenter', () => {
       clearTimeout(tipHideTimer);
-      tip.innerHTML = tipHTML(info);
-      tip.scrollTop = 0;
+      tipState = { info: info, page: 1 };
+      renderTipPage(1);
       tip.style.display = 'block';
       placeTip(tip, g);
     });
@@ -377,6 +397,12 @@
     // 鼠标移进浮层时保持显示，便于滚动查看较长的参数/返回值
     tip.addEventListener('mouseenter', () => clearTimeout(tipHideTimer));
     tip.addEventListener('mouseleave', () => { tipHideTimer = setTimeout(hideTip, 200); });
+    // 执行次数超过一页时，在浮层内翻页查看该节点后续的日志
+    tip.addEventListener('click', e => {
+      const btn = e.target.closest('[data-tip-page]');
+      if (!btn || btn.disabled) return;
+      renderTipPage(Number(btn.getAttribute('data-tip-page')));
+    });
     $('fv-stage').addEventListener('scroll', hideTip);
   }
 
@@ -462,6 +488,16 @@
     return { chain: chain, nodeDefs: nodeDefs, logsPromise: null };
   }
 
+  // 「显示图片」：图片接口凭分享 token 鉴权，只在分享模式下显示；trace 以接口实际查询的为准
+  function showImageLink() {
+    const btn = $('fv-img-btn');
+    if (!btn || !shareToken) return;
+    const q = new URLSearchParams({ share: shareToken });
+    if (traceId) q.set('trace_id', traceId);
+    btn.href = '/api/flow-view/image?' + q.toString();
+    btn.style.display = '';
+  }
+
   async function main() {
     if (!shareToken && (!project || !chainId)) {
       showMsg('缺少参数：请在地址中带上 project 和 chain_id，例如 /flow-view?project=xxx&chain_id=R000001&trace_id=xxx');
@@ -492,6 +528,7 @@
       showMsg('');
       applyTraceHighlight(trace);
       renderInfo(chain, trace, logs.length);
+      showImageLink();
     } catch (e) {
       if (e.share) {
         showMsg('无法查看：' + esc(e.message) + '，请联系分享人重新生成链接');

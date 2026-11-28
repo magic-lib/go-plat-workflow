@@ -37,8 +37,8 @@ var (
 	ErrExecutionFailed = fmt.Errorf("workflow: execution failed")
 	// ErrReleaseNotFound 发布版本未找到
 	ErrReleaseNotFound = fmt.Errorf("workflow: release not found")
-	// ErrReleaseInUse 当前生产版本不允许删除
-	ErrReleaseInUse = fmt.Errorf("workflow: current release in use, cannot delete")
+	// ErrReleaseInUse 当前生产版本不允许删除（仅剩这一条发布记录时除外）
+	ErrReleaseInUse = fmt.Errorf("workflow: current release in use, cannot delete while other releases exist")
 	// ErrReleaseStable 稳定版本不允许删除（需先取消稳定标记）
 	ErrReleaseStable = fmt.Errorf("workflow: stable release cannot be deleted, unmark stable first")
 	// ErrRootChainHasReleases 根链存在发布记录，不允许删除

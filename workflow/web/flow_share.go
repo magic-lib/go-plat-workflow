@@ -311,41 +311,47 @@ func resolveFlowShareTraceID(p flowSharePayload, queryTraceID string) (string, e
 	return t, nil
 }
 
-// handleGetFlowShare 免登录接口：凭分享 token 一次返回画图所需的根链结构、节点定义与该 trace 的节点执行记录。
-func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) {
+// flowShareData 凭分享 token 取到的画图数据：分享取数接口直接返回 JSON，图片接口据此生成流程图。
+type flowShareData struct {
+	Project string
+	TraceID string
+	// TraceBound 为 true 表示链接只能看绑定的这一次执行，地址里改 trace_id 不生效
+	TraceBound bool
+	Chain      flowShareChain
+	Nodes      []flowShareNode
+	Logs       []flowShareLog
+	ExpiresAt  int64
+}
+
+// loadFlowShare 校验请求里的分享 token，取出画图所需的根链结构、节点定义与该 trace 的节点执行记录。
+// 出错时返回应答的 HTTP 状态码。
+func (ws *WebServer) loadFlowShare(r *http.Request) (*flowShareData, int, error) {
 	token := strings.TrimSpace(r.URL.Query().Get("share"))
 	if token == "" {
-		writeError(w, http.StatusUnauthorized, "缺少分享 token")
-		return
+		return nil, http.StatusUnauthorized, errors.New("缺少分享 token")
 	}
 	p, _, _, err := parseFlowShareToken(token)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
-		return
+		return nil, http.StatusUnauthorized, err
 	}
 	secrets, err := ws.projectSecretKeys(r.Context(), p.Project)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, http.StatusInternalServerError, err
 	}
 	if p, err = verifyFlowShareToken(token, secrets, time.Now()); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
-		return
+		return nil, http.StatusUnauthorized, err
 	}
 	traceID, err := resolveFlowShareTraceID(p, r.URL.Query().Get("trace_id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return nil, http.StatusBadRequest, err
 	}
 
 	chain, err := ws.svc.GetRootChain(r.Context(), p.Project, p.ChainID)
 	if err != nil {
 		if errors.Is(err, workflow.ErrRootChainNotFound) {
-			writeError(w, http.StatusNotFound, "root chain not found")
-			return
+			return nil, http.StatusNotFound, errors.New("root chain not found")
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, http.StatusInternalServerError, err
 	}
 
 	// 只返回本链引用到的节点定义
@@ -364,8 +370,7 @@ func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) 
 	if len(used) > 0 {
 		defs, err := ws.svc.ListNodes(r.Context(), p.Project, "", "", false, false)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			return nil, http.StatusInternalServerError, err
 		}
 		for _, n := range defs {
 			if n != nil && used[n.NodeID] {
@@ -385,8 +390,7 @@ func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) 
 				Offset:      offset,
 			})
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
+				return nil, http.StatusInternalServerError, err
 			}
 			for _, l := range list {
 				if l == nil {
@@ -413,12 +417,11 @@ func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) 
 		sort.SliceStable(logs, func(i, j int) bool { return logs[i].ID < logs[j].ID })
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"project":  p.Project,
-		"trace_id": traceID,
-		// trace_bound 为 true 表示链接只能看绑定的这一次执行，地址里改 trace_id 不生效
-		"trace_bound": p.TraceID != "",
-		"chain": flowShareChain{
+	return &flowShareData{
+		Project:    p.Project,
+		TraceID:    traceID,
+		TraceBound: p.TraceID != "",
+		Chain: flowShareChain{
 			ChainID:             chain.ChainID,
 			Name:                chain.Name,
 			NodeIDs:             chain.NodeIDs,
@@ -428,8 +431,27 @@ func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) 
 			NodeSwitchOverrides: chain.NodeSwitchOverrides,
 			DSLJSON:             slimFlowDSL(chain.DSLJSON),
 		},
-		"nodes":      nodes,
-		"logs":       logs,
-		"expires_at": time.Unix(p.ExpiresAt, 0).Format(time.RFC3339),
+		Nodes:     nodes,
+		Logs:      logs,
+		ExpiresAt: p.ExpiresAt,
+	}, http.StatusOK, nil
+}
+
+// handleGetFlowShare 免登录接口：凭分享 token 一次返回画图所需的根链结构、节点定义与该 trace 的节点执行记录。
+func (ws *WebServer) handleGetFlowShare(w http.ResponseWriter, r *http.Request) {
+	data, status, err := ws.loadFlowShare(r)
+	if err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project":  data.Project,
+		"trace_id": data.TraceID,
+		// trace_bound 为 true 表示链接只能看绑定的这一次执行，地址里改 trace_id 不生效
+		"trace_bound": data.TraceBound,
+		"chain":       data.Chain,
+		"nodes":       data.Nodes,
+		"logs":        data.Logs,
+		"expires_at":  time.Unix(data.ExpiresAt, 0).Format(time.RFC3339),
 	})
 }
