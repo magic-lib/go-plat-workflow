@@ -6177,11 +6177,11 @@ function rootChainRowHtml(c, i) {
     <td>${curVer ? '<span class="badge badge-info">v' + curVer + '</span>' : '<span style="color:var(--text-muted);font-size:.8rem">未发布</span>'}</td>
     <td>${paramsHtml}</td>
     <td><div class="actions">
-      <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编排')} onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">${actionIconSvg('orch')}</button>
+      <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('编辑')} onclick="orchOpenInPageRoot('${esc(c.chain_id)}')">${actionIconSvg('edit')}</button>
       <button class="btn btn-sm btn-primary btn-icon edit-only" ${actionIconAttrs('发布')} onclick="publishRootChain('${esc(c.chain_id)}')">${actionIconSvg('publish')}</button>
       <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('记录')} onclick="openReleaseModal('${esc(c.chain_id)}')">${actionIconSvg('history')}</button>
       <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('流程图')} onclick="showFlowchartByIndex(${i})">${actionIconSvg('flow')}</button>
-      <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('Execute')} onclick="loadToExecuteByIndex(${i})">${actionIconSvg('test')}</button>
+      <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="loadToExecuteByIndex(${i})">${actionIconSvg('test')}</button>
       <button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('复制')} onclick="copyRootChain('${esc(c.chain_id)}')">${actionIconSvg('copy')}</button>
       ${c.has_releases ? '' : `<button class="btn btn-sm btn-danger btn-icon edit-only" ${actionIconAttrs('删除')} onclick="deleteRootChain('${esc(c.chain_id)}')">${actionIconSvg('delete')}</button>`}
     </div></td>
