@@ -124,72 +124,8 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		return nil, err
 	}
 
-	// AutoMigrate 不会修改已存在列的类型，显式将 result 调整为 text。
-	// MySQL 5.7 下 TEXT 列不能设默认值也不能直接 NOT NULL（已有 NULL 行会报错），故仅改类型。
-	if err := db.Exec(
-		"ALTER TABLE wf_activity_logs MODIFY COLUMN result text",
-	).Error; err != nil {
-		return nil, err
-	}
-
-	// wf_node_logs 的 event_id / relation_type 加长至 varchar(1000)，以支持更大数据（如完整链路上下文）。
-	// 注意：模型已移除 `;index`，否则 AutoMigrate 会尝试在 varchar(1000) 上建全列索引，
-	// 触发 MySQL 5.7「Specified key was too long; max key length is 3072 bytes」（utf8mb4 下 1000 字符≈4000 字节超限）。
-	// 因此索引完全由下方显式 SQL 管理：先删旧索引 → 改长度（保留 relation_type 默认值）
-	// → 以列名为名重建前缀(191)索引（191*4=764 字节 < 3072，安全且支持等值检索）。
-	for _, col := range []string{"event_id", "relation_type"} {
-		var idxs []string
-		db.Raw("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_NAME = 'wf_node_logs' AND COLUMN_NAME = ?", col).Scan(&idxs)
-		// 回退：GORM 对 `;index`（无显式名）生成的索引名即列名
-		idxs = append(idxs, col)
-		for _, ix := range idxs {
-			if ix == "" {
-				continue
-			}
-			// 删除该列上的索引；忽略「索引不存在」类错误（可能已在上一步删掉或回退名不匹配）
-			if err := db.Exec("ALTER TABLE wf_node_logs DROP INDEX `" + ix + "`").Error; err != nil {
-				if !strings.Contains(err.Error(), "check that column") &&
-					!strings.Contains(err.Error(), "doesn't exist") &&
-					!strings.Contains(err.Error(), "Unknown") {
-					return nil, err
-				}
-			}
-		}
-	}
-	if err := db.Exec("ALTER TABLE wf_node_logs MODIFY COLUMN event_id varchar(500)").Error; err != nil {
-		return nil, err
-	}
-	if err := db.Exec("ALTER TABLE wf_node_logs MODIFY COLUMN relation_type varchar(500) DEFAULT ''").Error; err != nil {
-		return nil, err
-	}
-	// 以列名为索引名重建前缀(191)索引（与 GORM 约定一致，避免后续 AutoMigrate 重复创建）
-	for _, col := range []string{"event_id", "relation_type"} {
-		if err := db.Exec("ALTER TABLE wf_node_logs ADD INDEX `" + col + "` (" + col + "(191))").Error; err != nil &&
-			!strings.Contains(err.Error(), "Duplicate") && !strings.Contains(err.Error(), "Duplicate key name") {
-			return nil, err
-		}
-	}
-
-	// AutoMigrate 已自动新增 trace_id 列；这里补建索引（幂等：已存在则忽略报错）。
-	if err := db.Exec(
-		"ALTER TABLE wf_node_test_records ADD INDEX idx_trace_id (trace_id)",
-	).Error; err != nil && !strings.Contains(err.Error(), "Duplicate") && !strings.Contains(err.Error(), "Duplicate key name") {
-		return nil, err
-	}
-
-	// 旧数据回填：将 chain_key 为空（'' 或 NULL）的根链按 id 生成唯一业务键，
-	// 避免后续建唯一索引时因重复空值失败。基于 id 保证全局唯一且幂等。
-	if err := db.Exec(
-		"UPDATE wf_root_chains SET chain_key = CONCAT('R', LPAD(id, 6, '0')) WHERE chain_key IS NULL OR chain_key = ''",
-	).Error; err != nil {
-		return nil, err
-	}
-
-	// AutoMigrate 已自动新增 chain_key 列，这里补建 project + chain_key 联合唯一索引
-	//（幂等：已存在则忽略报错）。
-	if err := db.Exec(
-		"ALTER TABLE wf_root_chains ADD UNIQUE INDEX uk_project_chain_key (project, chain_key)",
-	).Error; err != nil && !strings.Contains(err.Error(), "Duplicate") && !strings.Contains(err.Error(), "Duplicate key name") {
+	// 表结构最终态都已写在 model 标签里，AutoMigrate 即可建好；这里只处理老库遗留与无法用标签表达的部分。
+	if err := migrateSchemaLegacy(db); err != nil {
 		return nil, err
 	}
 

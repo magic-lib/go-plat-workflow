@@ -10,26 +10,28 @@ import (
 
 // RootChainModel 根规则链持久化模型，对应 wf_root_chains 表。
 type RootChainModel struct {
-	ID                 uint           `gorm:"primaryKey;autoIncrement" json:"id"`
-	Project            string         `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_chain_id,priority:1,uniqueIndex:uk_project_chain_key,priority:1;not null;index" json:"project"`
-	ChainID            string         `gorm:"column:chain_id;type:varchar(128);uniqueIndex:uk_project_chain_id,priority:2;not null" json:"chain_id"`
-	ChainKey           string         `gorm:"column:chain_key;type:varchar(128);uniqueIndex:uk_project_chain_key,priority:2;not null;default:''" json:"chain_key"`
-	Name               string         `gorm:"type:varchar(255);not null" json:"name"`
-	Description        string         `gorm:"type:varchar(512)" json:"description"`
-	DSLJSON            string         `gorm:"type:json;not null;" json:"dsl_json"`
-	Status             int8           `gorm:"default:1;index" json:"status"`
-	NodeIDs            string         `gorm:"column:node_ids;type:text" json:"node_ids"`
-	SubChainIDs        string         `gorm:"column:sub_chain_ids;type:text" json:"sub_chain_ids"`
-	ConnectionsData    string         `gorm:"column:connections_data;type:text" json:"connections_data"`
-	NodeParamOverrides string         `gorm:"column:node_param_overrides;type:text" json:"node_param_overrides"`
-	NodeSwitchOverrides string        `gorm:"column:node_switch_overrides;type:text" json:"node_switch_overrides"`
-	NodeNameOverrides  string        `gorm:"column:node_name_overrides;type:text" json:"node_name_overrides"`
-	NodeCollapseOverrides string      `gorm:"column:node_collapse_overrides;type:text" json:"node_collapse_overrides"`
+	ID      uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Project string `gorm:"column:project;type:varchar(128);uniqueIndex:uk_project_chain_id,priority:1;not null;index" json:"project"`
+	ChainID string `gorm:"column:chain_id;type:varchar(128);uniqueIndex:uk_project_chain_id,priority:2;not null" json:"chain_id"`
+	// ChainKey 全局唯一（唯一索引 uk_chain_key）。该索引不写在 gorm 标签里，由 service.ensureChainKeyUniqueIndex 管理：
+	// 老库要从 (project, chain_key) 换成单列，换之前需检查跨项目重名，有重名时保留旧索引并告警，不阻断启动。
+	ChainKey              string `gorm:"column:chain_key;type:varchar(128);not null;default:''" json:"chain_key"`
+	Name                  string `gorm:"type:varchar(255);not null" json:"name"`
+	Description           string `gorm:"type:varchar(512)" json:"description"`
+	DSLJSON               string `gorm:"type:json;not null;" json:"dsl_json"`
+	Status                int8   `gorm:"default:1;index" json:"status"`
+	NodeIDs               string `gorm:"column:node_ids;type:text" json:"node_ids"`
+	SubChainIDs           string `gorm:"column:sub_chain_ids;type:text" json:"sub_chain_ids"`
+	ConnectionsData       string `gorm:"column:connections_data;type:text" json:"connections_data"`
+	NodeParamOverrides    string `gorm:"column:node_param_overrides;type:text" json:"node_param_overrides"`
+	NodeSwitchOverrides   string `gorm:"column:node_switch_overrides;type:text" json:"node_switch_overrides"`
+	NodeNameOverrides     string `gorm:"column:node_name_overrides;type:text" json:"node_name_overrides"`
+	NodeCollapseOverrides string `gorm:"column:node_collapse_overrides;type:text" json:"node_collapse_overrides"`
 	// RootResponses 根节点返回值定义 JSON（[]workflow.RootResponseItem），执行结束后据此生成返回结构
-	RootResponses      string         `gorm:"column:root_responses;type:text" json:"root_responses"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
+	RootResponses string         `gorm:"column:root_responses;type:text" json:"root_responses"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // TableName 返回表名。
@@ -40,21 +42,21 @@ func (RootChainModel) TableName() string {
 // ToDef 将数据库模型转换为 RootChainDef。
 func (m *RootChainModel) ToDef() *workflow.RootChainDef {
 	return &workflow.RootChainDef{
-		Project:            m.Project,
-		ChainID:            m.ChainID,
-		ChainKey:           m.ChainKey,
-		Name:               m.Name,
-		Description:        m.Description,
-		DSLJSON:            m.DSLJSON,
-		Status:             m.Status,
-		NodeIDs:            m.NodeIDs,
-		SubChainIDs:        m.SubChainIDs,
-		ConnectionsData:    m.ConnectionsData,
-		NodeParamOverrides: m.NodeParamOverrides,
-		NodeSwitchOverrides: m.NodeSwitchOverrides,
-		NodeNameOverrides:  m.NodeNameOverrides,
+		Project:               m.Project,
+		ChainID:               m.ChainID,
+		ChainKey:              m.ChainKey,
+		Name:                  m.Name,
+		Description:           m.Description,
+		DSLJSON:               m.DSLJSON,
+		Status:                m.Status,
+		NodeIDs:               m.NodeIDs,
+		SubChainIDs:           m.SubChainIDs,
+		ConnectionsData:       m.ConnectionsData,
+		NodeParamOverrides:    m.NodeParamOverrides,
+		NodeSwitchOverrides:   m.NodeSwitchOverrides,
+		NodeNameOverrides:     m.NodeNameOverrides,
 		NodeCollapseOverrides: m.NodeCollapseOverrides,
-		RootResponses:      m.RootResponses,
+		RootResponses:         m.RootResponses,
 	}
 }
 
