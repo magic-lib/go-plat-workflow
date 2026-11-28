@@ -35,7 +35,7 @@ func TestCreateWithAutoBizIDConcurrentMySQL(t *testing.T) {
 	sqlDB.SetMaxOpenConns(20)
 	defer sqlDB.Close()
 	const project = "__idseq_test__"
-	tables := []string{"wf_nodes", "wf_sub_chains", "wf_test_cases", "wf_node_test_records", "wf_activity_test_records"}
+	tables := []string{"wf_nodes", "wf_sub_chains", "wf_node_test_records", "wf_activity_test_records"}
 	cleanup := func() {
 		for _, tb := range tables {
 			if err := db.Exec("DELETE FROM "+tb+" WHERE project = ?", project).Error; err != nil {
@@ -52,12 +52,12 @@ func TestCreateWithAutoBizIDConcurrentMySQL(t *testing.T) {
 		kind, id string
 		err      error
 	}
-	results := make(chan result, n*5)
+	results := make(chan result, n*4)
 	var wg sync.WaitGroup
 	nodeRepo, subRepo := NewNodeRepo(db), NewSubChainRepo(db)
-	caseRepo, ntrRepo, atrRepo := NewTestCaseRepo(db), NewNodeTestRecordRepo(db), NewActivityTestRecordRepo(db)
+	ntrRepo, atrRepo := NewNodeTestRecordRepo(db), NewActivityTestRecordRepo(db)
 	for i := 0; i < n; i++ {
-		wg.Add(5)
+		wg.Add(4)
 		go func(i int) {
 			defer wg.Done()
 			d := &workflow.NodeDef{Project: project, Name: fmt.Sprintf("n%d", i), Type: "custom/Activity", Status: 1}
@@ -77,12 +77,6 @@ func TestCreateWithAutoBizIDConcurrentMySQL(t *testing.T) {
 		}(i)
 		go func(i int) {
 			defer wg.Done()
-			d := &workflow.TestCaseDef{Project: project, Name: fmt.Sprintf("c%d", i), ChainID: "R000001"}
-			err := caseRepo.Create(ctx, d)
-			results <- result{"TC", d.CaseID, err}
-		}(i)
-		go func(i int) {
-			defer wg.Done()
 			d := &workflow.NodeTestRecordDef{Project: project, NodeID: "N000001"}
 			err := ntrRepo.Create(ctx, d)
 			results <- result{"M", d.RecordID, err}
@@ -97,7 +91,7 @@ func TestCreateWithAutoBizIDConcurrentMySQL(t *testing.T) {
 	wg.Wait()
 	close(results)
 
-	prefix := map[string]string{"N": "N", "F": "F", "TC": "T", "M": "M", "AT": "T"}
+	prefix := map[string]string{"N": "N", "F": "F", "M": "M", "AT": "T"}
 	seen := map[string]map[string]bool{}
 	for r := range results {
 		if r.err != nil {

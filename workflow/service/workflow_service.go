@@ -51,7 +51,6 @@ type WorkflowService struct {
 	subChainRepo           *repo.SubChainRepo
 	rootChainRepo          *repo.RootChainRepo
 	releaseRepo            *repo.RootChainReleaseRepo
-	testCaseRepo           *repo.TestCaseRepo
 	envConfigRepo          *repo.EnvConfigRepo
 	nodeTestRecordRepo     *repo.NodeTestRecordRepo
 	activityRepo           *repo.ActivityRepo
@@ -109,7 +108,6 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		&models.SubChainModel{},
 		&models.RootChainModel{},
 		&models.RootChainReleaseModel{},
-		&models.TestCaseModel{},
 		&models.EnvConfigModel{},
 		&models.NodeTestRecordModel{},
 		&models.ActivityModel{},
@@ -121,6 +119,11 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		&models.UserProjectModel{},
 		&models.ProjectSecretModel{},
 	); err != nil {
+		return nil, err
+	}
+
+	// 测试用例功能已下线：wf_test_cases 为空表时删除，有数据只告警不删
+	if err := dropUnusedTestCaseTable(db); err != nil {
 		return nil, err
 	}
 
@@ -198,7 +201,6 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 	subChainRepo := repo.NewSubChainRepo(db)
 	rootChainRepo := repo.NewRootChainRepo(db)
 	releaseRepo := repo.NewRootChainReleaseRepo(db)
-	testCaseRepo := repo.NewTestCaseRepo(db)
 	envConfigRepo := repo.NewEnvConfigRepo(db)
 	nodeTestRecordRepo := repo.NewNodeTestRecordRepo(db)
 	activityRepo := repo.NewActivityRepo(db)
@@ -224,7 +226,6 @@ func NewWorkflowService(db *gorm.DB) (*WorkflowService, error) {
 		subChainRepo:            subChainRepo,
 		rootChainRepo:           rootChainRepo,
 		releaseRepo:             releaseRepo,
-		testCaseRepo:            testCaseRepo,
 		envConfigRepo:           envConfigRepo,
 		nodeTestRecordRepo:      nodeTestRecordRepo,
 		activityRepo:            activityRepo,
@@ -946,42 +947,6 @@ func (s *WorkflowService) DeleteRootChain(ctx context.Context, project, chainID 
 		s.NotifyRootChainChanged(project, chainKey, reasonDelete)
 	}
 	return nil
-}
-
-// ============================================================
-// TestCase 管理
-// ============================================================
-
-// SaveTestCase 保存测试用例（创建或更新）。
-// 若 def.CaseID 为空则自动生成；否则按 CaseID 更新。
-// 执行后的结果快照通过 def.LastResult 写入（可选）。
-func (s *WorkflowService) SaveTestCase(ctx context.Context, def *workflow.TestCaseDef) (*workflow.TestCaseDef, error) {
-	if def.CaseID == "" {
-		// CaseID 留空：由仓储层先插入再按自增主键回写编号
-		if err := s.testCaseRepo.Create(ctx, def); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := s.testCaseRepo.Update(ctx, def); err != nil {
-			return nil, err
-		}
-	}
-	return def, nil
-}
-
-// GetTestCase 按项目 + CaseID 查询测试用例。
-func (s *WorkflowService) GetTestCase(ctx context.Context, project, caseID string) (*workflow.TestCaseDef, error) {
-	return s.testCaseRepo.GetByID(ctx, project, caseID)
-}
-
-// ListTestCases 列出指定 owner（root/sub 的 chainID）下所有测试用例。
-func (s *WorkflowService) ListTestCases(ctx context.Context, project, ownerID string) ([]*workflow.TestCaseDef, error) {
-	return s.testCaseRepo.ListByOwner(ctx, project, ownerID)
-}
-
-// DeleteTestCase 删除测试用例。
-func (s *WorkflowService) DeleteTestCase(ctx context.Context, project, caseID string) error {
-	return s.testCaseRepo.Delete(ctx, project, caseID)
 }
 
 // ============================================================

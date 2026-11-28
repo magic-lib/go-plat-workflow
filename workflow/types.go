@@ -446,46 +446,6 @@ type RootChainReleaseDef struct {
 	PublishedAt time.Time `json:"published_at"`
 }
 
-// TestCaseDef 测试用例定义。
-// 保存一次"测试 Execute Tab 时输入的完整配置"，挂载在某个 RootChain 或 SubChain 上，
-// 方便后续直接复用、调试，无需每次重新填写账号/参数。
-type TestCaseDef struct {
-	// Project 所属项目
-	Project string `json:"project"`
-	// CaseID 测试用例唯一标识（如 T000001，同 project 内唯一）
-	CaseID string `json:"case_id"`
-	// OwnerID 测试用例所属对象 ID（RootChain 的 ChainID 或 SubChain 的 ChainID）
-	OwnerID string `json:"owner_id"`
-	// OwnerType 所属对象类型：root / sub
-	OwnerType string `json:"owner_type"`
-	// Name 测试用例名称（用户可读，如"正常登录-测试账号A"）
-	Name string `json:"name"`
-	// ChainID 执行时使用的 chain_id
-	ChainID string `json:"chain_id"`
-	// ChainName 执行时使用的 chain_name
-	ChainName string `json:"chain_name"`
-	// NodeIDs 节点 ID 列表（逗号分隔字符串存储）
-	NodeIDs string `json:"node_ids,omitempty"`
-	// SubChainIDs 子链 ID 列表（逗号分隔字符串存储）
-	SubChainIDs string `json:"sub_chain_ids,omitempty"`
-	// ConnectionsData 连接关系 JSON（[]ConnectionDef）
-	ConnectionsData string `json:"connections_data,omitempty"`
-	// Payload 测试输入 payload（JSON 字符串）
-	Payload string `json:"payload,omitempty"`
-	// DebugMode 是否开启调试模式
-	DebugMode bool `json:"debug_mode,omitempty"`
-	// UseRelease 是否使用已发布版本执行
-	UseRelease bool `json:"use_release,omitempty"`
-	// NodeParamOverrides 节点实例参数覆盖值 JSON
-	NodeParamOverrides string `json:"node_param_overrides,omitempty"`
-	// LastResult 最近一次执行结果的快照（JSON 字符串），便于直接查看历史测试结果
-	LastResult string `json:"last_result,omitempty"`
-	// CreatedAt 创建时间
-	CreatedAt time.Time `json:"created_at"`
-	// UpdatedAt 更新时间
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
 // ============================================================
 // 环境配置
 // ============================================================
@@ -886,22 +846,6 @@ type RootChainStore interface {
 	Update(ctx context.Context, def *RootChainDef) error
 	// Delete 物理删除根链（按 project + chainID，历史由发布快照保留）
 	Delete(ctx context.Context, project, chainID string) error
-}
-
-// TestCaseStore 测试用例仓储接口。
-type TestCaseStore interface {
-	// Create 创建测试用例
-	Create(ctx context.Context, def *TestCaseDef) error
-	// Update 更新测试用例
-	Update(ctx context.Context, def *TestCaseDef) error
-	// GetByID 按项目+CaseID 查询
-	GetByID(ctx context.Context, project, caseID string) (*TestCaseDef, error)
-	// ListByOwner 列出指定 owner（root/sub + chainID）下所有测试用例
-	ListByOwner(ctx context.Context, project, ownerID string) ([]*TestCaseDef, error)
-	// Delete 删除测试用例（按 project + caseID）
-	Delete(ctx context.Context, project, caseID string) error
-	// NextCaseID 生成下一个测试用例自动 ID（如 T000001）
-	NextCaseID(ctx context.Context, project string) (string, error)
 }
 
 // RootChainReleaseStore 根链发布版本仓储接口。
