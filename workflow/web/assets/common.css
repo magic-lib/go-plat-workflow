@@ -581,3 +581,5 @@ body.is-project-viewer .edit-only { display: none !important; }
 #stat-error-table td.stat-err-msg { max-width: 520px; word-break: break-all; font-family: monospace; font-size: .76rem; }
 .stat-rate-bad { color: #dc2626; font-weight: 600; }
 #stat-chain-table .btn, #stat-error-table .btn { white-space: nowrap; }
+/* 发布记录：已标记稳定的版本，星标按钮填充为黄色（点击取消稳定） */
+.btn-stable-on svg { fill: #f59e0b; stroke: #f59e0b; }

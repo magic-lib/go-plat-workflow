@@ -6274,7 +6274,7 @@ function closeReleaseModal() {
 
 async function loadReleaseTable() {
   const tbody = document.querySelector('#release-table tbody');
-  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">加载中...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">加载中...</td></tr>';
   window._releaseList = [];
   try {
     const releases = await api('/api/root-chains/' + encodeURIComponent(_releaseChainId) + '/releases');
@@ -6284,7 +6284,7 @@ async function loadReleaseTable() {
     window._releaseList.forEach(r => { window._releasesCache[r.version] = r; });
     renderReleaseRows();
   } catch (e) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color:#ef4444">加载失败: ' + esc(e.message) + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="color:#ef4444">加载失败: ' + esc(e.message) + '</td></tr>';
   }
 }
 
@@ -6294,13 +6294,13 @@ function renderReleaseRows() {
   if (!tbody) return;
   const all = window._releaseList || [];
   if (!all.length) {
-    tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="icon">🚀</div><p>暂无发布记录，点击行内"发布"按钮创建第一个版本</p></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><div class="icon">🚀</div><p>暂无发布记录，点击行内"发布"按钮创建第一个版本</p></div></td></tr>';
     return;
   }
   const onlyStable = !!(document.getElementById('release-only-stable') || {}).checked;
   const releases = onlyStable ? all.filter(r => r.is_stable || r.is_current) : all;
   if (!releases.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">暂无稳定版本，可在版本行点击"标记稳定"</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">暂无稳定版本，可在版本行点击"标记稳定"</td></tr>';
     return;
   }
   // 当前生效版本只有在它是仅剩的一条发布记录时才可删除（删除后该链下线，后台同时清空该链缓存）
@@ -6310,22 +6310,22 @@ function renderReleaseRows() {
     const statusHtml = (r.is_current ? '<span class="badge badge-on">当前生效</span>' : '<span class="badge badge-off">历史</span>') +
       (r.is_stable ? ' <span class="badge badge-stable" title="线上稳定版本">稳定</span>' : '') +
       (r.is_stable && r.stable_note ? '<div style="margin-top:4px;font-size:.74rem;color:var(--text-muted);max-width:220px;white-space:normal" title="' + esc(r.stable_note) + '">' + esc(r.stable_note) + '</div>' : '');
+    // 操作列与其它列表统一用图标按钮，悬停显示文字；已稳定的版本星标填充为黄色，点击取消稳定
     const stableBtn = r.is_stable
-      ? `<button class="btn btn-sm btn-outline edit-only" onclick="setReleaseStable(${r.version}, false)">取消稳定</button>`
-      : `<button class="btn btn-sm btn-outline edit-only" onclick="setReleaseStable(${r.version}, true)">标记稳定</button>`;
+      ? `<button class="btn btn-sm btn-outline btn-icon btn-stable-on edit-only" ${actionIconAttrs('取消稳定')} onclick="setReleaseStable(${r.version}, false)">${actionIconSvg('star')}</button>`
+      : `<button class="btn btn-sm btn-outline btn-icon edit-only" ${actionIconAttrs('标记稳定')} onclick="setReleaseStable(${r.version}, true)">${actionIconSvg('star')}</button>`;
     return `
       <tr${r.is_stable ? ' style="background:#f0fdf4"' : ''}>
         <td><b>v${r.version}</b></td>
         <td>${esc(r.name)}</td>
         <td style="white-space:nowrap">${esc(fmtTime(r.published_at))}</td>
-        <td>${(r.dsl_json||'').length} chars</td>
         <td>${statusHtml}</td>
         <td><div class="actions">
-          <button class="btn btn-sm btn-outline" onclick="viewReleaseDsl(${r.version})">查看 DSL</button>
-          <button class="btn btn-sm btn-primary" onclick="executeRelease(${r.version})">Execute</button>
+          <button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('查看 DSL')} onclick="viewReleaseDsl(${r.version})">${actionIconSvg('code')}</button>
+          <button class="btn btn-sm btn-primary btn-icon" ${actionIconAttrs('测试')} onclick="executeRelease(${r.version})">${actionIconSvg('test')}</button>
           ${stableBtn}
-          ${r.is_current ? '' : `<button class="btn btn-sm btn-primary" onclick="setCurrentRelease(${r.version})">设为生效</button>`}
-          ${canDelete ? `<button class="btn btn-sm btn-danger" onclick="deleteReleaseVersion(${r.version}, ${r.is_current ? 'true' : 'false'})">删除</button>` : ''}
+          ${r.is_current ? '' : `<button class="btn btn-sm btn-outline btn-icon" ${actionIconAttrs('设为生效')} onclick="setCurrentRelease(${r.version})">${actionIconSvg('check')}</button>`}
+          ${canDelete ? `<button class="btn btn-sm btn-danger btn-icon" ${actionIconAttrs('删除')} onclick="deleteReleaseVersion(${r.version}, ${r.is_current ? 'true' : 'false'})">${actionIconSvg('delete')}</button>` : ''}
         </div></td>
       </tr>`;
   }).join('');
@@ -10694,6 +10694,8 @@ const ACTION_ICON_PATHS = {
   publish: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
   history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
   flow:    '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
+  star:    '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  check:   '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
   copy:    '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
 };
 function actionIconSvg(name) {
